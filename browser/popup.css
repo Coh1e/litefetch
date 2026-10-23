@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; font: 14px/1.6 system-ui, sans-serif; }
+body { width: 340px; margin: 0; padding: 20px; }
+h1 { font-size: 19px; margin: 0 0 12px; }
+label { display: block; margin: 12px 0 6px; }
+.toggle { font-weight: 600; }
+textarea { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; border-radius: 6px; }
+button { padding: 7px 22px; font: inherit; cursor: pointer; }
+.hint { opacity: .75; font-size: 12px; }
+#status { min-height: 24px; margin-bottom: 0; }

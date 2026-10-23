@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "environment": {
+        "VCPKG_DOWNLOADS": "${sourceDir}/.deps/downloads",
+        "VCPKG_DEFAULT_BINARY_CACHE": "${sourceDir}/.deps/binary-cache",
+        "VCPKG_BINARY_SOURCES": "clear;files,${sourceDir}/.deps/binary-cache,readwrite",
+        "VCPKG_DISABLE_METRICS": "1",
+        "TEMP": "${sourceDir}/.deps/tmp",
+        "TMP": "${sourceDir}/.deps/tmp",
+        "X_VCPKG_REGISTRIES_CACHE": "${sourceDir}/.deps/registries"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/.deps/installed",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/.deps/buildtrees;--x-packages-root=${sourceDir}/.deps/packages",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/package",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ]
+}

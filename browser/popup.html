@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览器下载接管</title>
+<link rel="stylesheet" href="popup.css">
+<body>
+<h1>浏览器下载接管</h1>
+<p>开发版：尚未接通本机下载器，暂不能完成接管。</p>
+<form id="settings">
+  <label class="toggle"><input id="enabled" type="checkbox">启用允许站点的接管</label>
+  <label for="origins">允许的网站（每行一个完整地址，如 https://example.com）</label>
+  <textarea id="origins" rows="5" spellcheck="false" placeholder="https://example.com"></textarea>
+  <p class="hint">仅用于已知可重复下载的公开链接。登录下载、来源页验证和无法确认的请求仍由浏览器处理。</p>
+  <button type="submit">保存</button>
+</form>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="popup.mjs"></script>
+</body>
+</html>

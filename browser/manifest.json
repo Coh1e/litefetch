@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "原生下载器 · 浏览器接管（开发版）",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "将允许站点的普通下载交给本机下载器。开发中，尚未完成浏览器安装配置。默认关闭。",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "webRequest",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "worker.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "浏览器下载接管",
+    "default_popup": "popup.html"
+  },
+  "incognito": "not_allowed",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyFHNuW5C+Os2xHZ2iJGWOMnzDtqmR8d8U+Ux0C+Y9IR3b8fPcKU8cQBhr+LLUmxpS8KjedsmrM2/hxgs2sHPYZYrj5LXot0cuLszwC89Vqcm6qbu9b39ERRR6PM+3/hqx/bctRfP3z/zA0PGlW2kITRubbCZk/8+Zd7wEU2YXtzgHFTqFbkQDKH5rVXzIBZLyu0HQVqRfvwRCunpzPJPZA7yPyOMvEENdolaerKSnKhWLAhX7yH3NqudDcXGWJ/ITV/qX2gDd2q7veP71jVGpEDibC6Qk3zhNzvtcoTup+uQQK2yjTbiazQKJp94UfYsHDPR5ZOY23lr8RbZv+LgfwIDAQAB"
+}

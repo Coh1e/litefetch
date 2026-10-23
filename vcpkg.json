@@ -1,0 +1,17 @@
+{
+  "name": "native-downloader",
+  "version-string": "0.1.0",
+  "builtin-baseline": "e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7",
+  "dependencies": [
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": ["widgets", "network", "png", "windeployqt"]
+    },
+    { "name": "curl", "default-features": false, "features": ["non-http", "ssl"] },
+    { "name": "sqlite3", "default-features": false },
+    { "name": "libtorrent", "default-features": false },
+    { "name": "boost-asio", "default-features": false },
+    { "name": "zlib", "default-features": false }
+  ]
+}
