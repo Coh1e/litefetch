@@ -1,0 +1,41 @@
+#pragma once
+
+#include "http_engine.h"
+#include "task.h"
+#include "task_store.h"
+
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string_view>
+#include <vector>
+
+namespace litefetch {
+
+// Command/snapshot boundary between a UI or CLI and the download engine.
+// Commands are synchronous: Start blocks until the engine returns and the final
+// state is persisted. Cancel may be called from another thread while Start is
+// running. The service never reports a transition as successful unless its
+// database commit succeeded.
+class TaskService {
+public:
+    explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp);
+
+    CommandResult execute(const TaskCommand& command);
+    std::optional<TaskSnapshot> snapshot(std::string_view id);
+    std::vector<TaskSnapshot> snapshots();
+
+private:
+    CommandResult add(const AddTaskCommand& command);
+    CommandResult start(const StartTaskCommand& command);
+    CommandResult cancel(const CancelTaskCommand& command);
+    void unregister(std::string_view id, const std::shared_ptr<std::atomic_bool>& flag);
+
+    TaskRepository& repository_;
+    TransferFunction transfer_;
+    std::mutex activeMutex_;
+    std::map<std::string, std::shared_ptr<std::atomic_bool>, std::less<>> active_;
+};
+
+} // namespace litefetch

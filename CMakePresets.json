@@ -24,6 +24,20 @@
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/package",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "windows-core",
+      "inherits": "windows-base",
+      "environment": {
+        "VCPKG_ROOT": "${sourceDir}/.deps/vcpkg"
+      },
+      "cacheVariables": {
+        "LITEFETCH_BUILD_QT_LEGACY": "OFF",
+        "VCPKG_MANIFEST_MODE": "OFF",
+        "VCPKG_MANIFEST_INSTALL": "OFF",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/.deps/installed-core",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/.deps/vcpkg/scripts/buildsystems/vcpkg.cmake"
+      }
     }
   ]
 }

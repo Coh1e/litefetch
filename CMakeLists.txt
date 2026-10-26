@@ -7,9 +7,59 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 find_package(CURL REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
+
+# Qt-free task command/snapshot/persistence core used by the Win32 product.
+add_library(litefetch-core STATIC
+    src/core/task.cpp src/core/task.h
+    src/core/task_identity.cpp src/core/task_identity.h
+    src/core/task_store.cpp src/core/task_store.h
+    src/core/http_engine.cpp src/core/http_engine.h
+    src/core/task_service.cpp src/core/task_service.h)
+target_include_directories(litefetch-core PUBLIC src/core)
+target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
+if(WIN32)
+    target_link_libraries(litefetch-core PRIVATE bcrypt ws2_32)
+endif()
+add_executable(litefetch-core-cli src/core/cli/main.cpp)
+target_link_libraries(litefetch-core-cli PRIVATE litefetch-core)
+if(MSVC)
+    target_compile_options(litefetch-core PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(litefetch-core-cli PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(core-identity-tests tests/core/identity_test.cpp)
+    target_link_libraries(core-identity-tests PRIVATE litefetch-core)
+    add_test(NAME core-identity COMMAND core-identity-tests)
+    set_tests_properties(core-identity PROPERTIES TIMEOUT 15)
+    add_executable(core-store-tests tests/core/store_test.cpp)
+    target_link_libraries(core-store-tests PRIVATE litefetch-core unofficial::sqlite3::sqlite3)
+    add_test(NAME core-store COMMAND core-store-tests)
+    set_tests_properties(core-store PROPERTIES TIMEOUT 20)
+    add_executable(core-service-tests tests/core/service_test.cpp)
+    target_link_libraries(core-service-tests PRIVATE litefetch-core ws2_32)
+    add_test(NAME core-service COMMAND core-service-tests)
+    set_tests_properties(core-service PROPERTIES TIMEOUT 60)
+    add_executable(core-storage-failure-tests tests/core/storage_failure_test.cpp)
+    target_link_libraries(core-storage-failure-tests PRIVATE litefetch-core)
+    add_test(NAME core-storage-failure COMMAND core-storage-failure-tests)
+    set_tests_properties(core-storage-failure PROPERTIES TIMEOUT 20)
+    if(MSVC)
+        foreach(core_test core-identity-tests core-store-tests core-service-tests core-storage-failure-tests)
+            target_compile_options(${core_test} PRIVATE /W4 /permissive- /utf-8)
+        endforeach()
+    endif()
+endif()
+
+# Legacy Qt reference implementation. Kept buildable for comparison; the new
+# core above and its CLI do not link Qt.
+find_package(Qt6 QUIET COMPONENTS Widgets Network)
+option(LITEFETCH_BUILD_QT_LEGACY "Build the legacy Qt implementation for comparison" ${Qt6_FOUND})
+if(LITEFETCH_BUILD_QT_LEGACY)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 find_package(LibtorrentRasterbar CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 qt_standard_project_setup()
@@ -300,3 +350,4 @@ install(TARGETS native-downloader
 install(TARGETS native-downloader-host RUNTIME DESTINATION bin)
 qt_generate_deploy_app_script(TARGET native-downloader OUTPUT_SCRIPT deploy_script NO_TRANSLATIONS)
 install(SCRIPT ${deploy_script})
+endif() # LITEFETCH_BUILD_QT_LEGACY

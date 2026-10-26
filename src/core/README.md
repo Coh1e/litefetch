@@ -1,0 +1,67 @@
+# Qt-free task core
+
+This directory is the new UI/engine boundary required by the Win32 product. It
+does not include or link any Qt header/library. The legacy Qt implementation
+remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
+
+## Boundary
+
+- `task_identity.*` — stable lowercase-hex SHA-256 identity over the canonical
+  source bytes. The same source keeps the same id across processes and
+  database reopenings.
+- `task.*` — persisted states (`queued`, `running`, `completed`, `failed`,
+  `cancelled`), task snapshots, and the `Add` / `Start` / `Cancel` commands.
+- `task_store.*` — SQLite persistence boundary. Creation writes schema version
+  `1` into `native_meta`; task rows live in `native_tasks`. The legacy Qt
+  `tasks` table and `user_version` are untouched, so opening the same database
+  file does not silently convert old data. Every `insert`/`update` either
+  commits synchronously or throws `StorageError`.
+- `http_engine.*` — blocking libcurl HTTP(S) transfer. The destination is only
+  published after a successful transfer; failure or cancellation removes the
+  staging file. Progress runs on the calling thread.
+- `task_service.*` — command orchestration. A command reports `ok=true` only
+  after its required database commit. `Start` persists `running` before calling
+  the engine and persists the engine's actual outcome afterwards. A storage
+  failure is returned as `ok=false` and is never reported as a successful
+  commit. `Cancel` on a running task waits for the owning `Start` to persist the
+  real outcome.
+- `cli/main.cpp` — `litefetch-core-cli add|start|cancel|list` for manual
+  end-to-end checks and later Win32 integration.
+
+## Build and verify
+
+Project-local prerequisites (no global install):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-core-deps.ps1
+cmake --preset windows-core
+cmake --build out/build/windows-core
+ctest --test-dir out/build/windows-core --output-on-failure
+```
+
+`windows-core` uses `.deps/vcpkg` and `.deps/installed-core`, disables the Qt
+legacy target, and keeps temporary files under `.deps/tmp`.
+
+Tests exercise the real boundary: a Winsock-controlled HTTP peer serves known
+bytes; `Add` and `Start` go through SQLite; the downloaded file is compared
+byte-for-byte and the snapshot is checked after reopening the database. Other
+scenarios cover HTTP 404, cancellation during a slow transfer, duplicate-source
+identity, and a read-only database where neither Start nor Add may report
+success.
+
+Manual check with an independent HTTP peer and SHA-256 comparison:
+
+```powershell
+node scripts/core-http-fixture.mjs 8080 262144
+out/build/windows-core/litefetch-core-cli.exe add --db data/tasks.db --source http://127.0.0.1:8080/file.bin --destination D:\Downloads\file.bin
+out/build/windows-core/litefetch-core-cli.exe start --db data/tasks.db --id <task-id>
+out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
+```
+
+## Deliberate limits of this ticket
+
+Pause/resume and crash recovery (#5), HTTPS/auth policy (#6), destination
+conflict policy (#18), and the complete Win32 UI (#3+) are not implemented here.
+`Start` is blocking; a future UI dispatches it off the UI thread. The legacy Qt
+path is not rebuilt by this ticket because its Qt/libtorrent dependency tree is
+larger than the core dependency set.
