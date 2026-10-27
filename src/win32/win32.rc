@@ -1,0 +1,73 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+IDI_APP ICON "assets/icons/app.ico"
+IDI_NEW ICON "assets/icons/new.ico"
+IDI_START ICON "assets/icons/start.ico"
+IDI_PAUSE ICON "assets/icons/pause.ico"
+IDI_STOP ICON "assets/icons/stop.ico"
+IDI_DELETE ICON "assets/icons/delete.ico"
+IDI_FOLDER ICON "assets/icons/folder.ico"
+IDI_SETTINGS ICON "assets/icons/settings.ico"
+IDI_START_ACTIVE ICON "assets/icons/start-active.ico"
+
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "文件(&F)"
+    BEGIN
+        MENUITEM "新建下载(&N)...\tCtrl+N", ID_FILE_NEW
+        MENUITEM "批量添加(&B)...", ID_FILE_NEW, GRAYED
+        MENUITEM SEPARATOR
+        MENUITEM "退出(&X)", ID_FILE_EXIT
+    END
+    POPUP "编辑(&E)"
+    BEGIN
+        MENUITEM "复制下载地址(&C)\tCtrl+C", ID_EDIT_COPY_LINK
+    END
+    POPUP "查看(&V)"
+    BEGIN
+        MENUITEM "刷新(&R)\tF5", ID_VIEW_REFRESH
+    END
+    POPUP "任务(&T)"
+    BEGIN
+        MENUITEM "开始/继续(&S)", ID_TASK_START, GRAYED
+        MENUITEM "暂停(&P)", ID_TASK_PAUSE, GRAYED
+        MENUITEM "停止(&T)", ID_TASK_STOP, GRAYED
+        MENUITEM "删除(&D)", ID_TASK_DELETE, GRAYED
+        MENUITEM SEPARATOR
+        MENUITEM "打开文件夹(&O)", ID_TASK_OPEN_FOLDER, GRAYED
+    END
+    POPUP "工具(&O)"
+    BEGIN
+        MENUITEM "选项(&O)...", ID_TOOLS_OPTIONS, GRAYED
+    END
+    POPUP "帮助(&H)"
+    BEGIN
+        MENUITEM "本版本能力说明(&C)", ID_HELP_CAPABILITIES
+        MENUITEM "关于 LiteFetch(&A)", ID_HELP_ABOUT
+    END
+END
+
+IDR_ACCELERATORS ACCELERATORS
+BEGIN
+    "N", ID_FILE_NEW, VIRTKEY, CONTROL
+    "C", ID_EDIT_COPY_LINK, VIRTKEY, CONTROL
+    0x74, ID_VIEW_REFRESH, VIRTKEY
+END
+
+IDD_NEW_DOWNLOAD DIALOGEX 0, 0, 406, 152
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "新建下载"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "下载地址(&U):", -1, 8, 8, 200, 9
+    EDITTEXT IDC_URL, 8, 20, 390, 40, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT "已识别: —。", IDC_URL_HINT, 8, 64, 390, 9
+    LTEXT "保存到(&S):", -1, 8, 80, 200, 9
+    EDITTEXT IDC_SAVE_DIR, 8, 92, 310, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON "浏览...", IDC_BROWSE, 324, 91, 74, 16
+    AUTOCHECKBOX "添加后立即开始(&I)", IDC_AUTO_START, 8, 114, 300, 10, WS_TABSTOP
+    DEFPUSHBUTTON "确定", IDOK, 246, 132, 74, 16
+    PUSHBUTTON "取消", IDCANCEL, 324, 132, 74, 16
+END

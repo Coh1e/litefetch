@@ -20,7 +20,13 @@ namespace litefetch {
 // database commit succeeded.
 class TaskService {
 public:
-    explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp);
+    // Optional observer for live progress (called on the transferring thread).
+    // It must be cheap and must not throw; failures are ignored so an observer
+    // can never break the transfer or its persistence.
+    using ProgressObserver = std::function<void(std::string_view taskId, const TransferProgressInfo&)>;
+
+    explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
+        ProgressObserver observer = {});
 
     // Storage/read failures during a command are returned as ok=false. Query
     // methods are not commands and throw StorageError if the read fails.
@@ -36,6 +42,7 @@ private:
 
     TaskRepository& repository_;
     TransferFunction transfer_;
+    ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<std::atomic_bool>, std::less<>> active_;
 };

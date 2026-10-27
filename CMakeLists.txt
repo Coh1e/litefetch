@@ -15,6 +15,7 @@ add_library(litefetch-core STATIC
     src/core/task.cpp src/core/task.h
     src/core/task_identity.cpp src/core/task_identity.h
     src/core/task_store.cpp src/core/task_store.h
+    src/core/text_utf8.cpp src/core/text_utf8.h
     src/core/http_engine.cpp src/core/http_engine.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
@@ -24,6 +25,27 @@ if(WIN32)
 endif()
 add_executable(litefetch-core-cli src/core/cli/main.cpp)
 target_link_libraries(litefetch-core-cli PRIVATE litefetch-core)
+
+# Win32 UI model: formatting, list rows, action enablement and source parsing.
+# Kept free of window code so it is testable without a desktop.
+add_library(litefetch-ui-model STATIC
+    src/win32/ui_text.cpp src/win32/ui_text.h
+    src/win32/url_filename.cpp src/win32/url_filename.h
+    src/win32/task_list_model.cpp src/win32/task_list_model.h)
+target_include_directories(litefetch-ui-model PUBLIC src/win32)
+target_link_libraries(litefetch-ui-model PUBLIC litefetch-core)
+if(MSVC)
+    target_compile_options(litefetch-ui-model PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+# Worker-thread boundary between the window and the core. It is a separate
+# library so the thread/cancel/shutdown behavior can be tested without a UI.
+add_library(litefetch-win32-runtime STATIC src/win32/task_worker.cpp src/win32/task_worker.h)
+target_include_directories(litefetch-win32-runtime PUBLIC src/win32)
+target_link_libraries(litefetch-win32-runtime PUBLIC litefetch-core PRIVATE user32)
+if(MSVC)
+    target_compile_options(litefetch-win32-runtime PRIVATE /W4 /permissive- /utf-8)
+endif()
 if(MSVC)
     target_compile_options(litefetch-core PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(litefetch-core-cli PRIVATE /W4 /permissive- /utf-8)
@@ -47,13 +69,47 @@ if(BUILD_TESTING)
     target_link_libraries(core-storage-failure-tests PRIVATE litefetch-core unofficial::sqlite3::sqlite3)
     add_test(NAME core-storage-failure COMMAND core-storage-failure-tests)
     set_tests_properties(core-storage-failure PROPERTIES TIMEOUT 20)
+    add_executable(core-unicode-path-tests tests/core/unicode_path_test.cpp)
+    target_link_libraries(core-unicode-path-tests PRIVATE litefetch-core ws2_32)
+    add_test(NAME core-unicode-path COMMAND core-unicode-path-tests)
+    set_tests_properties(core-unicode-path PROPERTIES TIMEOUT 30)
+    add_executable(ui-model-tests tests/win32/model_test.cpp)
+    target_link_libraries(ui-model-tests PRIVATE litefetch-ui-model)
+    add_test(NAME ui-model COMMAND ui-model-tests)
+    set_tests_properties(ui-model PROPERTIES TIMEOUT 20)
+    add_executable(ui-worker-tests tests/win32/task_worker_test.cpp)
+    target_include_directories(ui-worker-tests PRIVATE tests/core)
+    target_link_libraries(ui-worker-tests PRIVATE litefetch-win32-runtime ws2_32)
+    add_test(NAME ui-worker COMMAND ui-worker-tests)
+    set_tests_properties(ui-worker PROPERTIES TIMEOUT 90)
     set(core_test_temp "${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
-    set_tests_properties(core-identity core-store core-service core-storage-failure PROPERTIES
+    set(core_test_targets core-identity core-store core-service core-storage-failure core-unicode-path
+        ui-model ui-worker)
+    set_tests_properties(${core_test_targets} PROPERTIES
         ENVIRONMENT "LITEFETCH_TEST_TEMP=${core_test_temp};TEMP=${core_test_temp};TMP=${core_test_temp}")
     if(MSVC)
-        foreach(core_test core-identity-tests core-store-tests core-service-tests core-storage-failure-tests)
+        foreach(core_test core-identity-tests core-store-tests core-service-tests
+                core-storage-failure-tests core-unicode-path-tests ui-model-tests ui-worker-tests)
             target_compile_options(${core_test} PRIVATE /W4 /permissive- /utf-8)
         endforeach()
+    endif()
+endif()
+
+# Win32 product window. It uses only Win32/Comctl32 resources (menu, toolbar,
+# ListView, status bar) and the Qt-free core; system chrome is drawn by Windows.
+if(WIN32)
+    enable_language(RC)
+    add_executable(litefetch-win32 WIN32
+        src/win32/main.cpp
+        src/win32/main_window.cpp src/win32/main_window.h
+        src/win32/new_download_dialog.cpp src/win32/new_download_dialog.h
+        src/win32/app.manifest
+        src/win32/win32.rc)
+    target_compile_definitions(litefetch-win32 PRIVATE UNICODE _UNICODE)
+    target_link_libraries(litefetch-win32 PRIVATE litefetch-ui-model litefetch-win32-runtime
+        comctl32 shell32 ole32 shlwapi)
+    if(MSVC)
+        target_compile_options(litefetch-win32 PRIVATE /W4 /permissive- /utf-8)
     endif()
 endif()
 

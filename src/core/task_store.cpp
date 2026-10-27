@@ -1,5 +1,7 @@
 #include "task_store.h"
 
+#include "text_utf8.h"
+
 #include <sqlite3.h>
 
 #include <system_error>
@@ -97,8 +99,8 @@ sqlite3* openDatabase(const std::filesystem::path& path, bool readOnly)
     int flags = readOnly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
     flags |= SQLITE_OPEN_FULLMUTEX;
     sqlite3* database = nullptr;
-    const auto utf8 = path.u8string();
-    const int code = sqlite3_open_v2(reinterpret_cast<const char*>(utf8.c_str()), &database, flags, nullptr);
+    const std::string utf8 = pathToUtf8(path);
+    const int code = sqlite3_open_v2(utf8.c_str(), &database, flags, nullptr);
     if (code != SQLITE_OK) {
         const std::string message = database ? sqlite3_errmsg(database) : "Cannot allocate database";
         sqlite3_close(database);

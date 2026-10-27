@@ -9,6 +9,10 @@ remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
 - `task_identity.*` — stable lowercase-hex SHA-256 identity over the canonical
   source bytes. The same source keeps the same id across processes and
   database reopenings.
+- `text_utf8.*` — strict UTF-8 ⇄ UTF-16 and UTF-8 ⇄ `std::filesystem::path`
+  conversion for the Windows boundary. Invalid UTF-8 throws instead of letting
+  `std::filesystem::path`'s ANSI narrow constructor retarget a Chinese file
+  name; the HTTP engine, task service, SQLite open and CLI all use it.
 - `task.*` — persisted states (`queued`, `running`, `completed`, `failed`,
   `cancelled`), task snapshots, and the `Add` / `Start` / `Cancel` commands.
 - `task_store.*` — SQLite persistence boundary. Creation writes schema version
@@ -28,9 +32,14 @@ remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
   commit. `Start`/queued-`Cancel` transitions and active-slot registration share
   one lock, so a committed cancel cannot be overwritten by a concurrent start;
   a `cancelled` task requires an explicit future retry command. `Cancel` on a
-  running task waits for the owning `Start` to persist the real outcome.
+  running task waits for the owning `Start` to persist the real outcome. An
+  optional progress observer lets a UI cache live progress on the transferring
+  thread without touching the database; observer exceptions are ignored.
 - `cli/main.cpp` — `litefetch-core-cli add|start|cancel|list` for manual
-  end-to-end checks and later Win32 integration.
+  end-to-end checks and later Win32 integration. Arguments are read as UTF-16
+  and converted to UTF-8, so Chinese paths work from a Chinese console; `list`
+  opens the database read-only so it can poll while the Win32 task writer is
+  active.
 
 ## Build and verify
 
@@ -68,6 +77,7 @@ out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
 
 Pause/resume and crash recovery (#5), HTTPS/auth policy (#6), destination
 conflict policy (#18), and the complete Win32 UI (#3+) are not implemented here.
-`Start` is blocking; a future UI dispatches it off the UI thread. The legacy Qt
-path is not rebuilt by this ticket because its Qt/libtorrent dependency tree is
-larger than the core dependency set.
+`Start` is blocking; the Win32 shell (`src/win32`) dispatches it off the UI
+thread through its own worker. The legacy Qt path is not rebuilt by this ticket
+because its Qt/libtorrent dependency tree is larger than the core dependency
+set.

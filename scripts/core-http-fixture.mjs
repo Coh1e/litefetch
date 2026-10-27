@@ -1,12 +1,14 @@
 // Controlled HTTP peer for manual core-boundary verification.
-// Usage: node scripts/core-http-fixture.mjs <port> [size]
+// Usage: node scripts/core-http-fixture.mjs <port> [size] [rateBytesPerSecond]
 // Serves deterministic bytes on every path except /missing (404) and prints
-// one JSON line with the bound port and SHA-256 of the body.
+// one JSON line with the bound port and SHA-256 of the body. An optional rate
+// throttles the body in ~100 ms chunks for cancellation/close tests.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 
 const port = Number(process.argv[2] ?? '0');
 const size = Number(process.argv[3] ?? '262144');
+const rate = Number(process.argv[4] ?? '0');
 const body = Buffer.alloc(size);
 for (let i = 0; i < size; i += 1) body[i] = (i * 37 + 11) & 0xff;
 
@@ -20,13 +22,30 @@ const server = createServer((request, response) => {
         'Content-Type': 'application/octet-stream',
         'Content-Length': String(body.length),
     });
-    response.end(body);
+    if (!(rate > 0)) {
+        response.end(body);
+        return;
+    }
+    const chunkSize = Math.max(1024, Math.min(64 * 1024, Math.floor(rate / 10)));
+    let offset = 0;
+    const timer = setInterval(() => {
+        if (offset >= body.length) {
+            clearInterval(timer);
+            response.end();
+            return;
+        }
+        const next = Math.min(body.length, offset + chunkSize);
+        response.write(body.subarray(offset, next));
+        offset = next;
+    }, 100);
+    request.on('close', () => clearInterval(timer));
 });
 
 server.listen(port, '127.0.0.1', () => {
     console.log(JSON.stringify({
         port: server.address().port,
         size: body.length,
+        rate,
         sha256: createHash('sha256').update(body).digest('hex'),
     }));
 });

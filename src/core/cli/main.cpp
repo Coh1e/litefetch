@@ -1,5 +1,6 @@
 #include "task_service.h"
 #include "task_store.h"
+#include "text_utf8.h"
 
 #include <filesystem>
 #include <iostream>
@@ -63,14 +64,15 @@ void usage()
               << "  litefetch-core-cli list --db <path>\n";
 }
 
-std::map<std::string, std::string> options(int argc, char** argv, int start)
+std::map<std::string, std::string> options(const std::vector<std::string>& arguments, int start)
 {
     std::map<std::string, std::string> result;
-    for (int i = start; i < argc; ++i) {
-        const std::string key = argv[i];
+    for (int i = start; i < static_cast<int>(arguments.size()); ++i) {
+        const std::string key = arguments[static_cast<std::size_t>(i)];
         if (key.rfind("--", 0) != 0) throw std::runtime_error("unexpected argument: " + key);
-        if (i + 1 >= argc) throw std::runtime_error("missing value for " + key);
-        result[key.substr(2)] = argv[++i];
+        if (i + 1 >= static_cast<int>(arguments.size())) throw std::runtime_error("missing value for " + key);
+        result[key.substr(2)] = arguments[static_cast<std::size_t>(i) + 1];
+        ++i;
     }
     return result;
 }
@@ -83,17 +85,32 @@ std::string required(const std::map<std::string, std::string>& values, const std
 }
 } // namespace
 
-int main(int argc, char** argv)
+int run(const std::vector<std::string>& arguments)
 {
-    if (argc < 3) {
+    if (arguments.size() < 3) {
         usage();
         return 1;
     }
     try {
-        const std::string command = argv[1];
-        const auto values = options(argc, argv, 2);
+        const std::string command = arguments[1];
+        const auto values = options(arguments, 2);
         const auto database = required(values, "db");
-        const std::filesystem::path databasePath(database);
+        const std::filesystem::path databasePath = pathFromUtf8(database);
+        if (command == "list") {
+            // A read-only connection never takes a write lock, so listing while
+            // the Win32 window is transferring cannot block the task writer.
+            TaskRepository repository = TaskRepository::openReadOnly(databasePath);
+            TaskService service(repository);
+            std::cout << "{\"ok\":true,\"tasks\":[";
+            bool first = true;
+            for (const auto& task : service.snapshots()) {
+                if (!first) std::cout << ',';
+                first = false;
+                std::cout << taskJson(task);
+            }
+            std::cout << "]}\n";
+            return 0;
+        }
         TaskRepository repository(databasePath);
         TaskService service(repository);
         if (command == "add") {
@@ -124,10 +141,30 @@ int main(int argc, char** argv)
             std::cout << "]}\n";
             return 0;
         }
-        usage();
-        return 1;
+        usage();        return 1;
     } catch (const std::exception& error) {
         std::cerr << "litefetch-core-cli: " << error.what() << '\n';
         return 2;
     }
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t** argv)
+{
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc));
+    try {
+        for (int i = 0; i < argc; ++i) arguments.push_back(utf8FromUtf16(argv[i]));
+    } catch (const std::exception& error) {
+        std::cerr << "litefetch-core-cli: " << error.what() << '\n';
+        return 2;
+    }
+    return run(arguments);
+}
+#else
+int main(int argc, char** argv)
+{
+    std::vector<std::string> arguments(argv, argv + argc);
+    return run(arguments);
+}
+#endif

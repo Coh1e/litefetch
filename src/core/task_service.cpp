@@ -1,6 +1,7 @@
 #include "task_service.h"
 
 #include "task_identity.h"
+#include "text_utf8.h"
 
 #include <chrono>
 #include <filesystem>
@@ -46,8 +47,8 @@ CommandResult storageFailure(const StorageError& error)
 
 } // namespace
 
-TaskService::TaskService(TaskRepository& repository, TransferFunction transfer)
-    : repository_(repository), transfer_(std::move(transfer))
+TaskService::TaskService(TaskRepository& repository, TransferFunction transfer, ProgressObserver observer)
+    : repository_(repository), transfer_(std::move(transfer)), observer_(std::move(observer))
 {
     if (!transfer_) transfer_ = transferHttp;
 }
@@ -79,7 +80,7 @@ std::vector<TaskSnapshot> TaskService::snapshots()
 CommandResult TaskService::add(const AddTaskCommand& command)
 {
     if (!httpSource(command.source)) return failure("only HTTP(S) sources are supported by the core boundary");
-    const std::filesystem::path destination(command.destination);
+    const std::filesystem::path destination = pathFromUtf8(command.destination);
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");
 
@@ -166,6 +167,13 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     auto progress = [&](const TransferProgressInfo& update) {
         task.received = update.received;
         task.total = update.total;
+        if (observer_) {
+            try {
+                observer_(command.taskId, update);
+            } catch (...) {
+                // A UI observer must never stop or corrupt the transfer.
+            }
+        }
         const auto now = nowMillis();
         if (now - lastPersist < 250 && !(update.total >= 0 && update.received >= update.total)) return;
         lastPersist = now;

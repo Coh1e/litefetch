@@ -1,5 +1,7 @@
 #include "http_engine.h"
 
+#include "text_utf8.h"
+
 #include <curl/curl.h>
 
 #ifndef NOMINMAX
@@ -149,7 +151,7 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
 {
     if (!isHttpUrl(request.source))
         return failure(TransferError::InvalidRequest, "source is not an HTTP(S) URL");
-    const std::filesystem::path destination(request.destination);
+    const std::filesystem::path destination = pathFromUtf8(request.destination);
     if (!destination.is_absolute() || destination.filename().empty())
         return failure(TransferError::Destination, "destination must be an absolute file path");
     std::error_code existsError;
@@ -168,8 +170,9 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
         return failure(TransferError::Internal, "cannot initialize the network runtime");
 
     static std::atomic<unsigned long long> sequence{0};
-    const auto staging = std::filesystem::path(destination.string() + ".part-"
-        + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(sequence.fetch_add(1)));
+    std::filesystem::path staging = destination;
+    staging += pathFromUtf8(".part-" + std::to_string(GetCurrentProcessId()) + "-"
+        + std::to_string(sequence.fetch_add(1)));
     std::ofstream output(staging, std::ios::binary | std::ios::trunc);
     if (!output) return failure(TransferError::Destination, "cannot create the staging file");
     struct Cleanup {
