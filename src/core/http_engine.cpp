@@ -14,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace litefetch {
@@ -102,6 +103,40 @@ TransferResult failure(TransferError error, std::string message)
     return result;
 }
 
+// The start-time existence check is only a fast preflight. Publication must
+// itself refuse to replace an existing file: two tasks can pass the preflight
+// concurrently, and a plain std::filesystem::rename overwrites on MSVC.
+bool publishNoReplace(const std::filesystem::path& staging,
+    const std::filesystem::path& destination, std::string& message)
+{
+#ifdef _WIN32
+    if (MoveFileExW(staging.c_str(), destination.c_str(), 0)) return true;
+    const DWORD error = GetLastError();
+    if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)
+        message = "destination already exists";
+    else
+        message = "cannot publish destination: "
+            + std::system_category().message(static_cast<int>(error));
+    return false;
+#else
+    std::error_code error;
+    if (std::filesystem::exists(destination, error)) {
+        message = "destination already exists";
+        return false;
+    }
+    if (error) {
+        message = "cannot inspect destination: " + error.message();
+        return false;
+    }
+    std::filesystem::rename(staging, destination, error);
+    if (error) {
+        message = "cannot publish destination: " + error.message();
+        return false;
+    }
+    return true;
+#endif
+}
+
 std::string curlMessage(CURLcode code, const std::array<char, CURL_ERROR_SIZE>& buffer)
 {
     if (buffer[0] != '\0') return buffer.data();
@@ -133,13 +168,13 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
         return failure(TransferError::Internal, "cannot initialize the network runtime");
 
     static std::atomic<unsigned long long> sequence{0};
-    const auto staging = destination.string() + ".part-"
-        + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(sequence.fetch_add(1));
+    const auto staging = std::filesystem::path(destination.string() + ".part-"
+        + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(sequence.fetch_add(1)));
     std::ofstream output(staging, std::ios::binary | std::ios::trunc);
     if (!output) return failure(TransferError::Destination, "cannot create the staging file");
     struct Cleanup {
         std::ofstream& output;
-        std::string staging;
+        std::filesystem::path staging;
         bool armed = true;
         ~Cleanup()
         {
@@ -233,11 +268,10 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
         result.message = "cannot close the destination";
         return result;
     }
-    std::error_code renameError;
-    std::filesystem::rename(staging, destination, renameError);
-    if (renameError) {
+    std::string publishMessage;
+    if (!publishNoReplace(staging, destination, publishMessage)) {
         result.error = TransferError::Destination;
-        result.message = "cannot publish destination: " + renameError.message();
+        result.message = std::move(publishMessage);
         return result;
     }
     cleanup.armed = false;

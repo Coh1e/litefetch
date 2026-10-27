@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -34,13 +35,41 @@ inline void checkEqual(long long actual, long long expected, const char* message
             + ", got " + std::to_string(actual));
 }
 
+inline std::string environmentValue(const char* name)
+{
+#if defined(_MSC_VER)
+    char* value = nullptr;
+    std::size_t size = 0;
+    if (_dupenv_s(&value, &size, name) != 0 || !value) return {};
+    std::string result(value);
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string();
+#endif
+}
+
+inline std::filesystem::path testTempRoot()
+{
+    const auto configured = environmentValue("LITEFETCH_TEST_TEMP");
+    if (!configured.empty()) {
+        const std::filesystem::path root(configured);
+        std::error_code error;
+        std::filesystem::create_directories(root, error);
+        if (error) throw std::runtime_error("cannot create LITEFETCH_TEST_TEMP: " + error.message());
+        return root;
+    }
+    return std::filesystem::temp_directory_path();
+}
+
 class TempDir {
 public:
     TempDir()
     {
         static std::atomic<unsigned long long> counter{0};
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        path_ = std::filesystem::temp_directory_path()
+        path_ = testTempRoot()
             / ("litefetch-core-" + std::to_string(GetCurrentProcessId()) + "-"
                 + std::to_string(stamp) + "-" + std::to_string(counter.fetch_add(1)));
         std::filesystem::create_directories(path_);

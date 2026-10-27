@@ -22,6 +22,8 @@ class TaskService {
 public:
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp);
 
+    // Storage/read failures during a command are returned as ok=false. Query
+    // methods are not commands and throw StorageError if the read fails.
     CommandResult execute(const TaskCommand& command);
     std::optional<TaskSnapshot> snapshot(std::string_view id);
     std::vector<TaskSnapshot> snapshots();

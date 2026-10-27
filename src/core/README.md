@@ -17,14 +17,18 @@ remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
   file does not silently convert old data. Every `insert`/`update` either
   commits synchronously or throws `StorageError`.
 - `http_engine.*` — blocking libcurl HTTP(S) transfer. The destination is only
-  published after a successful transfer; failure or cancellation removes the
+  published after a successful transfer and publication is no-replace:
+  `MoveFileExW(..., 0)` refuses an existing target, so two concurrent publishers
+  cannot silently overwrite each other. Failure or cancellation removes the
   staging file. Progress runs on the calling thread.
 - `task_service.*` — command orchestration. A command reports `ok=true` only
   after its required database commit. `Start` persists `running` before calling
   the engine and persists the engine's actual outcome afterwards. A storage
   failure is returned as `ok=false` and is never reported as a successful
-  commit. `Cancel` on a running task waits for the owning `Start` to persist the
-  real outcome.
+  commit. `Start`/queued-`Cancel` transitions and active-slot registration share
+  one lock, so a committed cancel cannot be overwritten by a concurrent start;
+  a `cancelled` task requires an explicit future retry command. `Cancel` on a
+  running task waits for the owning `Start` to persist the real outcome.
 - `cli/main.cpp` — `litefetch-core-cli add|start|cancel|list` for manual
   end-to-end checks and later Win32 integration.
 
@@ -40,7 +44,9 @@ ctest --test-dir out/build/windows-core --output-on-failure
 ```
 
 `windows-core` uses `.deps/vcpkg` and `.deps/installed-core`, disables the Qt
-legacy target, and keeps temporary files under `.deps/tmp`.
+legacy target, and keeps temporary files under `.deps/tmp`. CTest also sets
+`LITEFETCH_TEST_TEMP`/`TEMP`/`TMP` for the core tests to `tmp/core-test-temp`
+inside the repository.
 
 Tests exercise the real boundary: a Winsock-controlled HTTP peer serves known
 bytes; `Add` and `Start` go through SQLite; the downloaded file is compared
