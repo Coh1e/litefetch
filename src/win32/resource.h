@@ -18,6 +18,7 @@
 // Commands (shared by menu and toolbar)
 #define ID_FILE_NEW 1001
 #define ID_FILE_EXIT 1002
+#define ID_FILE_BATCH 1003
 #define ID_EDIT_COPY_LINK 1010
 #define ID_VIEW_REFRESH 1020
 #define ID_TASK_START 1030

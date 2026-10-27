@@ -4,8 +4,9 @@
 #include "task_list_model.h"
 #include "ui_text.h"
 #include "url_filename.h"
+#include "list_layout.h"
 
-#include <cmath>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -37,6 +38,38 @@ TaskSnapshot task(std::string id, TaskState state, std::int64_t received, std::i
     snapshot.received = received;
     snapshot.total = total;
     return snapshot;
+}
+
+void listLayout()
+{
+    // 1000 px client at 96 DPI: the design's five pitches plus the flexible
+    // status column that reaches the right edge.
+    auto widths = listColumnWidths(1000, 96);
+    check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 238},
+        "1000 px client column widths follow the Figma separators at 342/446/528/654/762");
+
+    widths = listColumnWidths(1300, 96);
+    check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 538},
+        "the status column absorbs extra width on resize");
+    widths = listColumnWidths(700, 96);
+    check(widths == std::array<int, 6>{239, 73, 57, 88, 76, 167},
+        "narrow windows scale all columns proportionally instead of overflowing");
+    int narrowTotal = 0;
+    for (const int width : widths) narrowTotal += width;
+    check(narrowTotal == 700, "proportional narrow layout fills the client exactly");
+
+    const auto scaled = listColumnWidths(1000, 120);
+    check(scaled == std::array<int, 6>{428, 130, 103, 158, 135, 46},
+        "fixed columns scale with DPI and the status column takes the remainder");
+
+    for (const int clientWidth : {1000, 1100, 1300, 640, 1500}) {
+        for (const int dpi : {96, 120, 144, 168}) {
+            const auto layout = listColumnWidths(clientWidth, dpi);
+            int total = 0;
+            for (const int width : layout) total += width;
+            check(total == clientWidth, "column widths always fill the ListView client width");
+        }
+    }
 }
 
 void formatting()
@@ -161,6 +194,7 @@ int main()
     try {
         formatting();
         sourceParsing();
+        listLayout();
         modelProgressAndActions();
         std::cout << "ui-model: PASS\n";
         return 0;

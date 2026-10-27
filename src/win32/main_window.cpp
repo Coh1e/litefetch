@@ -4,6 +4,7 @@
 #include "resource.h"
 #include "task_worker.h"
 #include "text_utf8.h"
+#include "list_layout.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -52,16 +53,15 @@ const std::array<ToolbarButton, 10> toolbarButtons{{
 
 struct ColumnSpec {
     const wchar_t* title;
-    int width;
 };
 
 const std::array<ColumnSpec, 6> columns{{
-    {L"名称", 331},
-    {L"大小", 93},
-    {L"进度", 71},
-    {L"下载速度", 115},
-    {L"剩余时间", 97},
-    {L"状态", 110},
+    {L"名称"},
+    {L"大小"},
+    {L"进度"},
+    {L"下载速度"},
+    {L"剩余时间"},
+    {L"状态"},
 }};
 
 int scale(int value, int dpi)
@@ -80,6 +80,9 @@ MainWindow::MainWindow(AppOptions options) : options_(std::move(options)) {}
 MainWindow::~MainWindow()
 {
     if (worker_) worker_->shutdown();
+    if (rowImages_) ImageList_Destroy(rowImages_);
+    if (toolbarImages_) ImageList_Destroy(toolbarImages_);
+    if (menu_) DestroyMenu(menu_);
     if (font_) DeleteObject(font_);
     if (largeIcon_) DestroyIcon(largeIcon_);
     if (smallIcon_) DestroyIcon(smallIcon_);
@@ -327,6 +330,7 @@ void MainWindow::createToolbar()
         buttons.push_back(button);
     }
     SendMessageW(toolbar_, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(images));
+    toolbarImages_ = images;
     SendMessageW(toolbar_, TB_ADDBUTTONSW, static_cast<WPARAM>(buttons.size()),
         reinterpret_cast<LPARAM>(buttons.data()));
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
@@ -370,13 +374,15 @@ void MainWindow::createList()
         if (memory) DeleteDC(memory);
         ReleaseDC(nullptr, screen);
         ListView_SetImageList(list_, rows, LVSIL_SMALL);
+        rowImages_ = rows;
     }
 
+    const auto initialWidths = listColumnWidths(scale(1000, dpi_), dpi_);
     for (std::size_t index = 0; index < columns.size(); ++index) {
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         column.fmt = LVCFMT_LEFT;
-        column.cx = scale(columns[index].width, dpi_);
+        column.cx = initialWidths[index];
         column.iSubItem = static_cast<int>(index);
         column.pszText = const_cast<LPWSTR>(columns[index].title);
         ListView_InsertColumn(list_, static_cast<int>(index), &column);
@@ -451,7 +457,23 @@ void MainWindow::layoutControls()
         const int top = toolbarHeight_;
         const int height = std::max(0, static_cast<int>(client.bottom) - top - statusHeight);
         MoveWindow(list_, 0, top, client.right, height, TRUE);
+        applyColumnWidths();
     }
+}
+
+void MainWindow::applyColumnWidths()
+{
+    if (!list_) return;
+    RECT client{};
+    GetClientRect(list_, &client);
+    const int width = client.right - client.left;
+    if (width <= 0) return;
+    if (width == lastColumnClientWidth_ && dpi_ == lastColumnDpi_) return;
+    if (ListView_GetHeader(list_) == nullptr) return;
+    const auto widths = listColumnWidths(width, dpi_);
+    for (int index = 0; index < 6; ++index) ListView_SetColumnWidth(list_, index, widths[index]);
+    lastColumnClientWidth_ = width;
+    lastColumnDpi_ = dpi_;
 }
 
 void MainWindow::refreshFromWorker()
@@ -538,6 +560,9 @@ void MainWindow::syncList()
             }
         }
     }
+    // The vertical scrollbar can appear/disappear as rows change, which changes
+    // the ListView client width; keep the flexible last column at the edge.
+    applyColumnWidths();
 }
 
 void MainWindow::ensureSelection()
@@ -600,28 +625,31 @@ void MainWindow::setShutdownStatus()
 
 void MainWindow::updateActions()
 {
-    const auto actions = model_.actionsFor(selectedId_);
+    // While the window is closing, no task command may look available; the
+    // worker is cancelling and commands are already ignored in WM_COMMAND.
+    const auto actions = model_.actionsFor(isClosing() ? std::string_view{} : selectedId_);
+    const bool interactive = !isClosing();
     auto enableMenu = [this](UINT id, bool enabled) {
         if (menu_) EnableMenuItem(menu_, id, MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
     };
     auto enableButton = [this](UINT id, bool enabled) {
         if (toolbar_) SendMessageW(toolbar_, TB_ENABLEBUTTON, id, MAKELONG(enabled ? TRUE : FALSE, 0));
     };
-    enableMenu(ID_FILE_NEW, !isClosing());
-    enableMenu(ID_EDIT_COPY_LINK, actions.copyLink);
-    enableMenu(ID_VIEW_REFRESH, !isClosing());
-    enableMenu(ID_TASK_START, actions.start);
+    enableMenu(ID_FILE_NEW, interactive);
+    enableMenu(ID_EDIT_COPY_LINK, interactive && actions.copyLink);
+    enableMenu(ID_VIEW_REFRESH, interactive);
+    enableMenu(ID_TASK_START, interactive && actions.start);
     enableMenu(ID_TASK_PAUSE, actions.pause);
-    enableMenu(ID_TASK_STOP, actions.stop);
+    enableMenu(ID_TASK_STOP, interactive && actions.stop);
     enableMenu(ID_TASK_DELETE, actions.deleteTask);
-    enableMenu(ID_TASK_OPEN_FOLDER, actions.openFolder);
+    enableMenu(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
     enableMenu(ID_TOOLS_OPTIONS, actions.options);
-    enableButton(ID_FILE_NEW, !isClosing());
-    enableButton(ID_TASK_START, actions.start);
+    enableButton(ID_FILE_NEW, interactive);
+    enableButton(ID_TASK_START, interactive && actions.start);
     enableButton(ID_TASK_PAUSE, actions.pause);
-    enableButton(ID_TASK_STOP, actions.stop);
+    enableButton(ID_TASK_STOP, interactive && actions.stop);
     enableButton(ID_TASK_DELETE, actions.deleteTask);
-    enableButton(ID_TASK_OPEN_FOLDER, actions.openFolder);
+    enableButton(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
     enableButton(ID_TOOLS_OPTIONS, actions.options);
     if (toolbar_ && startImageEnabled_ >= 0) {
         SendMessageW(toolbar_, TB_CHANGEBITMAP, ID_TASK_START,
@@ -751,7 +779,7 @@ void MainWindow::showCapabilities()
 {
     MessageBoxW(hwnd_,
         L"本版本已实现：\n"
-        L"• 新建 HTTP(S) 下载（真实传输、真实文件）\n"
+        L"• 新建 HTTP 下载（真实传输、真实文件；HTTPS 由传输库支持，但未在本版本验收）\n"
         L"• 开始等待中或失败的任务\n"
         L"• 停止等待中或下载中的任务\n"
         L"• 打开任务保存文件夹、复制下载地址、刷新列表\n"

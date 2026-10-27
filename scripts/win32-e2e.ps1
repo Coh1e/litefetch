@@ -23,6 +23,13 @@ $log = Join-Path $evidence 'win32-e2e.log'
 $env:PATH = "$depsBin;$env:PATH"
 $env:TEMP = Join-Path $root '.deps/tmp'
 $env:TMP = $env:TEMP
+# The CLI prints UTF-8 JSON; decode native output as UTF-8 regardless of the
+# console code page used by the caller (a redirected run has no console).
+try {
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+}
 
 $WM_COMMAND = 0x0111
 $WM_CLOSE = 0x0010
@@ -88,6 +95,12 @@ public static class E2E {
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -127,9 +140,14 @@ public static class E2E {
 "@
 
 New-Item -ItemType Directory -Force $work | Out-Null
+New-Item -ItemType Directory -Force $evidence | Out-Null
 $transcript = [System.Collections.Generic.List[string]]::new()
+$tracePath = Join-Path $evidence 'win32-e2e-trace.log'
+Set-Content -LiteralPath $tracePath -Value '' -Encoding UTF8
 function Log([string]$text) {
+    $line = (Get-Date).ToString('HH:mm:ss.fff') + ' ' + $text
     Write-Host $text
+    Add-Content -LiteralPath $tracePath -Value $line -Encoding UTF8
     $transcript.Add($text) | Out-Null
 }
 function Fail([string]$text) {
@@ -166,6 +184,48 @@ function Find-Child([IntPtr]$parent, [string]$className) {
     return $script:childResult
 }
 
+function Get-ListClientWidth([IntPtr]$window) {
+    $list = Find-Child $window 'SysListView32'
+    if ($list -eq [IntPtr]::Zero) { return 0 }
+    $rect = New-Object E2E+RECT
+    if (-not [E2E]::GetClientRect($list, [ref]$rect)) { return 0 }
+    return $rect.Right - $rect.Left
+}
+
+function Get-ListColumnWidths([IntPtr]$window) {
+    $list = Find-Child $window 'SysListView32'
+    if ($list -eq [IntPtr]::Zero) { return @() }
+    $widths = @()
+    for ($index = 0; $index -lt 6; $index += 1) {
+        $widths += [int][E2E]::SendMessagePtr($list, 0x101D, [IntPtr]$index, [IntPtr]::Zero) # LVM_GETCOLUMNWIDTH
+    }
+    return $widths
+}
+
+function Check-ColumnGeometry([IntPtr]$window, [string]$label) {
+    $dpi = [E2E]::GetDpiForWindow($window)
+    if ($dpi -eq 0) { $dpi = 96 }
+    $expectedFixed = @()
+    $design = @(342, 104, 82, 126, 108)
+    $fixedSum = 0
+    foreach ($designWidth in $design) {
+        $value = [int][Math]::Round($designWidth * $dpi / 96.0)
+        $expectedFixed += $value
+        $fixedSum += $value
+    }
+    $clientWidth = Get-ListClientWidth $window
+    $widths = @(Get-ListColumnWidths $window)
+    Log "${label}: dpi=$dpi listClient=$clientWidth columns=$($widths -join ',') expectedFixed=$($expectedFixed -join ',') expectedStatus=$($clientWidth - $fixedSum)"
+    Check ($widths.Count -eq 6) "${label}: six ListView columns are readable"
+    for ($index = 0; $index -lt 5; $index += 1) {
+        Check ($widths[$index] -eq $expectedFixed[$index]) "${label}: column $index follows the Figma pitch ($($widths[$index]) vs $($expectedFixed[$index]))"
+    }
+    Check ($widths[5] -eq ($clientWidth - $fixedSum)) "${label}: the status column fills the remaining $($clientWidth - $fixedSum) px"
+    $total = 0
+    foreach ($width in $widths) { $total += $width }
+    Check ($total -eq $clientWidth) "${label}: columns exactly cover the ListView client width ($total)"
+}
+
 function Find-TopWindow([string]$className, [string]$titleFragment) {
     $script:topResult = [IntPtr]::Zero
     $callback = [E2E+EnumProc]{
@@ -193,6 +253,7 @@ function Window-Text([IntPtr]$handle) {
 }
 
 function Capture-Window([IntPtr]$handle, [string]$file) {
+    Log "capture start: $file"
     [void][E2E]::SetForegroundWindow($handle)
     Start-Sleep -Milliseconds 250
     $rect = New-Object E2E+RECT
@@ -247,10 +308,12 @@ function Get-Tasks([string]$database) {
 }
 
 function Open-NewDownloadDialog([IntPtr]$window) {
+    Log 'posting ID_FILE_NEW'
     [void][E2E]::PostMessageW($window, $WM_COMMAND, [IntPtr]$ID_FILE_NEW, [IntPtr]::Zero)
     Wait-For -timeoutMs 10000 -label 'new download dialog' -condition {
         [E2E]::FindWindowW('#32770', '新建下载') -ne [IntPtr]::Zero
     } | Out-Null
+    Log 'new download dialog found'
     return [E2E]::FindWindowW('#32770', '新建下载')
 }
 
@@ -266,6 +329,7 @@ function Close-App($process, [IntPtr]$window, [string]$label) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         Fail "${label}: process did not exit within 30 s"
     }
+    $process.WaitForExit()
     Check ($process.ExitCode -eq 0) "${label}: process exited with code $($process.ExitCode)"
     Check (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) "${label}: no background process remains"
 }
@@ -394,6 +458,33 @@ function Invoke-CompletedDownload([string]$label) {
         Check ($columnCount -eq 6) "list has six columns (got $columnCount)"
         $toolbar = Find-Child $window 'ToolbarWindow32'
         Check ($toolbar -ne [IntPtr]::Zero) 'toolbar control exists'
+
+        Check-ColumnGeometry $window '1000 px window'
+        $original = New-Object E2E+RECT
+        [void][E2E]::GetWindowRect($window, [ref]$original)
+        $originalWidth = $original.Right - $original.Left
+        $originalHeight = $original.Bottom - $original.Top
+        $clientBefore = Get-ListClientWidth $window
+        $widthsBefore = @(Get-ListColumnWidths $window)
+        Log "resizing window to $($originalWidth + 300) x $originalHeight"
+        [void][E2E]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, $originalWidth + 300, $originalHeight,
+            0x0002 -bor 0x0004) # SWP_NOMOVE | SWP_NOZORDER
+        Log 'resize returned'
+        Start-Sleep -Milliseconds 500
+        $clientAfter = Get-ListClientWidth $window
+        $widthsAfter = @(Get-ListColumnWidths $window)
+        Check ($clientAfter -eq $clientBefore + 300) "resize grows the ListView client by 300 px ($clientBefore -> $clientAfter)"
+        Check ($widthsAfter[5] -eq $widthsBefore[5] + 300) "resize gives all extra width to the status column"
+        for ($index = 0; $index -lt 5; $index += 1) {
+            Check ($widthsAfter[$index] -eq $widthsBefore[$index]) "resize keeps column $index fixed"
+        }
+        Check-ColumnGeometry $window 'resized window'
+        Log 'restoring original window size'
+        [void][E2E]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, $originalWidth, $originalHeight,
+            0x0002 -bor 0x0004)
+        Log 'restore returned'
+        Start-Sleep -Milliseconds 500
+        Check-ColumnGeometry $window 'restored 1000 px window'
 
         $dialog = Open-NewDownloadDialog $window
         $url = "http://127.0.0.1:$($fixture.Port)/files/%E5%B7%A5%E5%85%B7%E5%8C%85.zip"

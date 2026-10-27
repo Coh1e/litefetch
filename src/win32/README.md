@@ -11,7 +11,15 @@ target.
 - System title bar, six native menus (文件/编辑/查看/任务/工具/帮助), seven
   toolbar commands with the Figma command icons, six default columns
   (名称/大小/进度/下载速度/剩余时间/状态) and a four-part status bar.
-- "新建下载" native dialog: one HTTP(S) address, explicit save folder,
+- List geometry follows the Figma main board: the five fixed column pitches
+  are 342/104/82/126/108 px (the design's 331/93/71/115/97 text slots plus the
+  11 px gap between slots) and 状态 takes every remaining pixel, like
+  `flex-[1_0_0]` in the design. Widths scale with DPI and are recomputed on
+  resize; below the design width at the current DPI all columns shrink
+  proportionally instead of overflowing. `scripts/win32-e2e.ps1` asserts the
+  real ListView widths, the flexible last column and the resize behavior.
+- "新建下载" native dialog: one HTTP address (the engine accepts HTTPS, but
+  this ticket only exercises HTTP; HTTPS is #6), explicit save folder,
   `浏览...`, "添加后立即开始". The file name is derived from the URL and the
   destination path is passed to the core as UTF-8.
 - A real new task goes through `TaskService` on a worker thread: `Add` (and
@@ -67,7 +75,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win32-e2e.ps1
   database path survive the UTF-8 command boundary.
 - `scripts/win32-e2e.ps1` — drives the real window through real messages: menu
   command, native dialog controls, toolbar start, clipboard, Explorer, file
-  hash, SQLite row and window close during a throttled download. It captures
+  hash, SQLite row, real ListView/status-bar text, column geometry (including
+  window resize) and window close during a throttled download. It captures
   screenshots under `.pi/evidence/issue-03/`.
 
 ## Icons
@@ -87,6 +96,11 @@ used by the test fixtures; no new dependency).
 - The list is single-selection here. Multi-select and the remaining keyboard
   surface belong to #4/#26.
 - HTTPS, authentication and proxy policy are #6/#17; this ticket exercises the
-  HTTP transfer path that already exists in the core.
+  HTTP transfer path that already exists in the core. HTTPS is not accepted as
+  verified by this ticket.
+- The new-download dialog keeps the design's field order and 72 px URL field but
+  follows native control metrics, so it is slightly wider/taller than the Figma
+  board; the URL edit no longer shows a vertical scrollbar that the design does
+  not draw. System controls take priority over static design pixels (#29).
 - DPI changes are handled through `WM_DPICHANGED` with system metrics/font, but
   this ticket was only exercised at the machine's current scaling (100%).

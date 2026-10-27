@@ -58,6 +58,7 @@ private:
     void applyFont();
     void layoutControls();
     void updateLayoutMetrics();
+    void applyColumnWidths();
     void refreshFromWorker();
     void syncList();
     void updateStatus();
@@ -99,6 +100,10 @@ private:
     std::uint64_t lastErrorSequence_ = 0;
     std::chrono::steady_clock::time_point lastErrorAt_{};
     std::wstring tooltipText_;
+    HIMAGELIST toolbarImages_ = nullptr;
+    HIMAGELIST rowImages_ = nullptr;
+    int lastColumnClientWidth_ = -1;
+    int lastColumnDpi_ = 0;
     int startImageDisabled_ = -1;
     int startImageEnabled_ = -1;
     int toolbarHeight_ = 0;

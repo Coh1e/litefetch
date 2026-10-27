@@ -31,6 +31,7 @@ target_link_libraries(litefetch-core-cli PRIVATE litefetch-core)
 add_library(litefetch-ui-model STATIC
     src/win32/ui_text.cpp src/win32/ui_text.h
     src/win32/url_filename.cpp src/win32/url_filename.h
+    src/win32/list_layout.cpp src/win32/list_layout.h
     src/win32/task_list_model.cpp src/win32/task_list_model.h)
 target_include_directories(litefetch-ui-model PUBLIC src/win32)
 target_link_libraries(litefetch-ui-model PUBLIC litefetch-core)
