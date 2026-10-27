@@ -117,7 +117,7 @@ SourceInput analyzeSourceInput(std::string_view text)
         result.hint = "已识别: HTTP。";
     } else {
         result.kind = SourceKind::Unsupported;
-        result.hint = "不支持的地址类型：本版本仅支持 HTTP(S)。";
+        result.hint = "不支持的地址类型：本版本仅支持 HTTP 下载（HTTPS 由传输库支持，尚未验收）。";
     }
     return result;
 }

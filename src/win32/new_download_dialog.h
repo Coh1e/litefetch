@@ -16,7 +16,8 @@ struct NewDownloadRequest {
 };
 
 // Native modal dialog. Returns nothing when the user cancels. Only the
-// capabilities of this ticket are offered: one HTTP(S) address, an explicit
+// capabilities of this ticket are offered: one HTTP address (HTTPS is accepted
+// by the parser and engine but is not verified by this ticket), an explicit
 // destination folder and "start immediately"; batch add is not implied.
 std::optional<NewDownloadRequest> showNewDownloadDialog(HWND owner,
     const std::filesystem::path& initialDirectory);
