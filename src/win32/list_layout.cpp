@@ -34,7 +34,6 @@ std::array<int, 6> listColumnWidths(int clientWidth, int dpi)
     // Below the design width at this DPI (e.g. the minimum window size), scale
     // all six columns proportionally so nothing overflows and no fake
     // horizontal scrollbar appears.
-    const int scaledTotal = MulDiv(designTotal, dpi, 96);
     int allocated = 0;
     for (std::size_t index = 0; index < 5; ++index) {
         widths[index] = MulDiv(designWidths[index], clientWidth * dpi, 96 * designTotal);
