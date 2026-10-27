@@ -12,10 +12,11 @@ namespace litefetch::ui {
 // remainder of the real ListView client area, not a fixed width.
 inline constexpr std::array<int, 6> listColumnPitches{342, 104, 82, 126, 108, 0};
 
-// Widths in device pixels for the current ListView client width and DPI. The
-// first five columns scale with the DPI and the last fills what remains; below
-// the design width at that DPI all columns shrink proportionally so the layout
-// never leaves an empty tail or a fake horizontal scrollbar.
+// Widths in device pixels for the current ListView client width and DPI.
+// At or above the design ListView client width (998 px at 96 DPI, scaled by
+// DPI) the first five columns keep the Figma pitches and 状态 fills the rest.
+// Below that width all six columns shrink proportionally (including 状态), so
+// no column collapses to 0/1 px and there is no layout cliff at the threshold.
 std::array<int, 6> listColumnWidths(int clientWidth, int dpi);
 
 } // namespace litefetch::ui

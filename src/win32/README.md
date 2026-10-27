@@ -13,11 +13,14 @@ target.
   (名称/大小/进度/下载速度/剩余时间/状态) and a four-part status bar.
 - List geometry follows the Figma main board: the five fixed column pitches
   are 342/104/82/126/108 px (the design's 331/93/71/115/97 text slots plus the
-  11 px gap between slots) and 状态 takes every remaining pixel, like
-  `flex-[1_0_0]` in the design. Widths scale with DPI and are recomputed on
-  resize; below the design width at the current DPI all columns shrink
-  proportionally instead of overflowing. `scripts/win32-e2e.ps1` asserts the
-  real ListView widths, the flexible last column and the resize behavior.
+  11 px gap between slots). At or above the design ListView client width
+  (998 px at 96 DPI, i.e. the 1000 px window client minus the native 2 px
+  ListView border) those pitches stay fixed and 状态 takes the remaining
+  pixels, like `flex-[1_0_0]`. Below that width all six columns shrink
+  proportionally, so 状态 never collapses to 0/1 px and there is no cliff at
+  the threshold. Widths scale with DPI and are recomputed on resize;
+  `scripts/win32-e2e.ps1` asserts the real ListView widths, the wide resize,
+  the narrow widths at 900/763/762/761 px, and the restored design layout.
 - "新建下载" native dialog: one HTTP address (the engine accepts HTTPS, but
   this ticket only exercises HTTP; HTTPS is #6), explicit save folder,
   `浏览...`, "添加后立即开始". The file name is derived from the URL and the
@@ -98,9 +101,14 @@ used by the test fixtures; no new dependency).
 - HTTPS, authentication and proxy policy are #6/#17; this ticket exercises the
   HTTP transfer path that already exists in the core. HTTPS is not accepted as
   verified by this ticket.
-- The new-download dialog keeps the design's field order and 72 px URL field but
-  follows native control metrics, so it is slightly wider/taller than the Figma
-  board; the URL edit no longer shows a vertical scrollbar that the design does
-  not draw. System controls take priority over static design pixels (#29).
-- DPI changes are handled through `WM_DPICHANGED` with system metrics/font, but
-  this ticket was only exercised at the machine's current scaling (100%).
+- The new-download dialog keeps the design's field order and 72 px URL field
+  but follows native control metrics: the window is 727×324 px (visible about
+  711×308) versus the Figma board's 570×301 px, i.e. +24.7% width and +2.3%
+  height. This comes from a 406-DLU resource with Segoe UI 9 pt; it is not a
+  DPI error or custom drawing, and no field is clipped. The URL edit no longer
+  shows the vertical scrollbar the design does not draw. Whether the Figma
+  pixel size must be matched exactly is a human decision; this ticket keeps
+  native controls (see #29).
+- DPI changes are handled through `WM_DPICHANGED` with system metrics/font and
+  column geometry has unit cases for 96/120/144/168 DPI, but this ticket was
+  only exercised in a real window at the machine's current scaling (100%).

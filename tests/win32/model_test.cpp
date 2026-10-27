@@ -6,6 +6,7 @@
 #include "url_filename.h"
 #include "list_layout.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -42,32 +43,67 @@ TaskSnapshot task(std::string id, TaskState state, std::int64_t received, std::i
 
 void listLayout()
 {
-    // 1000 px client at 96 DPI: the design's five pitches plus the flexible
-    // status column that reaches the right edge.
-    auto widths = listColumnWidths(1000, 96);
-    check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 238},
-        "1000 px client column widths follow the Figma separators at 342/446/528/654/762");
+    // 998 is the ListView client width of the 1000 px design window at 96 DPI
+    // (1000 client minus the native 2 px ListView border).
+    auto widths = listColumnWidths(998, 96);
+    check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 236},
+        "design-width client keeps the Figma pitches and fills the status column");
 
+    widths = listColumnWidths(1000, 96);
+    check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 238},
+        "extra width above the design size goes only to the status column");
     widths = listColumnWidths(1300, 96);
     check(widths == std::array<int, 6>{342, 104, 82, 126, 108, 538},
-        "the status column absorbs extra width on resize");
-    widths = listColumnWidths(700, 96);
-    check(widths == std::array<int, 6>{239, 73, 57, 88, 76, 167},
-        "narrow windows scale all columns proportionally instead of overflowing");
-    int narrowTotal = 0;
-    for (const int width : widths) narrowTotal += width;
-    check(narrowTotal == 700, "proportional narrow layout fills the client exactly");
+        "resizing wider keeps the five pitches and grows only the status column");
 
-    const auto scaled = listColumnWidths(1000, 120);
-    check(scaled == std::array<int, 6>{428, 130, 103, 158, 135, 46},
-        "fixed columns scale with DPI and the status column takes the remainder");
+    // Narrow-window boundary: 998/997 and 763/762/761 must stay proportional,
+    // keep 状态 readable and avoid a width cliff or 0/1 px columns.
+    widths = listColumnWidths(997, 96);
+    check(widths[5] == 235, "one pixel below the design width still fills the client");
+    widths = listColumnWidths(900, 96);
+    check(widths == std::array<int, 6>{308, 94, 74, 114, 97, 213},
+        "900 px client shrinks every column proportionally and keeps a readable status column");
+    const auto at763 = listColumnWidths(763, 96);
+    const auto at762 = listColumnWidths(762, 96);
+    const auto at761 = listColumnWidths(761, 96);
+    check(at763 == std::array<int, 6>{261, 80, 63, 96, 83, 180},
+        "763 px client uses the proportional layout with a readable status column");
+    check(at762 == std::array<int, 6>{261, 79, 63, 96, 82, 181},
+        "762 px client does not collapse the status column");
+    check(at761 == std::array<int, 6>{261, 79, 63, 96, 82, 180},
+        "761 px client stays in the same proportional layout");
+    check(std::abs(at763[5] - at762[5]) <= 2 && std::abs(at762[5] - at761[5]) <= 2,
+        "no width cliff across the old 762 px threshold");
+    for (const auto* layout : {&at763, &at762, &at761}) {
+        for (const int width : *layout) check(width >= 40, "narrow layout has no 0/1 px column");
+    }
+    widths = listColumnWidths(640, 96);
+    check(widths == std::array<int, 6>{219, 67, 53, 81, 69, 151},
+        "minimum window width keeps all six columns usable");
 
-    for (const int clientWidth : {1000, 1100, 1300, 640, 1500}) {
+    // DPI boundary: at 120 DPI the design client width is 1249 px. At or above
+    // it the scaled pitches stay fixed; below it every column shrinks.
+    const auto at1249 = listColumnWidths(1249, 120);
+    check(at1249 == std::array<int, 6>{428, 130, 103, 158, 135, 295},
+        "120 DPI design width keeps the scaled pitches");
+    const auto at1250 = listColumnWidths(1250, 120);
+    check(at1250[5] == 296 && at1250[0] == 428, "120 DPI extra width goes to the status column");
+    widths = listColumnWidths(1000, 120);
+    check(widths == std::array<int, 6>{343, 104, 82, 127, 108, 236},
+        "below the 120 DPI design width all six columns shrink; the status column stays readable");
+
+    for (const int clientWidth : {640, 761, 762, 763, 900, 998, 1000, 1300}) {
         for (const int dpi : {96, 120, 144, 168}) {
             const auto layout = listColumnWidths(clientWidth, dpi);
             int total = 0;
-            for (const int width : layout) total += width;
+            int smallest = layout[0];
+            for (const int width : layout) {
+                total += width;
+                smallest = std::min(smallest, width);
+            }
             check(total == clientWidth, "column widths always fill the ListView client width");
+            check(smallest >= 40, "no column collapses at any tested width or DPI");
+            check(layout[5] >= 120, "status column stays readable at any tested width or DPI");
         }
     }
 }

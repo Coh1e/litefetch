@@ -226,6 +226,26 @@ function Check-ColumnGeometry([IntPtr]$window, [string]$label) {
     Check ($total -eq $clientWidth) "${label}: columns exactly cover the ListView client width ($total)"
 }
 
+function Check-NarrowGeometry([IntPtr]$window, [string]$label) {
+    $clientWidth = Get-ListClientWidth $window
+    $widths = @(Get-ListColumnWidths $window)
+    Log "${label}: listClient=$clientWidth columns=$($widths -join ',')"
+    Check ($widths.Count -eq 6) "${label}: six ListView columns are readable"
+    $total = 0
+    foreach ($width in $widths) { $total += $width }
+    Check ($total -eq $clientWidth) "${label}: columns fill the ListView client width exactly"
+    $smallest = ($widths | Measure-Object -Minimum).Minimum
+    Check ($smallest -ge 40) "${label}: no column collapses to 0/1 px (smallest $smallest)"
+    Check ($widths[5] -ge 150) "${label}: status column stays readable ($($widths[5]) px)"
+    return $widths
+}
+
+function Set-WindowClientWidth([IntPtr]$window, [int]$targetClient, [int]$outerOffset, [int]$outerHeight) {
+    [void][E2E]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, $targetClient + $outerOffset, $outerHeight,
+        0x0002 -bor 0x0004) # SWP_NOMOVE | SWP_NOZORDER
+    Start-Sleep -Milliseconds 400
+}
+
 function Find-TopWindow([string]$className, [string]$titleFragment) {
     $script:topResult = [IntPtr]::Zero
     $callback = [E2E+EnumProc]{
@@ -486,11 +506,35 @@ function Invoke-CompletedDownload([string]$label) {
         Start-Sleep -Milliseconds 500
         Check-ColumnGeometry $window 'restored 1000 px window'
 
+        # Narrow-window behavior: below the design client width every column
+        # shrinks proportionally, so 状态 stays readable and the old
+        # 763/762/761 cliff (1 px / 0 px / sudden proportional layout) is gone.
+        $outerOffset = $originalWidth - $clientBefore
+        $narrowStatus = @{}
+        foreach ($target in @(900, 763, 762, 761)) {
+            Set-WindowClientWidth $window $target $outerOffset $originalHeight
+            $actualClient = Get-ListClientWidth $window
+            Check ($actualClient -eq $target) "window resized to a $target px ListView client (got $actualClient)"
+            $widths = @(Check-NarrowGeometry $window "$target px window")
+            $narrowStatus[$target] = $widths[5]
+            if ($target -eq 900 -or $target -eq 762) {
+                Capture-Window $window "win32-narrow-$target.png"
+            }
+        }
+        Log ("narrow status widths: 900=$($narrowStatus[900]) 763=$($narrowStatus[763]) " +
+            "762=$($narrowStatus[762]) 761=$($narrowStatus[761])")
+        Check ([Math]::Abs($narrowStatus[763] - $narrowStatus[762]) -le 2) 'no status-width cliff between 763 and 762 px'
+        Check ([Math]::Abs($narrowStatus[762] - $narrowStatus[761]) -le 2) 'no status-width cliff between 762 and 761 px'
+        Check ($narrowStatus[762] -ge 150) 'status column remains readable at 762 px'
+        Log 'restoring 1000 px window after narrow checks'
+        Set-WindowClientWidth $window $clientBefore $outerOffset $originalHeight
+        Check-ColumnGeometry $window 'restored after narrow checks'
+
         $dialog = Open-NewDownloadDialog $window
         $url = "http://127.0.0.1:$($fixture.Port)/files/%E5%B7%A5%E5%85%B7%E5%8C%85.zip"
         Set-DialogText $dialog $IDC_URL $url
         # WM_SETTEXT does not raise EN_CHANGE, so send the same notification the
-        # edit control sends while a user types; the hint must identify HTTPS.
+        # edit control sends while a user types; the hint must identify HTTP.
         $urlControl = [E2E]::GetDlgItem($dialog, $IDC_URL)
         [void][E2E]::SendMessagePtr($dialog, $WM_COMMAND, [IntPtr](2001 -bor (0x0300 -shl 16)), $urlControl)
         Start-Sleep -Milliseconds 400

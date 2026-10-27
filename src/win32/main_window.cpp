@@ -82,7 +82,7 @@ MainWindow::~MainWindow()
     if (worker_) worker_->shutdown();
     if (rowImages_) ImageList_Destroy(rowImages_);
     if (toolbarImages_) ImageList_Destroy(toolbarImages_);
-    if (menu_) DestroyMenu(menu_);
+    // The menu is assigned to the window, which destroys it with the window.
     if (font_) DeleteObject(font_);
     if (largeIcon_) DestroyIcon(largeIcon_);
     if (smallIcon_) DestroyIcon(smallIcon_);
@@ -797,7 +797,7 @@ void MainWindow::showAbout()
     MessageBoxW(hwnd_,
         L"LiteFetch 0.1\n\n"
         L"原生 Win32 下载管理器（开发版本）\n"
-        L"HTTP(S) 下载、真实任务列表与状态；无 Qt 依赖。",
+        L"HTTP 下载（HTTPS 由传输库支持，本票未验收）、真实任务列表与状态；无 Qt 依赖。",
         L"关于 LiteFetch", MB_OK | MB_ICONINFORMATION);
 }
 
