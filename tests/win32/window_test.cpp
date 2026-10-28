@@ -4,6 +4,12 @@
 // SendMessage, so every check runs after its handler finished: no polling a
 // second process, no racing its timers, and a crash in the close path fails
 // this test instead of an external script.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include "main_window.h"
 
 #include "columns.h"
