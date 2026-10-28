@@ -70,7 +70,8 @@ public:
     bool start(std::string& error);
     void postAdd(std::string source, std::string destination, bool autoStart,
         std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false);
-    void postStart(std::string taskId);
+    void postStart(std::string taskId, bool restartFromZero = false);
+    void postPause(std::string taskId);
     void postCancel(std::string taskId);
     void postDelete(std::string taskId);
     void postRefresh();
@@ -89,7 +90,7 @@ public:
     WorkerSnapshot snapshot();
 
 private:
-    enum class CommandType { Add, Start, Cancel, Delete, Refresh };
+    enum class CommandType { Add, Start, Pause, Cancel, Delete, Refresh };
     struct Command {
         CommandType type = CommandType::Refresh;
         std::string source;
@@ -97,6 +98,7 @@ private:
         std::string taskId;
         bool autoStart = false;
         bool allowDuplicate = false;
+        bool restartFromZero = false;
         std::uint64_t batchId = 0;
         int line = 0;
     };
@@ -108,7 +110,7 @@ private:
 
     void controlLoop();
     void execute(const Command& command);
-    void launchStart(const std::string& taskId);
+    void launchStart(const std::string& taskId, bool restartFromZero = false);
     void reapFinished();
     void reload();
     void cancelAll();

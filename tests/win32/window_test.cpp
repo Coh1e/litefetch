@@ -110,7 +110,7 @@ int listClientWidth(HWND list)
 // Semantic probe: exactly the surface a UI Automation client (FlaUI, pywinauto,
 // WinAppDriver) sees. Asserting through it keeps the checks off raw messages and
 // exercises the accessibility contract ticket #26 must ship anyway.
-void checkAutomationSurface(HWND handle)
+void checkAutomationSurface(HWND handle, int expectedRows)
 {
     IUIAutomation* automation = nullptr;
     HRESULT result = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
@@ -141,7 +141,7 @@ void checkAutomationSurface(HWND handle)
     list->FindAll(TreeScope_Descendants, isItem, &rows);
     int rowCount = 0;
     if (rows) rows->get_Length(&rowCount);
-    if (rowCount != 3)
+    if (rowCount != expectedRows)
         throw std::runtime_error("automation row count is " + std::to_string(rowCount));
 
     IUIAutomationElement* firstRow = nullptr;
@@ -198,6 +198,11 @@ void runChecks()
     const auto body = payload(96 * 1024);
     HttpFixture fixture(HttpFixture::Options{body});
     const auto destination = options.downloadDirectory / "payload.bin";
+    // The slow peer leaves time to pause mid-transfer.
+    const auto slowBody = payload(768 * 1024);
+    HttpFixture slowFixture(HttpFixture::Options{slowBody, 200, 8 * 1024,
+        std::chrono::milliseconds(15)});
+    const auto slowDestination = options.downloadDirectory / "slow.bin";
 
     // Seed rows through the same core service the window reads, before the
     // window opens its own worker on the database.
@@ -213,6 +218,9 @@ void runChecks()
         const auto added = service.execute(AddTaskCommand{fixture.url("/payload.bin"),
             destination.string()});
         check(added.ok, "download task is queued");
+        const auto slow = service.execute(AddTaskCommand{slowFixture.url("/slow.bin"),
+            slowDestination.string()});
+        check(slow.ok, "slow download task is queued");
     }
 
     const HINSTANCE instance = GetModuleHandleW(nullptr);
@@ -233,9 +241,9 @@ void runChecks()
             "list, toolbar and status bar exist");
         check(headerColumnCount(list) == 6, "six default columns");
         check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
-        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3; }, 5000),
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4; }, 5000),
             "seeded tasks reach the list");
-        checkAutomationSurface(handle);
+        checkAutomationSurface(handle, 4);
 
         // Commands are synchronous: when the send returns, the handler has run.
         const HWND searchEdit = GetDlgItem(handle, IDC_SEARCH);
@@ -247,11 +255,11 @@ void runChecks()
 
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_FAILED, 0), 0);
         check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 0, "failed filter hides queued tasks");
-        check(statusText(status, 0).find(L"可见: 0 / 3") != std::wstring::npos,
+        check(statusText(status, 0).find(L"可见: 0 / 4") != std::wstring::npos,
             "status separates visible from total while filtering");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_ALL, 0), 0);
-        check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3, "all filter restores the queue");
-        check(statusText(status, 0).find(L"任务: 3") != std::wstring::npos,
+        check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4, "all filter restores the queue");
+        check(statusText(status, 0).find(L"任务: 4") != std::wstring::npos,
             "status reports the queue total without a filter");
 
         // Start the real transfer from the list and wait for the published file.
@@ -270,7 +278,7 @@ void runChecks()
         PostMessageW(confirm, WM_COMMAND, MAKEWPARAM(IDOK, 0),
             reinterpret_cast<LPARAM>(GetDlgItem(confirm, IDOK)));
         const bool deleted = pumpUntil([&] {
-            return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 2
+            return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3
                 && FindWindowW(nullptr, L"删除任务") == nullptr;
         }, 10000);
         if (!deleted) {
@@ -280,6 +288,32 @@ void runChecks()
             throw std::runtime_error(std::string(detail.begin(), detail.end()));
         }
         check(std::filesystem::exists(destination), "deleting the record keeps the file");
+
+        // Pause keeps the partial bytes, resume continues them and publishes
+        // the complete file. The slow peer leaves time to pause mid-transfer.
+        selectRow(list, 2);
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        const auto slowPartial = partialPathFor(slowDestination);
+        check(pumpUntil([&] {
+            std::error_code error;
+            return std::filesystem::file_size(slowPartial, error) > 0;
+        }, 15000), "slow download starts writing partial data");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PAUSE, 0), 0);
+        check(pumpUntil([&] {
+            std::error_code error;
+            const auto first = std::filesystem::file_size(slowPartial, error);
+            for (int sample = 0; sample < 4; ++sample) {
+                pumpUntil([] { return false; }, 100);
+                std::error_code next;
+                if (std::filesystem::file_size(slowPartial, next) != first) return false;
+            }
+            return first > 0;
+        }, 15000), "pause stops the transfer and keeps the partial data");
+        check(!std::filesystem::exists(slowDestination), "paused transfer is not published");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        check(pumpUntil([&] { return std::filesystem::exists(slowDestination); }, 30000),
+            "resumed transfer publishes the file");
+        check(readBytes(slowDestination) == slowBody, "resumed file is byte-identical to the peer");
 
         // The download directory is gone from here on: later layout checks must
         // not depend on it. The modal "open folder" message box is deliberately
@@ -347,7 +381,7 @@ void runChecks()
         check(reopened.create(instance, SW_SHOWNORMAL), "window reopens on the same database");
         const HWND handle = reopened.handle();
         const HWND list = childOfClass(handle, L"SysListView32");
-        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 2; }, 5000),
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3; }, 5000),
             "records survive the restart");
         const int restored = static_cast<int>(SendMessageW(list, LVM_GETCOLUMNWIDTH, 0, 0));
         check(restored > 0 && restored != widthAfterDrag, "restored width is recomputed for the layout");

@@ -39,6 +39,9 @@ bool TaskWorker::start(std::string& error)
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total);
             });
+        // A running row can only come from a previous process that died; a
+        // restart shows it as paused instead of resuming silently.
+        service_->pauseInterrupted();
     } catch (const std::exception& failure) {
         error = failure.what();
         return false;
@@ -67,10 +70,24 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     condition_.notify_all();
 }
 
-void TaskWorker::postStart(std::string taskId)
+void TaskWorker::postStart(std::string taskId, bool restartFromZero)
 {
     Command command;
     command.type = CommandType::Start;
+    command.taskId = std::move(taskId);
+    command.restartFromZero = restartFromZero;
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
+void TaskWorker::postPause(std::string taskId)
+{
+    Command command;
+    command.type = CommandType::Pause;
     command.taskId = std::move(taskId);
     {
         std::lock_guard lock(mutex_);
@@ -259,8 +276,14 @@ void TaskWorker::execute(const Command& command)
             break;
         }
         case CommandType::Start:
-            launchStart(command.taskId);
+            launchStart(command.taskId, command.restartFromZero);
             break;
+        case CommandType::Pause: {
+            const auto result = service_->execute(PauseTaskCommand{command.taskId});
+            if (!result.ok)
+                publishError("暂停失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
         case CommandType::Cancel: {
             const auto result = service_->execute(CancelTaskCommand{command.taskId});
             if (!result.ok)
@@ -301,7 +324,7 @@ void TaskWorker::execute(const Command& command)
     }
 }
 
-void TaskWorker::launchStart(const std::string& taskId)
+void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero)
 {
     if (!service_) return;
     for (const auto& job : jobs_) {
@@ -312,10 +335,10 @@ void TaskWorker::launchStart(const std::string& taskId)
     job.taskId = taskId;
     job.finished = finished;
     try {
-        job.thread = std::thread([this, taskId, finished] {
+        job.thread = std::thread([this, taskId, restartFromZero, finished] {
             SetThreadDescription(GetCurrentThread(), L"litefetch-transfer");
             try {
-                const auto result = service_->execute(StartTaskCommand{taskId});
+                const auto result = service_->execute(StartTaskCommand{taskId, restartFromZero});
                 if (!result.ok && !result.error.empty()) publishError("任务失败: " + result.error);
             } catch (const std::exception& error) {
                 publishError(std::string("任务失败: ") + error.what());

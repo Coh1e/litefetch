@@ -13,7 +13,7 @@ namespace {
 TaskSnapshot sample(const std::string& id, TaskState state = TaskState::Queued)
 {
     return TaskSnapshot{id, "http://127.0.0.1:1/file.bin", "D:\\data\\file.bin", state,
-        0, 1024, "", 1000, 1000};
+        0, 1024, "", false, 1000, 1000};
 }
 
 void legacyCoexistence(const std::filesystem::path& database)

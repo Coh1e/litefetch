@@ -201,7 +201,9 @@ void modelProgressAndActions()
     check(model.actionsFor("running").stop, "running task can stop");
     check(!model.actionsFor("completed").start, "completed task cannot start");
     check(!model.actionsFor("completed").stop, "completed task cannot stop");
-    check(!model.actionsFor("running").pause, "pause stays disabled until resume exists");
+    check(model.actionsFor("running").pause, "running task can be paused");
+    check(!model.actionsFor("queued").pause, "a queued task has nothing to pause");
+    check(!model.actionsFor("completed").pause, "a completed task cannot be paused");
     check(model.actionsFor("running").deleteTask, "delete record is available in the list ticket");
     check(!model.actionsFor("running").options, "options stays disabled until implemented");
     check(model.actionsFor("running").openFolder,
@@ -263,6 +265,23 @@ void modelProgressAndActions()
     std::error_code cleanupError;
     std::filesystem::remove_all(root, cleanupError);
 }
+
+void pauseAndResumeRows()
+{
+    auto paused = task("paused", TaskState::Paused, 4096, 8192, "D:/Downloads/paused.bin");
+    auto refused = task("refused", TaskState::Paused, 4096, 8192, "D:/Downloads/refused.bin");
+    refused.restartRequired = true;
+    TaskListModel model;
+    model.update({paused, refused}, {}, 1000);
+
+    check(model.rows()[0].status == utf8(u8"已暂停"), "paused row shows the paused status");
+    check(model.rows()[1].status == utf8(u8"需重新下载"),
+        "a refused resume asks for a confirmed restart");
+    check(model.actionsFor("paused").start, "a paused task can be resumed");
+    check(!model.actionsFor("paused").pause, "a paused task cannot be paused twice");
+    check(model.actionsFor("refused").start, "a refused resume can be started again");
+}
+
 } // namespace
 
 int main()
@@ -272,6 +291,7 @@ int main()
         sourceParsing();
         listLayout();
         modelProgressAndActions();
+        pauseAndResumeRows();
         std::cout << "ui-model: PASS\n";
         return 0;
     } catch (const std::exception& error) {

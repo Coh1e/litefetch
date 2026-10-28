@@ -126,6 +126,7 @@ private:
     void openTorrentBoundary();
 
     void startSelected();
+    void pauseSelected();
     void stopSelected();
     void deleteSelected();
     void finishDeleteDialog(bool confirmed);

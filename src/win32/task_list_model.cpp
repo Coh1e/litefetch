@@ -23,6 +23,7 @@ std::string stateText(const TaskRow& row)
     case TaskState::Completed: return "已完成";
     case TaskState::Failed: return "下载失败";
     case TaskState::Cancelled: return "已停止";
+    case TaskState::Paused: return row.restartRequired ? "需重新下载" : "已暂停";
     }
     return std::string(unknownValue);
 }
@@ -46,6 +47,7 @@ void TaskListModel::update(std::vector<TaskSnapshot> tasks, const std::vector<st
         row.address = redactAddress(snapshot.source);
         row.savePath = snapshot.destination;
         row.error = snapshot.error;
+        row.restartRequired = snapshot.restartRequired;
         row.state = snapshot.state;
         row.received = snapshot.received;
         row.total = snapshot.total;
@@ -123,8 +125,10 @@ ActionState TaskListModel::actionsForSelection(const std::vector<std::string>& s
         const auto index = indexOf(id);
         if (index >= rows_.size()) continue;
         const auto& row = rows_[index];
-        if (row.state == TaskState::Queued || row.state == TaskState::Failed) ++actions.startCount;
+        if (row.state == TaskState::Queued || row.state == TaskState::Failed
+            || row.state == TaskState::Paused) ++actions.startCount;
         if (row.state == TaskState::Queued || row.state == TaskState::Running) ++actions.stopCount;
+        if (row.state == TaskState::Running) ++actions.pauseCount;
         ++actions.deleteCount;
         if (!row.source.empty()) ++actions.copyLinkCount;
         if (!row.destination.empty()) ++actions.copyPathCount;
@@ -145,6 +149,7 @@ ActionState TaskListModel::actionsForSelection(const std::vector<std::string>& s
     }
     actions.start = actions.startCount > 0;
     actions.stop = actions.stopCount > 0;
+    actions.pause = actions.pauseCount > 0;
     actions.deleteTask = actions.deleteCount > 0;
     actions.openFile = actions.openFileCount > 0;
     actions.openFolder = actions.openFolderCount > 0;

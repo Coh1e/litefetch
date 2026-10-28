@@ -23,6 +23,9 @@ struct TaskSnapshot {
     std::int64_t received = 0;
     std::int64_t total = -1; // -1 until the server reports a length.
     std::string error;
+    // The stored partial data no longer matches the resource: starting again
+    // needs the user's confirmation before the bytes are discarded.
+    bool restartRequired = false;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };

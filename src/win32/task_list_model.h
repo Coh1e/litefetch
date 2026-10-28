@@ -36,6 +36,8 @@ struct TaskRow {
     TaskState state = TaskState::Queued;
     bool active = false;
     bool interrupted = false;
+    // Stored bytes no longer match the resource; restarting asks first.
+    bool restartRequired = false;
     std::int64_t received = 0;
     std::int64_t total = -1;
     double speedBytesPerSecond = 0.0;
@@ -66,6 +68,7 @@ struct ActionState {
     // subset only and the UI reports these counts.
     std::size_t selectedCount = 0;
     std::size_t startCount = 0;
+    std::size_t pauseCount = 0;
     std::size_t stopCount = 0;
     std::size_t deleteCount = 0;
     std::size_t openFileCount = 0;

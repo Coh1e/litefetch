@@ -581,12 +581,10 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_VIEW_COLUMNS: showColumnChooser(); return 0;
         case ID_TASK_START: startSelected(); return 0;
         case ID_TASK_STOP: stopSelected(); return 0;
+        case ID_TASK_PAUSE: pauseSelected(); return 0;
         case ID_TASK_DELETE: deleteSelected(); return 0;
         case ID_TASK_OPEN_FILE: openFileSelected(); return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
-        case ID_TASK_PAUSE:
-            setNotice("#5 将提供可续传的暂停；当前停止只取消传输且不能续传。");
-            return 0;
         case ID_TASK_REDOWNLOAD:
             setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
             return 0;
@@ -1188,7 +1186,7 @@ void MainWindow::updateActions()
     enableMenu(ID_VIEW_STATUSBAR, interactive);
     enableMenu(ID_VIEW_COLUMNS, interactive);
     enableMenu(ID_TASK_START, interactive && actions.start);
-    enableMenu(ID_TASK_PAUSE, false);
+    enableMenu(ID_TASK_PAUSE, interactive && actions.pause);
     enableMenu(ID_TASK_STOP, interactive && actions.stop);
     enableMenu(ID_TASK_REDOWNLOAD, false);
     enableMenu(ID_TASK_DELETE, interactive && actions.deleteTask);
@@ -1199,7 +1197,7 @@ void MainWindow::updateActions()
     enableMenu(ID_TOOLS_OPTIONS, false);
     enableButton(ID_FILE_NEW, interactive);
     enableButton(ID_TASK_START, interactive && actions.start);
-    enableButton(ID_TASK_PAUSE, false);
+    enableButton(ID_TASK_PAUSE, interactive && actions.pause);
     enableButton(ID_TASK_STOP, interactive && actions.stop);
     enableButton(ID_TASK_DELETE, interactive && actions.deleteTask);
     enableButton(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
@@ -1246,7 +1244,10 @@ void MainWindow::updateTooltip(NMTTDISPINFOW& info)
             : L"开始/继续 — 当前选择没有可开始的任务";
         break;
     case ID_TASK_PAUSE:
-        tooltipText_ = L"暂停 — 尚未实现：需要断点续传支持（后续版本 #5）";
+        tooltipText_ = actions.pause
+            ? L"暂停（" + std::to_wstring(actions.pauseCount)
+                + L" 个任务）— 保留已下载数据，继续时从断点续传"
+            : L"暂停 — 当前选择没有正在下载的任务";
         break;
     case ID_TASK_STOP:
         tooltipText_ = actions.stop
@@ -1668,11 +1669,39 @@ void MainWindow::startSelected()
     for (const auto& id : ids) {
         const auto actions = model_.actionsFor(id);
         if (!actions.start) continue;
+        // Stored bytes that no longer match the resource need an explicit yes:
+        // starting over discards them.
+        const auto row = rowForId(id);
+        if (row && row->restartRequired) {
+            const auto answer = MessageBoxW(hwnd_,
+                L"已下载的片段来自旧版本的资源，无法继续续传。\n\n"
+                L"重新下载会删除这些片段并从头开始。是否继续？",
+                L"重新下载", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+            if (answer != IDYES) continue;
+            worker_->postStart(id, true);
+            ++count;
+            continue;
+        }
         worker_->postStart(id);
         ++count;
     }
     if (count > 0)
         setNotice("已请求开始 " + std::to_string(count) + " 个任务");
+}
+
+void MainWindow::pauseSelected()
+{
+    if (!worker_ || isClosing()) return;
+    const auto ids = selectedIds();
+    std::size_t count = 0;
+    for (const auto& id : ids) {
+        const auto actions = model_.actionsFor(id);
+        if (!actions.pause) continue;
+        worker_->postPause(id);
+        ++count;
+    }
+    if (count > 0)
+        setNotice("已请求暂停 " + std::to_string(count) + " 个任务；继续时从已下载的位置续传");
 }
 
 void MainWindow::stopSelected()
@@ -1688,7 +1717,7 @@ void MainWindow::stopSelected()
     }
     if (count > 0)
         setNotice("已请求停止 " + std::to_string(count)
-            + " 个任务；停止会取消传输，不能续传（#5 提供暂停/续传）。");
+            + " 个任务；停止后仍可从已下载位置续传");
 }
 
 void MainWindow::deleteSelected()

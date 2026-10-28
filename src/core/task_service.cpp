@@ -165,6 +165,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         // so the row keeps the bytes it already has instead of dropping to zero.
         task.state = TaskState::Running;
         task.error.clear();
+        task.restartRequired = false;
         task.updatedAt = nowMillis();
         try {
             repository_.update(task);
@@ -233,10 +234,12 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     } else if (transferResult.status == TransferStatus::Completed) {
         task.state = TaskState::Completed;
         task.error.clear();
+        task.restartRequired = false;
     } else if (transferResult.restartRequired) {
         // The bytes on disk no longer match the resource. Nothing is deleted
         // until the user confirms a restart from zero.
         task.state = TaskState::Paused;
+        task.restartRequired = true;
         task.error = transferResult.message.empty()
             ? "resource changed; confirm to restart" : transferResult.message;
     } else if (transferResult.status == TransferStatus::Cancelled) {

@@ -77,40 +77,49 @@ TaskSnapshot readTask(Statement& statement)
     task.received = statement.integer(4);
     task.total = statement.integer(5);
     task.error = statement.text(6);
+    task.restartRequired = statement.integer(9) != 0;
     task.createdAt = statement.integer(7);
     task.updatedAt = statement.integer(8);
     return task;
 }
 
-// The state column is validated by parseTaskState when a row is read, not by a
-// CHECK constraint: a damaged database must stay openable so the corruption is
-// reported as a storage error instead of making the file unusable.
-//
-// Schema 1 predates the persisted 'paused' state; the rebuild below keeps the
-// same shape and only bumps the version, so old files open unchanged.
-void migrateToPausedState(sqlite3* database)
+// Schema upgrades keep every row. Version 1 predates the persisted 'paused'
+// state and is rebuilt with the same shape plus the restart flag; version 2
+// only needs the new column.
+void migrateSchema(sqlite3* database)
 {
+    std::string version;
     {
-        Statement version(database, "SELECT value FROM native_meta WHERE key='schema_version'");
-        if (!version.row() || version.text(0) != "1") return;
+        Statement statement(database, "SELECT value FROM native_meta WHERE key='schema_version'");
+        if (!statement.row()) return;
+        version = statement.text(0);
     }
-    execute(database,
-        "DROP TABLE IF EXISTS native_tasks_v2;"
-        "CREATE TABLE native_tasks_v2("
-        "id TEXT PRIMARY KEY NOT NULL,"
-        "source TEXT NOT NULL,"
-        "destination TEXT NOT NULL,"
-        "state TEXT NOT NULL,"
-        "received INTEGER NOT NULL CHECK(received >= 0),"
-        "total INTEGER NOT NULL CHECK(total >= -1),"
-        "error TEXT NOT NULL,"
-        "created_at INTEGER NOT NULL,"
-        "updated_at INTEGER NOT NULL);"
-        "INSERT INTO native_tasks_v2 SELECT id,source,destination,state,received,total,error,"
-        "created_at,updated_at FROM native_tasks;"
-        "DROP TABLE native_tasks;"
-        "ALTER TABLE native_tasks_v2 RENAME TO native_tasks;"
-        "UPDATE native_meta SET value='2' WHERE key='schema_version';");
+    if (version == "1") {
+        execute(database,
+            "DROP TABLE IF EXISTS native_tasks_v2;"
+            "CREATE TABLE native_tasks_v2("
+            "id TEXT PRIMARY KEY NOT NULL,"
+            "source TEXT NOT NULL,"
+            "destination TEXT NOT NULL,"
+            "state TEXT NOT NULL,"
+            "received INTEGER NOT NULL CHECK(received >= 0),"
+            "total INTEGER NOT NULL CHECK(total >= -1),"
+            "error TEXT NOT NULL,"
+            "created_at INTEGER NOT NULL,"
+            "updated_at INTEGER NOT NULL,"
+            "restart_required INTEGER NOT NULL DEFAULT 0);"
+            "INSERT INTO native_tasks_v2(id,source,destination,state,received,total,error,"
+            "created_at,updated_at) SELECT id,source,destination,state,received,total,error,"
+            "created_at,updated_at FROM native_tasks;"
+            "DROP TABLE native_tasks;"
+            "ALTER TABLE native_tasks_v2 RENAME TO native_tasks;");
+    } else if (version == "2") {
+        execute(database,
+            "ALTER TABLE native_tasks ADD COLUMN restart_required INTEGER NOT NULL DEFAULT 0;");
+    } else {
+        return;
+    }
+    execute(database, "UPDATE native_meta SET value='3' WHERE key='schema_version';");
 }
 
 void verifyVersion(sqlite3* database)
@@ -118,8 +127,8 @@ void verifyVersion(sqlite3* database)
     Statement statement(database, "SELECT value FROM native_meta WHERE key='schema_version'");
     if (!statement.row()) throw StorageError("Database is not a LiteFetch native task database");
     const auto version = statement.text(0);
-    // 1: original states. 2: adds 'paused' for resumable transfers.
-    if (version != "1" && version != "2")
+    // 1: original states. 2: adds 'paused'. 3: adds the restart-required flag.
+    if (version != "1" && version != "2" && version != "3")
         throw StorageError("Database was created by a newer LiteFetch native version");
 }
 
@@ -199,9 +208,10 @@ void TaskRepository::initialize()
             "total INTEGER NOT NULL CHECK(total >= -1),"
             "error TEXT NOT NULL,"
             "created_at INTEGER NOT NULL,"
-            "updated_at INTEGER NOT NULL);");
+            "updated_at INTEGER NOT NULL,"
+            "restart_required INTEGER NOT NULL DEFAULT 0);");
         execute(database_, "INSERT OR IGNORE INTO native_meta(key,value) VALUES('schema_version','1');");
-        migrateToPausedState(database_);
+        migrateSchema(database_);
         execute(database_, "COMMIT;");
     } catch (...) {
         sqlite3_exec(database_, "ROLLBACK", nullptr, nullptr, nullptr);
@@ -215,8 +225,8 @@ void TaskRepository::insert(const TaskSnapshot& task)
     std::lock_guard lock(mutex_);
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
-        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)");
+        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at,restart_required) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)");
     statement.text(1, task.id);
     statement.text(2, task.source);
     statement.text(3, task.destination);
@@ -226,6 +236,7 @@ void TaskRepository::insert(const TaskSnapshot& task)
     statement.text(7, task.error);
     statement.integer(8, task.createdAt);
     statement.integer(9, task.updatedAt);
+    statement.integer(10, task.restartRequired ? 1 : 0);
     statement.done();
 }
 
@@ -234,8 +245,8 @@ void TaskRepository::update(const TaskSnapshot& task)
     std::lock_guard lock(mutex_);
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
-        "UPDATE native_tasks SET source=?,destination=?,state=?,received=?,total=?,error=?,updated_at=? "
-        "WHERE id=?");
+        "UPDATE native_tasks SET source=?,destination=?,state=?,received=?,total=?,error=?,updated_at=?,"
+        "restart_required=? WHERE id=?");
     statement.text(1, task.source);
     statement.text(2, task.destination);
     statement.text(3, taskStateName(task.state));
@@ -243,7 +254,8 @@ void TaskRepository::update(const TaskSnapshot& task)
     statement.integer(5, task.total);
     statement.text(6, task.error);
     statement.integer(7, task.updatedAt);
-    statement.text(8, task.id);
+    statement.integer(8, task.restartRequired ? 1 : 0);
+    statement.text(9, task.id);
     statement.done();
     if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not updated");
 }
@@ -261,7 +273,7 @@ void TaskRepository::remove(std::string_view id)
 std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required "
         "FROM native_tasks WHERE id=?");
     statement.text(1, id);
     if (!statement.row()) return std::nullopt;
@@ -271,7 +283,7 @@ std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 std::vector<TaskSnapshot> TaskRepository::all()
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required "
         "FROM native_tasks ORDER BY created_at,id");
     std::vector<TaskSnapshot> tasks;
     while (statement.row()) tasks.push_back(readTask(statement));
