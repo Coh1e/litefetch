@@ -7,6 +7,7 @@
 #include <ws2tcpip.h>
 
 #include "ed2k_client.h"
+#include "ed2k_transfer.h"
 #include "ed2k_link.h"
 #include "test_support.h"
 
@@ -135,6 +136,146 @@ private:
     std::jthread thread_;
 };
 
+// A scripted eDonkey peer that answers hello, file request and part requests.
+class FakeEd2kPeer {
+public:
+    explicit FakeEd2kPeer(std::vector<unsigned char> payload, bool refuseFile = false)
+        : payload_(std::move(payload)), refuseFile_(refuseFile)
+    {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+        listener_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        ::bind(listener_, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+        ::listen(listener_, 4);
+        int length = sizeof(address);
+        ::getsockname(listener_, reinterpret_cast<sockaddr*>(&address), &length);
+        port_ = ntohs(address.sin_port);
+        thread_ = std::jthread([this] { serve(); });
+    }
+    ~FakeEd2kPeer() { if (listener_ != INVALID_SOCKET) closesocket(listener_); }
+    std::uint16_t port() const { return port_; }
+
+private:
+    static bool sendAll(SOCKET socket, const void* data, int size)
+    {
+        return ::send(socket, static_cast<const char*>(data), size, 0) == size;
+    }
+    static bool receiveExact(SOCKET socket, void* data, int size)
+    {
+        auto* bytes = static_cast<char*>(data);
+        int received = 0;
+        while (received < size) {
+            const int step = ::recv(socket, bytes + received, size - received, 0);
+            if (step <= 0) return false;
+            received += step;
+        }
+        return true;
+    }
+
+    void serve()
+    {
+        const SOCKET client = ::accept(listener_, nullptr, nullptr);
+        if (client == INVALID_SOCKET) return;
+        std::vector<unsigned char> hello(27);
+        if (!receiveExact(client, hello.data(), 27)) { closesocket(client); return; }
+        std::vector<unsigned char> answer{0x4C};
+        answer.resize(1 + 32, 0);
+        if (!sendAll(client, answer.data(), static_cast<int>(answer.size()))) { closesocket(client); return; }
+
+        std::vector<unsigned char> request(17);
+        if (!receiveExact(client, request.data(), 17)) { closesocket(client); return; }
+        const unsigned char refused[1] = {0x59};
+        if (refuseFile_) { sendAll(client, refused, 1); closesocket(client); return; }
+        std::vector<unsigned char> description{0x61};
+        description.resize(1 + 26, 0);
+        if (!sendAll(client, description.data(), static_cast<int>(description.size()))) { closesocket(client); return; }
+
+        std::vector<unsigned char> partsRequest(35);
+        if (!receiveExact(client, partsRequest.data(), 35)) { closesocket(client); return; }
+
+        // One SENDINGPART covering the whole file, in 10240-byte blocks.
+        const auto size = static_cast<std::uint64_t>(payload_.size());
+        std::vector<unsigned char> packet;
+        packet.push_back(0x46);
+        packet.resize(1 + 16, 0); // file hash, all zero in this scripted peer
+        const std::uint64_t start = 0;
+        const std::uint64_t end = size - 1;
+        for (int shift = 0; shift < 64; shift += 8)
+            packet.push_back(static_cast<unsigned char>((start >> shift) & 0xff));
+        for (int shift = 0; shift < 64; shift += 8)
+            packet.push_back(static_cast<unsigned char>((end >> shift) & 0xff));
+        std::size_t offset = 0;
+        while (offset < payload_.size()) {
+            const auto chunk = (std::min)(static_cast<std::size_t>(10240), payload_.size() - offset);
+            packet.push_back(static_cast<unsigned char>(chunk & 0xff));
+            packet.push_back(static_cast<unsigned char>((chunk >> 8) & 0xff));
+            packet.insert(packet.end(), payload_.begin() + static_cast<std::ptrdiff_t>(offset),
+                payload_.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
+            offset += chunk;
+        }
+        sendAll(client, packet.data(), static_cast<int>(packet.size()));
+        ::shutdown(client, SD_SEND);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        closesocket(client);
+    }
+
+    std::vector<unsigned char> payload_;
+    bool refuseFile_;
+    SOCKET listener_ = INVALID_SOCKET;
+    std::uint16_t port_ = 0;
+    std::jthread thread_;
+};
+
+void md4Vectors()
+{
+    // RFC 1320 test vectors.
+    checkEqual(md4Hex("", 0), std::string("31d6cfe0d16ae931b73c59d7e0c089c0"), "MD4 empty");
+    checkEqual(md4Hex("abc", 3), std::string("a448017aaf21d8525fc10ae87aa6729d"), "MD4 abc");
+    checkEqual(md4Hex("message digest", 14),
+        std::string("d9130a8164549fe818874806e1c7014b"), "MD4 message digest");
+}
+
+void peerTransfer(const std::filesystem::path& root)
+{
+    const auto payload = litefetch::test::payload(30000);
+    {
+        FakeEd2kPeer peer(payload);
+        const auto partPath = root / "ed2k-part.bin";
+        Ed2kPeerRequest request;
+        request.host = "127.0.0.1";
+        request.port = peer.port();
+        request.fileHash = "0123456789abcdef0123456789abcdef";
+        request.fileSize = static_cast<std::int64_t>(payload.size());
+        request.partPath = partPath.string();
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadFromEd2kPeer(request, cancelled);
+        check(result.ok, ("peer transfer failed: " + result.error).c_str());
+        checkEqual(result.received, static_cast<long long>(payload.size()), "all bytes arrived");
+        check(readFile(partPath) == payload, "downloaded bytes match the peer payload");
+        check(!ed2kFileHash(partPath.string()).empty(), "the ed2k root hash can be computed");
+    }
+    {
+        FakeEd2kPeer peer(payload, true);
+        const auto partPath = root / "ed2k-refused.bin";
+        Ed2kPeerRequest request;
+        request.host = "127.0.0.1";
+        request.port = peer.port();
+        request.fileHash = "0123456789abcdef0123456789abcdef";
+        request.fileSize = static_cast<std::int64_t>(payload.size());
+        request.partPath = partPath.string();
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadFromEd2kPeer(request, cancelled);
+        check(!result.ok, "a peer without the file is a failure");
+        check(result.error.find("does not have") != std::string::npos,
+            ("the refusal is not explained: " + result.error).c_str());
+    }
+}
 void linkParsing()
 {
     const auto good = parseEd2kLink("ed2k://|file|movie.mkv|734003200|0123456789abcdef0123456789abcdef|/");
@@ -210,7 +351,10 @@ void sourceQuery()
 int main()
 {
     return run("ed2k", [] {
+        TempDir root;
         linkParsing();
+        md4Vectors();
+        peerTransfer(root.path());
         sourceQuery();
         return 0;
     });

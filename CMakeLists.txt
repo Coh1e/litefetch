@@ -20,6 +20,7 @@ add_library(litefetch-core STATIC
     src/core/segmented_transfer.cpp src/core/segmented_transfer.h
     src/core/ed2k_link.cpp src/core/ed2k_link.h
     src/core/ed2k_client.cpp src/core/ed2k_client.h
+    src/core/ed2k_transfer.cpp src/core/ed2k_transfer.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
