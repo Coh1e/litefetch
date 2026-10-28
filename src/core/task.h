@@ -10,7 +10,7 @@ namespace litefetch {
 
 // Persisted task states. The text form is the storage format and must stay
 // append-only; never renumber or silently rename an existing state.
-enum class TaskState { Queued, Running, Completed, Failed, Cancelled };
+enum class TaskState { Queued, Running, Completed, Failed, Cancelled, Paused };
 
 std::string_view taskStateName(TaskState state);
 std::optional<TaskState> parseTaskState(std::string_view name);
@@ -37,6 +37,14 @@ struct AddTaskCommand {
 };
 struct StartTaskCommand {
     std::string taskId;
+    // The user confirmed starting over after the server refused to resume or
+    // the resource changed. Otherwise the stored partial bytes are kept.
+    bool restartFromZero = false;
+};
+// Stops a running transfer but keeps the partial data and marks the task
+// paused; Start resumes from the stored offset.
+struct PauseTaskCommand {
+    std::string taskId;
 };
 struct CancelTaskCommand {
     std::string taskId;
@@ -45,7 +53,8 @@ struct DeleteTaskCommand {
     std::string taskId;
 };
 
-using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, CancelTaskCommand, DeleteTaskCommand>;
+using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,
+    CancelTaskCommand, DeleteTaskCommand>;
 
 struct CommandResult {
     // True only when the requested transition was validated and committed (for

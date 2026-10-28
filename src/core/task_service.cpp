@@ -58,6 +58,8 @@ CommandResult TaskService::execute(const TaskCommand& command)
     try {
         if (const auto* addCommand = std::get_if<AddTaskCommand>(&command)) return add(*addCommand);
         if (const auto* startCommand = std::get_if<StartTaskCommand>(&command)) return start(*startCommand);
+        if (const auto* pauseCommand = std::get_if<PauseTaskCommand>(&command))
+            return pause(*pauseCommand);
         if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
         return cancel(std::get<CancelTaskCommand>(command));
     } catch (const StorageError& error) {
@@ -141,7 +143,7 @@ CommandResult TaskService::add(const AddTaskCommand& command)
 CommandResult TaskService::start(const StartTaskCommand& command)
 {
     TaskSnapshot task;
-    std::shared_ptr<std::atomic_bool> cancellation;
+    std::shared_ptr<ActiveTransfer> active;
     {
         // Keep the queued/running transition and active-slot registration in one
         // critical section so a queued Cancel cannot return success and then be
@@ -155,12 +157,13 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         if (task.state == TaskState::Cancelled)
             return failure("task was cancelled; use an explicit retry command");
         if (active_.contains(command.taskId)) return failure("task is already running");
-        cancellation = std::make_shared<std::atomic_bool>(false);
-        active_.emplace(command.taskId, cancellation);
+        active = std::make_shared<ActiveTransfer>();
+        active->cancelled = std::make_shared<std::atomic_bool>(false);
+        active_.emplace(command.taskId, active);
 
+        // Progress survives a pause: the engine resumes from the partial file,
+        // so the row keeps the bytes it already has instead of dropping to zero.
         task.state = TaskState::Running;
-        task.received = 0;
-        task.total = -1;
         task.error.clear();
         task.updatedAt = nowMillis();
         try {
@@ -181,7 +184,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         std::shared_ptr<std::atomic_bool> flag;
         bool armed = true;
         ~Unregister() { if (armed) service.unregister(id, flag); }
-    } unregisterOnExit{*this, command.taskId, cancellation};
+    } unregisterOnExit{*this, command.taskId, active->cancelled};
 
     std::string progressStorageError;
     std::int64_t lastPersist = nowMillis();
@@ -203,13 +206,14 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             repository_.update(task);
         } catch (const StorageError& error) {
             progressStorageError = error.what();
-            cancellation->store(true);
+            active->cancelled->store(true);
         }
     };
 
     TransferResult transferResult;
     try {
-        transferResult = transfer_(TransferRequest{task.source, task.destination}, *cancellation, progress);
+        transferResult = transfer_(TransferRequest{task.source, task.destination,
+            command.restartFromZero}, *active->cancelled, progress);
     } catch (const std::exception& error) {
         transferResult.status = TransferStatus::Failed;
         transferResult.error = TransferError::Internal;
@@ -229,8 +233,14 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     } else if (transferResult.status == TransferStatus::Completed) {
         task.state = TaskState::Completed;
         task.error.clear();
+    } else if (transferResult.restartRequired) {
+        // The bytes on disk no longer match the resource. Nothing is deleted
+        // until the user confirms a restart from zero.
+        task.state = TaskState::Paused;
+        task.error = transferResult.message.empty()
+            ? "resource changed; confirm to restart" : transferResult.message;
     } else if (transferResult.status == TransferStatus::Cancelled) {
-        task.state = TaskState::Cancelled;
+        task.state = active->paused.load() ? TaskState::Paused : TaskState::Cancelled;
         task.error.clear();
     } else {
         task.state = TaskState::Failed;
@@ -246,7 +256,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         return result;
     }
     // The final row is committed; release the running slot before returning.
-    unregister(command.taskId, cancellation);
+    unregister(command.taskId, active->cancelled);
     unregisterOnExit.armed = false;
     if (!progressStorageError.empty()) {
         // The final row was written, but the command still reports the storage
@@ -262,24 +272,35 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     return result;
 }
 
-CommandResult TaskService::cancel(const CancelTaskCommand& command)
+CommandResult TaskService::stop(const std::string& taskId, bool pauseTransfer)
 {
-    std::shared_ptr<std::atomic_bool> running;
+    const auto target = pauseTransfer ? TaskState::Paused : TaskState::Cancelled;
+    std::shared_ptr<ActiveTransfer> running;
     {
         std::lock_guard lock(activeMutex_);
-        const auto active = active_.find(command.taskId);
+        const auto active = active_.find(taskId);
         if (active != active_.end()) {
             running = active->second;
-            running->store(true);
+            running->paused.store(pauseTransfer);
+            running->cancelled->store(true);
         } else {
             // The same lock covers Start's find -> register -> running commit, so
-            // this queued cancellation either wins before Start or observes its
-            // active slot; it cannot be overwritten afterwards.
-            auto task = repository_.find(command.taskId);
+            // this queued stop either wins before Start or observes its active
+            // slot; it cannot be overwritten afterwards.
+            auto task = repository_.find(taskId);
             if (!task) return failure("unknown task");
-            if (task->state != TaskState::Queued && task->state != TaskState::Running)
-                return failure("task is not cancellable");
-            task->state = TaskState::Cancelled;
+            if (task->state == target) {
+                CommandResult result;
+                result.ok = true;
+                result.task = *task;
+                return result;
+            }
+            const bool stoppable = task->state == TaskState::Queued
+                || task->state == TaskState::Running
+                || (pauseTransfer && task->state == TaskState::Failed);
+            if (!stoppable)
+                return failure(pauseTransfer ? "task is not pausable" : "task is not cancellable");
+            task->state = target;
             task->updatedAt = nowMillis();
             try {
                 repository_.update(*task);
@@ -293,27 +314,55 @@ CommandResult TaskService::cancel(const CancelTaskCommand& command)
         }
     }
 
-    // Wait for the owning Start call to persist the actual outcome. A
-    // cancellation request is not reported as success before that commit.
+    // Wait for the owning Start call to persist the actual outcome. A stop
+    // request is not reported as success before that commit.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline) {
         {
             std::lock_guard lock(activeMutex_);
-            if (!active_.contains(command.taskId)) break;
+            if (!active_.contains(taskId)) break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    const auto task = repository_.find(command.taskId);
+    const auto task = repository_.find(taskId);
     if (!task) return failure("unknown task");
-    if (task->state == TaskState::Cancelled) {
+    if (task->state == target) {
         CommandResult result;
         result.ok = true;
         result.task = *task;
         return result;
     }
-    CommandResult result = failure("cancellation was not committed");
+    CommandResult result = failure(pauseTransfer
+        ? "pause was not committed (state " + std::string(taskStateName(task->state)) + ")"
+        : "cancellation was not committed");
     result.task = *task;
     return result;
+}
+
+CommandResult TaskService::pause(const PauseTaskCommand& command)
+{
+    return stop(command.taskId, true);
+}
+
+CommandResult TaskService::cancel(const CancelTaskCommand& command)
+{
+    return stop(command.taskId, false);
+}
+
+int TaskService::pauseInterrupted()
+{
+    std::lock_guard lock(activeMutex_);
+    int changed = 0;
+    for (const auto& snapshot : repository_.all()) {
+        if (snapshot.state != TaskState::Running) continue;
+        if (active_.contains(snapshot.id)) continue; // live transfer in this process
+        auto task = snapshot;
+        task.state = TaskState::Paused;
+        task.updatedAt = nowMillis();
+        repository_.update(task);
+        ++changed;
+    }
+    return changed;
 }
 
 CommandResult TaskService::remove(const DeleteTaskCommand& command)
@@ -338,7 +387,7 @@ void TaskService::unregister(std::string_view id, const std::shared_ptr<std::ato
 {
     std::lock_guard lock(activeMutex_);
     const auto found = active_.find(id);
-    if (found != active_.end() && found->second == flag) active_.erase(found);
+    if (found != active_.end() && found->second->cancelled == flag) active_.erase(found);
 }
 
 } // namespace litefetch

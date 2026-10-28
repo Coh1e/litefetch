@@ -41,6 +41,8 @@ void checkNoStaging(const std::filesystem::path& root, const std::string& destin
         const auto name = entry.path().filename().string();
         require(name.rfind(destinationName + ".part", 0) != 0,
             "transfer left a staging file: " + name);
+        require(name.rfind(destinationName + ".lfpart", 0) != 0,
+            "finished transfer left partial data: " + name);
     }
 }
 
@@ -131,13 +133,10 @@ void sameDestinationRace(const std::filesystem::path& root)
     auto resultB = finishedB.get_future();
     std::jthread workerA([&] { finishedA.set_value(service.execute(StartTaskCommand{addedA.task.id})); });
     std::jthread workerB([&] { finishedB.set_value(service.execute(StartTaskCommand{addedB.task.id})); });
-    require(waitFor([&] {
-        const auto a = service.snapshot(addedA.task.id);
-        const auto b = service.snapshot(addedB.task.id);
-        return a && b && a->state == TaskState::Running && b->state == TaskState::Running
-            && a->received > 0 && b->received > 0;
-    }, std::chrono::seconds(10)), "both same-destination transfers did not overlap");
 
+    // Two sources aimed at one destination are serialised per destination: the
+    // second transfer starts after the first published, finds the file, and
+    // fails without touching it.
     const auto startedA = resultA.get();
     const auto startedB = resultB.get();
     workerA.join();
@@ -220,7 +219,125 @@ void cancellation(const std::filesystem::path& root)
     require(started.ok, "cancelled transfer state was not committed: " + started.error);
     require(started.task.state == TaskState::Cancelled, "cancel did not produce cancelled state");
     check(!std::filesystem::exists(destination), "cancelled transfer published a destination file");
-    checkNoStaging(root, "cancel.bin");
+    // A cancelled transfer keeps its partial bytes so a later start resumes,
+    // but never leaves an old-style staging file behind.
+    require(std::filesystem::exists(partialPathFor(destination)),
+        "cancel discarded the resumable partial data");
+    require(std::filesystem::file_size(partialPathFor(destination)) > 0,
+        "canceled transfer left an empty partial file");
+}
+
+void resumeAfterPause(const std::filesystem::path& root)
+{
+    const auto body = payload(2 * 1024 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 16 * 1024, std::chrono::milliseconds(20)});
+    const auto destination = root / "resume.bin";
+    const auto database = root / "resume.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+
+    std::promise<CommandResult> first;
+    auto firstResult = first.get_future();
+    std::jthread worker([&] { first.set_value(service.execute(StartTaskCommand{added.task.id})); });
+    require(waitFor([&] {
+        const auto snapshot = service.snapshot(added.task.id);
+        return snapshot && snapshot->state == TaskState::Running && snapshot->received > 0;
+    }, std::chrono::seconds(10)), "download did not reach running state with progress");
+
+    const auto paused = service.execute(PauseTaskCommand{added.task.id});
+    require(paused.ok, "pause request failed: " + paused.error);
+    const auto firstRun = firstResult.get();
+    worker.join();
+    require(firstRun.ok, "paused transfer state was not committed: " + firstRun.error);
+    require(firstRun.task.state == TaskState::Paused, "pause did not produce paused state");
+    require(!std::filesystem::exists(destination), "paused transfer published a destination file");
+    const auto partial = std::filesystem::path(partialPathFor(destination));
+    require(std::filesystem::exists(partial), "pause discarded the partial data");
+    const auto partialBytes = std::filesystem::file_size(partial);
+    require(partialBytes > 0 && partialBytes < body.size(), "pause kept an unusable partial size");
+    checkEqual(firstRun.task.received, static_cast<long long>(partialBytes),
+        "paused task reports the bytes on disk");
+
+    // Second run resumes: the server sees a Range request and answers 206.
+    const auto resumed = service.execute(StartTaskCommand{added.task.id});
+    require(resumed.ok, "resume start failed: " + resumed.error);
+    require(resumed.task.state == TaskState::Completed,
+        "resumed transfer did not complete: " + resumed.task.error);
+    check(readFile(destination) == body, "resumed file is not byte-identical to the source");
+    checkNoStaging(root, "resume.bin");
+}
+
+void resumeRefusedThenConfirmed(const std::filesystem::path& root)
+{
+    const auto body = payload(1024 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 16 * 1024, std::chrono::milliseconds(20),
+        false, "\"no-range\""});
+    const auto destination = root / "no-range.bin";
+    const auto database = root / "no-range.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+
+    std::promise<CommandResult> first;
+    auto firstResult = first.get_future();
+    std::jthread worker([&] { first.set_value(service.execute(StartTaskCommand{added.task.id})); });
+    require(waitFor([&] {
+        const auto snapshot = service.snapshot(added.task.id);
+        return snapshot && snapshot->state == TaskState::Running && snapshot->received > 0;
+    }, std::chrono::seconds(10)), "download did not reach running state with progress");
+    require(service.execute(PauseTaskCommand{added.task.id}).ok, "pause request failed");
+    const auto firstRun = firstResult.get();
+    worker.join();
+    require(firstRun.task.state == TaskState::Paused, "pause did not produce paused state");
+    const auto partial = std::filesystem::path(partialPathFor(destination));
+    const auto partialBytes = std::filesystem::file_size(partial);
+
+    // The server ignores the range, so the service must stop and ask instead of
+    // appending a second copy of the resource onto the partial file.
+    const auto refused = service.execute(StartTaskCommand{added.task.id});
+    require(refused.ok, "refused resume was not committed: " + refused.error);
+    require(refused.task.state == TaskState::Paused, "refused resume did not stay paused");
+    require(!refused.task.error.empty(), "refused resume has no reason");
+    checkEqual(std::filesystem::file_size(partial), static_cast<long long>(partialBytes),
+        "refused resume wrote into the partial file");
+    check(!std::filesystem::exists(destination), "refused resume published a destination file");
+
+    // Only an explicit restart discards the stored bytes and downloads again.
+    StartTaskCommand confirm{added.task.id};
+    confirm.restartFromZero = true;
+    const auto restarted = service.execute(confirm);
+    require(restarted.ok, "confirmed restart failed: " + restarted.error);
+    require(restarted.task.state == TaskState::Completed,
+        "confirmed restart did not complete: " + restarted.task.error);
+    check(readFile(destination) == body, "restarted file is not byte-identical to the source");
+    checkNoStaging(root, "no-range.bin");
+}
+
+void interruptedRowBecomesPaused(const std::filesystem::path& root)
+{
+    const auto database = root / "interrupted.db";
+    TaskRepository repository(database);
+    TaskSnapshot task;
+    task.id = "interrupted-task";
+    task.source = "http://example.invalid/interrupted.bin";
+    task.destination = (root / "interrupted.bin").string();
+    task.state = TaskState::Running;
+    task.received = 4096;
+    task.createdAt = 1;
+    task.updatedAt = 1;
+    repository.insert(task);
+    {
+        TaskService service(repository);
+        checkEqual(service.pauseInterrupted(), 1, "startup reconciliation paused the interrupted row");
+        const auto after = service.snapshot(task.id);
+        require(after && after->state == TaskState::Paused,
+            "interrupted row was not paused on restart");
+        checkEqual(after->received, 4096, "reconciliation kept the received bytes");
+        checkEqual(service.pauseInterrupted(), 0, "second reconciliation changes nothing");
+    }
 }
 
 void duplicateIdentityAndDeleteRecord(const std::filesystem::path& root)
@@ -299,6 +416,9 @@ int body()
     sameDestinationRace(root.path());
     cancelThenStart(root.path());
     cancellation(root.path());
+    resumeAfterPause(root.path());
+    resumeRefusedThenConfirmed(root.path());
+    interruptedRowBecomesPaused(root.path());
     duplicateIdentityAndDeleteRecord(root.path());
     return 0;
 }

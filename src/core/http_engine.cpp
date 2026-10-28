@@ -9,12 +9,17 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -42,20 +47,107 @@ bool isHttpUrl(const std::string& source)
     return supported;
 }
 
+// Validators and the total length belong to the resource, not to the task:
+// they live beside the partial file so a crashed or cancelled transfer can
+// decide on its own whether the bytes on disk still belong together.
+struct PartialMeta {
+    std::string source;
+    std::string etag;
+    std::string lastModified;
+    std::int64_t total = -1;
+};
+
+std::string trimValue(std::string text)
+{
+    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == ' ')) text.pop_back();
+    std::size_t start = 0;
+    while (start < text.size() && text[start] == ' ') ++start;
+    return text.substr(start);
+}
+
+bool parseNumber(std::string_view text, std::int64_t& value)
+{
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+}
+
+bool readMeta(const std::filesystem::path& path, PartialMeta& meta)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::string line;
+    bool versionOk = false;
+    while (std::getline(input, line)) {
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) continue;
+        const auto key = line.substr(0, separator);
+        const auto value = trimValue(line.substr(separator + 1));
+        if (key == "version" && value == "1") versionOk = true;
+        else if (key == "source") meta.source = value;
+        else if (key == "etag") meta.etag = value;
+        else if (key == "last_modified") meta.lastModified = value;
+        else if (key == "total") parseNumber(value, meta.total);
+    }
+    return versionOk && !meta.source.empty();
+}
+
+bool writeMeta(const std::filesystem::path& path, const PartialMeta& meta)
+{
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output << "version=1\n" << "source=" << meta.source << '\n';
+    if (!meta.etag.empty()) output << "etag=" << meta.etag << '\n';
+    if (!meta.lastModified.empty()) output << "last_modified=" << meta.lastModified << '\n';
+    if (meta.total >= 0) output << "total=" << meta.total << '\n';
+    output.flush();
+    return static_cast<bool>(output);
+}
+
+std::int64_t fileSize(const std::filesystem::path& path)
+{
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    return error ? 0 : static_cast<std::int64_t>(size);
+}
+
 struct Context {
     std::ofstream& output;
     const std::atomic_bool& cancelled;
     const std::function<void(const TransferProgressInfo&)>& progress;
+    PartialMeta meta;
+    std::filesystem::path metaPath;
+    std::int64_t offset = 0; // resume start, 0 for a fresh transfer
     std::int64_t received = 0;
+    bool resumeExpected = false;
+    bool metaWritten = false;
+    long statusCode = 0;
+    std::int64_t contentRangeStart = -1;
+    std::int64_t total = -1;
+    bool restartRequired = false;
     bool diskError = false;
     bool callbackError = false;
     std::string diskMessage;
+    std::string restartReason;
 };
 
 std::size_t writeData(char* data, std::size_t size, std::size_t count, void* user) noexcept
 {
     auto& context = *static_cast<Context*>(user);
     if (context.cancelled.load()) return CURL_WRITEFUNC_ERROR;
+    if (context.resumeExpected) {
+        if (context.statusCode != 206) {
+            // The server sent the whole resource: appending would corrupt the
+            // partial data, so stop before a single byte is written.
+            context.restartRequired = true;
+            context.restartReason = "server did not honor the resume range";
+            return CURL_WRITEFUNC_ERROR;
+        }
+        if (context.contentRangeStart >= 0 && context.contentRangeStart != context.offset) {
+            context.restartRequired = true;
+            context.restartReason = "server resumed at a different offset";
+            return CURL_WRITEFUNC_ERROR;
+        }
+    }
     if (count != 0 && size > (std::numeric_limits<std::size_t>::max)() / count)
         return CURL_WRITEFUNC_ERROR;
     const std::size_t length = size * count;
@@ -81,19 +173,95 @@ std::size_t writeData(char* data, std::size_t size, std::size_t count, void* use
     return length;
 }
 
+// curl delivers each header line separately; the empty line ends the block and
+// is the moment the validator and total are complete enough to persist.
+std::size_t readHeader(char* data, std::size_t size, std::size_t count, void* user) noexcept
+{
+    auto& context = *static_cast<Context*>(user);
+    const std::size_t length = size * count;
+    const std::string line(data, std::min<std::size_t>(length, 4096));
+    const auto trimmed = trimValue(line);
+    if (trimmed.empty()) {
+        if (!context.metaWritten && (context.statusCode == 200 || context.statusCode == 206)) {
+            context.metaWritten = writeMeta(context.metaPath, context.meta);
+            if (!context.metaWritten) {
+                context.diskError = true;
+                context.diskMessage = "cannot write resume metadata";
+                return 0;
+            }
+        }
+        return length;
+    }
+    const auto colon = trimmed.find(':');
+    if (colon == std::string::npos) {
+        if (trimmed.rfind("HTTP/", 0) == 0) {
+            const auto space = trimmed.find(' ');
+            if (space != std::string::npos) {
+                std::int64_t parsed = 0;
+                if (parseNumber(trimmed.substr(space + 1, 3), parsed))
+                    context.statusCode = static_cast<long>(parsed);
+            }
+            context.contentRangeStart = -1;
+        }
+        return length;
+    }
+    const auto name = trimmed.substr(0, colon);
+    const auto value = trimValue(trimmed.substr(colon + 1));
+    auto iequals = [](std::string_view left, std::string_view right) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t index = 0; index < left.size(); ++index) {
+            const auto a = static_cast<unsigned char>(left[index]);
+            const auto b = static_cast<unsigned char>(right[index]);
+            if (std::tolower(a) != std::tolower(b)) return false;
+        }
+        return true;
+    };
+    if (iequals(name, "etag")) {
+        context.meta.etag = value;
+    } else if (iequals(name, "last-modified")) {
+        context.meta.lastModified = value;
+    } else if (iequals(name, "content-range")) {
+        // bytes <start>-<end>/<total>
+        const auto space = value.find(' ');
+        const auto dash = value.find('-', space == std::string::npos ? 0 : space);
+        const auto slash = value.find('/', dash == std::string::npos ? 0 : dash);
+        if (space != std::string::npos && dash != std::string::npos) {
+            parseNumber(value.substr(space + 1, dash - space - 1), context.contentRangeStart);
+            if (slash != std::string::npos) {
+                const auto totalText = value.substr(slash + 1);
+                std::int64_t total = -1;
+                if (parseNumber(totalText, total)) {
+                    context.total = total;
+                    context.meta.total = total;
+                }
+            }
+        }
+    } else if (iequals(name, "content-length")) {
+        std::int64_t lengthValue = -1;
+        if (parseNumber(value, lengthValue) && context.statusCode != 206) {
+            context.total = lengthValue;
+            context.meta.total = lengthValue;
+        }
+    }
+    return length;
+}
+
 int reportProgress(void* user, curl_off_t total, curl_off_t now, curl_off_t, curl_off_t) noexcept
 {
     auto& context = *static_cast<Context*>(user);
     if (context.cancelled.load()) return 1;
     try {
-        if (context.progress)
-            context.progress(TransferProgressInfo{static_cast<std::int64_t>(now),
-                total >= 0 ? static_cast<std::int64_t>(total) : -1});
+        if (context.progress) {
+            const auto reported = context.offset + static_cast<std::int64_t>(now);
+            const auto expected = context.total >= 0 ? context.total
+                : (total >= 0 ? context.offset + static_cast<std::int64_t>(total) : -1);
+            context.progress(TransferProgressInfo{reported, expected});
+        }
     } catch (...) {
         context.callbackError = true;
         return 1;
     }
-    return context.cancelled.load() ? 1 : 0;
+    return 0;
 }
 
 TransferResult failure(TransferError error, std::string message)
@@ -105,9 +273,6 @@ TransferResult failure(TransferError error, std::string message)
     return result;
 }
 
-// The start-time existence check is only a fast preflight. Publication must
-// itself refuse to replace an existing file: two tasks can pass the preflight
-// concurrently, and a plain std::filesystem::rename overwrites on MSVC.
 bool publishNoReplace(const std::filesystem::path& staging,
     const std::filesystem::path& destination, std::string& message)
 {
@@ -144,7 +309,45 @@ std::string curlMessage(CURLcode code, const std::array<char, CURL_ERROR_SIZE>& 
     if (buffer[0] != '\0') return buffer.data();
     return curl_easy_strerror(code);
 }
+
+// One destination has one partial file, so two transfers must never write it at
+// the same time. They are serialised per destination instead: the loser then
+// fails the no-replace publish instead of corrupting the winner's bytes.
+std::shared_ptr<std::mutex> mutexForDestination(const std::string& destination)
+{
+    static std::mutex guard;
+    static std::map<std::string, std::weak_ptr<std::mutex>> locks;
+    std::lock_guard lock(guard);
+    auto& slot = locks[destination];
+    if (auto existing = slot.lock()) return existing;
+    auto created = std::make_shared<std::mutex>();
+    slot = created;
+    return created;
+}
 } // namespace
+
+std::filesystem::path partialPathFor(const std::filesystem::path& destination)
+{
+    auto path = destination;
+    path += pathFromUtf8(".lfpart");
+    return path;
+}
+
+std::filesystem::path partialMetaPathFor(const std::filesystem::path& destination)
+{
+    auto path = destination;
+    path += pathFromUtf8(".lfpart.meta");
+    return path;
+}
+
+bool discardPartial(const std::filesystem::path& destination)
+{
+    std::error_code error;
+    std::filesystem::remove(partialPathFor(destination), error);
+    std::error_code metaError;
+    std::filesystem::remove(partialMetaPathFor(destination), metaError);
+    return !error;
+}
 
 TransferResult transferHttp(const TransferRequest& request, const std::atomic_bool& cancelled,
     const std::function<void(const TransferProgressInfo&)>& progress)
@@ -154,6 +357,13 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     const std::filesystem::path destination = pathFromUtf8(request.destination);
     if (!destination.is_absolute() || destination.filename().empty())
         return failure(TransferError::Destination, "destination must be an absolute file path");
+
+    // Serialise per destination *before* every filesystem decision: the second
+    // transfer must observe the winner's published file, not race past the
+    // preflight and then try to reuse the same partial path.
+    const auto destinationLock = mutexForDestination(request.destination);
+    std::unique_lock<std::mutex> serialize(*destinationLock);
+
     std::error_code existsError;
     if (std::filesystem::exists(destination, existsError))
         return failure(TransferError::Destination, "destination already exists");
@@ -169,29 +379,33 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     if (initializeCurl() != CURLE_OK)
         return failure(TransferError::Internal, "cannot initialize the network runtime");
 
-    static std::atomic<unsigned long long> sequence{0};
-    std::filesystem::path staging = destination;
-    staging += pathFromUtf8(".part-" + std::to_string(GetCurrentProcessId()) + "-"
-        + std::to_string(sequence.fetch_add(1)));
-    std::ofstream output(staging, std::ios::binary | std::ios::trunc);
-    if (!output) return failure(TransferError::Destination, "cannot create the staging file");
-    struct Cleanup {
-        std::ofstream& output;
-        std::filesystem::path staging;
-        bool armed = true;
-        ~Cleanup()
-        {
-            if (!armed) return;
-            output.close();
-            std::error_code error;
-            std::filesystem::remove(staging, error);
-        }
-    } cleanup{output, staging};
+    const auto partial = partialPathFor(destination);
+    const auto metaPath = partialMetaPathFor(destination);
+    if (request.restartFromZero) discardPartial(destination);
+
+    PartialMeta meta;
+    const bool haveMeta = readMeta(metaPath, meta) && meta.source == request.source;
+    std::int64_t offset = haveMeta ? fileSize(partial) : 0;
+    if (!haveMeta) {
+        std::error_code ignored;
+        std::filesystem::remove(partial, ignored);
+        offset = 0;
+    }
+    meta.source = request.source;
+
+    std::ofstream output(partial, std::ios::binary | (offset > 0 ? std::ios::app : std::ios::trunc));
+    if (!output) return failure(TransferError::Destination, "cannot create the partial file");
 
     std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
     if (!handle) return failure(TransferError::Internal, "cannot create an HTTP handle");
 
     Context context{output, cancelled, progress};
+    context.meta = meta;
+    context.metaPath = metaPath;
+    context.offset = offset;
+    context.resumeExpected = offset > 0;
+    context.total = meta.total;
+
     std::array<char, CURL_ERROR_SIZE> errorBuffer{};
     CURLcode optionResult = CURLE_OK;
     auto set = [&](CURLoption option, auto value) {
@@ -212,55 +426,145 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     set(CURLOPT_USERAGENT, "LiteFetch/0.1 (core)");
     set(CURLOPT_WRITEFUNCTION, &writeData);
     set(CURLOPT_WRITEDATA, &context);
+    set(CURLOPT_HEADERFUNCTION, &readHeader);
+    set(CURLOPT_HEADERDATA, &context);
     set(CURLOPT_NOPROGRESS, 0L);
     set(CURLOPT_XFERINFOFUNCTION, &reportProgress);
     set(CURLOPT_XFERINFODATA, &context);
-    if (optionResult != CURLE_OK)
+
+    curl_slist* headers = nullptr;
+    if (offset > 0) {
+        const std::string range = std::to_string(offset) + "-";
+        set(CURLOPT_RANGE, range.c_str());
+        std::string validator;
+        if (!meta.etag.empty()) validator = "If-Range: " + meta.etag;
+        else if (!meta.lastModified.empty()) validator = "If-Range: " + meta.lastModified;
+        if (!validator.empty()) {
+            headers = curl_slist_append(headers, validator.c_str());
+            set(CURLOPT_HTTPHEADER, headers);
+        }
+    }
+    if (optionResult != CURLE_OK) {
+        if (headers) curl_slist_free_all(headers);
         return failure(TransferError::Internal, curl_easy_strerror(optionResult));
+    }
 
     const CURLcode code = curl_easy_perform(handle.get());
+    if (headers) curl_slist_free_all(headers);
     long response = 0;
     curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &response);
-    curl_off_t total = -1;
-    curl_easy_getinfo(handle.get(), CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &total);
 
     TransferResult result;
     result.status = TransferStatus::Failed;
     result.error = TransferError::Network;
     result.responseCode = response;
-    result.received = context.received;
-    result.total = total >= 0 ? static_cast<std::int64_t>(total) : -1;
+    result.total = context.total >= 0 ? context.total : -1;
 
-    if (cancelled.load()) {
+    if (context.restartRequired) {
+        output.close();
+        result.received = offset;
+        result.partialBytes = offset;
+        result.restartRequired = true;
+        result.error = TransferError::Http;
+        result.message = context.restartReason;
+        return result;
+    }
+    if (cancelled.load() || context.callbackError) {
+        output.close();
         result.status = TransferStatus::Cancelled;
         result.error = TransferError::None;
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
         return result;
     }
+    if (response == 416 && context.resumeExpected) {
+        // The server says the range is unsatisfiable: either the partial file
+        // is already the whole resource, or the resource shrank.
+        output.close();
+        if (context.total >= 0 && offset == context.total) {
+            std::string publishMessage;
+            if (!publishNoReplace(partial, destination, publishMessage)) {
+                result.error = TransferError::Destination;
+                result.message = std::move(publishMessage);
+                return result;
+            }
+            std::error_code ignored;
+            std::filesystem::remove(metaPath, ignored);
+            result.status = TransferStatus::Completed;
+            result.error = TransferError::None;
+            result.message.clear();
+            result.received = offset;
+            result.partialBytes = 0;
+            return result;
+        }
+        result.restartRequired = true;
+        result.error = TransferError::Http;
+        result.message = "resources changed; the stored range is unsatisfiable";
+        result.received = offset;
+        result.partialBytes = offset;
+        return result;
+    }
+    // A failure that wrote nothing has nothing to resume; leaving an empty
+    // partial file behind would only confuse the next attempt.
+    auto dropEmptyPartial = [&] {
+        if (offset + context.received != 0) return;
+        std::error_code ignored;
+        std::filesystem::remove(partial, ignored);
+        std::filesystem::remove(metaPath, ignored);
+    };
     if (context.diskError) {
+        output.close();
         result.error = TransferError::Disk;
         result.message = context.diskMessage.empty() ? "cannot write destination" : context.diskMessage;
-        return result;
-    }
-    if (context.callbackError) {
-        result.error = TransferError::Internal;
-        result.message = "progress callback failed";
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
+        dropEmptyPartial();
         return result;
     }
     if (code != CURLE_OK) {
+        output.close();
         if (code == CURLE_HTTP_RETURNED_ERROR) result.error = TransferError::Http;
         if (code == CURLE_PEER_FAILED_VERIFICATION || code == CURLE_SSL_CONNECT_ERROR)
             result.error = TransferError::Network;
         result.message = curlMessage(code, errorBuffer);
         if (response >= 400) result.message = "HTTP " + std::to_string(response) + ": " + result.message;
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
+        dropEmptyPartial();
         return result;
     }
     if (response < 200 || response >= 300) {
+        output.close();
         result.error = TransferError::Http;
         result.message = "HTTP " + std::to_string(response);
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
+        dropEmptyPartial();
+        return result;
+    }
+    if (context.resumeExpected && response == 206 && context.total >= 0
+        && offset + context.received != context.total) {
+        // A Complete answer that is shorter than the announced length is a
+        // truncated transfer, not a finished file.
+        output.close();
+        result.error = TransferError::Network;
+        result.message = "transfer ended before the announced length";
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
+        return result;
+    }
+    if (context.total >= 0 && offset + context.received != context.total && !context.resumeExpected) {
+        output.close();
+        result.error = TransferError::Network;
+        result.message = "transfer ended before the announced length";
+        result.received = context.received;
+        result.partialBytes = context.received;
+        dropEmptyPartial();
         return result;
     }
     output.flush();
     if (!output) {
+        output.close();
         result.error = TransferError::Disk;
         result.message = "cannot flush the destination";
         return result;
@@ -272,15 +576,20 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
         return result;
     }
     std::string publishMessage;
-    if (!publishNoReplace(staging, destination, publishMessage)) {
+    if (!publishNoReplace(partial, destination, publishMessage)) {
         result.error = TransferError::Destination;
         result.message = std::move(publishMessage);
+        result.received = offset + context.received;
+        result.partialBytes = result.received;
         return result;
     }
-    cleanup.armed = false;
+    std::error_code ignored;
+    std::filesystem::remove(metaPath, ignored);
     result.status = TransferStatus::Completed;
     result.error = TransferError::None;
     result.message.clear();
+    result.received = offset + context.received;
+    result.partialBytes = 0;
     return result;
 }
 

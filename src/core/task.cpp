@@ -10,6 +10,7 @@ std::string_view taskStateName(TaskState state)
     case TaskState::Completed: return "completed";
     case TaskState::Failed: return "failed";
     case TaskState::Cancelled: return "cancelled";
+    case TaskState::Paused: return "paused";
     }
     return "unknown";
 }
@@ -21,6 +22,7 @@ std::optional<TaskState> parseTaskState(std::string_view name)
     if (name == "completed") return TaskState::Completed;
     if (name == "failed") return TaskState::Failed;
     if (name == "cancelled") return TaskState::Cancelled;
+    if (name == "paused") return TaskState::Paused;
     return std::nullopt;
 }
 

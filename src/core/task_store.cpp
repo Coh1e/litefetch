@@ -82,11 +82,45 @@ TaskSnapshot readTask(Statement& statement)
     return task;
 }
 
+// The state column is validated by parseTaskState when a row is read, not by a
+// CHECK constraint: a damaged database must stay openable so the corruption is
+// reported as a storage error instead of making the file unusable.
+//
+// Schema 1 predates the persisted 'paused' state; the rebuild below keeps the
+// same shape and only bumps the version, so old files open unchanged.
+void migrateToPausedState(sqlite3* database)
+{
+    {
+        Statement version(database, "SELECT value FROM native_meta WHERE key='schema_version'");
+        if (!version.row() || version.text(0) != "1") return;
+    }
+    execute(database,
+        "DROP TABLE IF EXISTS native_tasks_v2;"
+        "CREATE TABLE native_tasks_v2("
+        "id TEXT PRIMARY KEY NOT NULL,"
+        "source TEXT NOT NULL,"
+        "destination TEXT NOT NULL,"
+        "state TEXT NOT NULL,"
+        "received INTEGER NOT NULL CHECK(received >= 0),"
+        "total INTEGER NOT NULL CHECK(total >= -1),"
+        "error TEXT NOT NULL,"
+        "created_at INTEGER NOT NULL,"
+        "updated_at INTEGER NOT NULL);"
+        "INSERT INTO native_tasks_v2 SELECT id,source,destination,state,received,total,error,"
+        "created_at,updated_at FROM native_tasks;"
+        "DROP TABLE native_tasks;"
+        "ALTER TABLE native_tasks_v2 RENAME TO native_tasks;"
+        "UPDATE native_meta SET value='2' WHERE key='schema_version';");
+}
+
 void verifyVersion(sqlite3* database)
 {
     Statement statement(database, "SELECT value FROM native_meta WHERE key='schema_version'");
     if (!statement.row()) throw StorageError("Database is not a LiteFetch native task database");
-    if (statement.text(0) != "1") throw StorageError("Database was created by a newer LiteFetch native version");
+    const auto version = statement.text(0);
+    // 1: original states. 2: adds 'paused' for resumable transfers.
+    if (version != "1" && version != "2")
+        throw StorageError("Database was created by a newer LiteFetch native version");
 }
 
 sqlite3* openDatabase(const std::filesystem::path& path, bool readOnly)
@@ -160,13 +194,14 @@ void TaskRepository::initialize()
             "id TEXT PRIMARY KEY NOT NULL,"
             "source TEXT NOT NULL,"
             "destination TEXT NOT NULL,"
-            "state TEXT NOT NULL CHECK(state IN ('queued','running','completed','failed','cancelled')),"
+            "state TEXT NOT NULL,"
             "received INTEGER NOT NULL CHECK(received >= 0),"
             "total INTEGER NOT NULL CHECK(total >= -1),"
             "error TEXT NOT NULL,"
             "created_at INTEGER NOT NULL,"
             "updated_at INTEGER NOT NULL);");
         execute(database_, "INSERT OR IGNORE INTO native_meta(key,value) VALUES('schema_version','1');");
+        migrateToPausedState(database_);
         execute(database_, "COMMIT;");
     } catch (...) {
         sqlite3_exec(database_, "ROLLBACK", nullptr, nullptr, nullptr);
