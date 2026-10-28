@@ -13,6 +13,7 @@
 #include "test_support.h"
 
 #include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -293,6 +294,77 @@ void peerResume(const std::filesystem::path& root)
         checkEqual(static_cast<long long>(again.missingParts), 0, "nothing is missing after resume");
     }
 }
+void multiSourceAndPublish(const std::filesystem::path& root)
+{
+    const auto payload = litefetch::test::payload(18000);
+    const auto expectedPath = root / "multi-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto hash = ed2kFileHash(expectedPath.string());
+    const std::string link = "ed2k://|file|multi.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/";
+
+    // The first peer refuses the file; the second one serves it.
+    {
+        FakeEd2kPeer refusing(payload, true);
+        FakeEd2kPeer serving(payload);
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = (root / "multi-out.bin").string();
+        request.peers = {{"127.0.0.1", refusing.port()}, {"127.0.0.1", serving.port()}};
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(result.ok, ("multi-source task failed: " + result.error).c_str());
+        check(readFile(root / "multi-out.bin") == payload, "the second peer supplied the file");
+    }
+    {
+        // The file is already in place: a second run must report success without
+        // touching the peers and without overwriting anything.
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = (root / "multi-out.bin").string();
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(result.ok, "an already finished file is a success");
+        check(readFile(root / "multi-out.bin") == payload, "the finished file is untouched");
+    }
+    {
+        // A different file at the destination must be refused, not overwritten.
+        const auto otherPath = root / "multi-out.bin";
+        writeFile(otherPath, litefetch::test::payload(100));
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = otherPath.string();
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(!result.ok, "a conflicting destination is refused");
+        check(result.error.find("different content") != std::string::npos,
+            ("the conflict is not explained: " + result.error).c_str());
+    }
+}
+
+void largeFileRanges()
+{
+    // 4 GiB plus a bit: the third part starts beyond the 32-bit boundary.
+    const std::int64_t size = (4LL << 30) + 12345;
+    const auto [firstStart, firstEnd] = ed2kPartRange(0, size);
+    checkEqual(firstStart, 0LL, "first part starts at zero");
+    checkEqual(firstEnd, ed2kPartSize - 1, "first part ends at the part size");
+    const auto [secondStart, secondEnd] = ed2kPartRange(1, size);
+    checkEqual(secondStart, ed2kPartSize, "second part follows");
+    checkEqual(secondEnd, 2 * ed2kPartSize - 1, "second part ends at twice the size");
+    const int count = static_cast<int>((size + ed2kPartSize - 1) / ed2kPartSize);
+    const auto [lastStart, lastEnd] = ed2kPartRange(count - 1, size);
+    checkEqual(lastEnd, size - 1, "the last part ends at the file end");
+    check(lastEnd > (1LL << 32), "the last part ends beyond 4 GiB");
+    // The part that contains the 4 GiB boundary must be addressable directly.
+    const int boundaryPart = static_cast<int>(((1LL << 32) + 1) / ed2kPartSize);
+    const auto [boundaryStart, boundaryEnd] = ed2kPartRange(boundaryPart, size);
+    check(boundaryStart <= (1LL << 32) && boundaryEnd > (1LL << 32),
+        "a part crossing 4 GiB is addressable");
+}
 void taskPipeline(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(20000);
@@ -311,7 +383,7 @@ void taskPipeline(const std::filesystem::path& root)
         Ed2kTaskRequest request;
         request.link = link;
         request.destination = (root / "task-out.bin").string();
-        request.peer = {"127.0.0.1", peer.port()};
+        request.peers = {{"127.0.0.1", peer.port()}};
         request.timeoutMillis = 5000;
         const std::atomic_bool cancelled{false};
         const auto result = downloadEd2kTask(request, cancelled);
@@ -402,6 +474,13 @@ void linkParsing()
     check(!parseEd2kLink("ed2k://|file|a.bin|10|zzz|/").ok, "bad hash is rejected");
     check(!parseEd2kLink("http://example.com/x").ok, "non-ed2k link is rejected");
 
+    const auto withSources = parseEd2kLink(
+        "ed2k://|file|movie.mkv|734003200|0123456789abcdef0123456789abcdef|/|sources,192.168.1.9:4662,10.0.0.5:4700|/");
+    check(withSources.ok, "a sources link parses");
+    checkEqual(static_cast<long long>(withSources.sources.size()), 2, "both sources are read");
+    checkEqual(withSources.sources[0].address, std::string("192.168.1.9"), "first source address");
+    checkEqual(static_cast<long long>(withSources.sources[0].port), 4662LL, "first source port");
+
     // 192.168.1.x with port 0x1100 (4352) travels as three address bytes and
     // the port high byte.
     const auto source = decodeEd2kSource(0xc0a80111u);
@@ -469,6 +548,8 @@ int main()
         peerTransfer(root.path());
         peerResume(root.path());
         taskPipeline(root.path());
+        multiSourceAndPublish(root.path());
+        largeFileRanges();
         sourceQuery();
         return 0;
     });

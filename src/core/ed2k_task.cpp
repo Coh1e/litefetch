@@ -23,8 +23,23 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
         return result;
     }
 
-    Ed2kServerEndpoint peer = request.peer;
-    if (peer.port == 0) {
+    // An existing destination is never overwritten: it is either already the
+    // file we want, or it is something else and the user must decide.
+    if (std::filesystem::exists(request.destination)) {
+        if (ed2kFileHash(request.destination) == link.link.hash) {
+            result.ok = true;
+            result.received = link.link.size;
+            return result;
+        }
+        result.error = "the destination already exists with different content";
+        return result;
+    }
+
+    std::vector<Ed2kServerEndpoint> candidates = request.peers;
+    // Peers named in the link itself need no server at all.
+    for (const auto& source : link.sources)
+        candidates.push_back({source.address, source.port});
+    if (candidates.empty()) {
         if (request.servers.empty()) {
             result.error = "no ed2k server is configured";
             return result;
@@ -39,11 +54,11 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
             if (!query.ok) continue;
             anyServerAnswered = true;
             if (query.sources.empty()) continue;
-            peer.host = query.sources.front().address;
-            peer.port = query.sources.front().port;
+            for (const auto& source : query.sources)
+                candidates.push_back({source.address, source.port});
             break;
         }
-        if (peer.port == 0) {
+        if (candidates.empty()) {
             result.noSources = anyServerAnswered;
             result.error = anyServerAnswered ? "the servers know no sources for this file"
                                              : "no ed2k server answered";
@@ -61,8 +76,6 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
     }
 
     Ed2kPeerRequest peerRequest;
-    peerRequest.host = peer.host;
-    peerRequest.port = peer.port;
     peerRequest.fileHash = link.link.hash;
     peerRequest.fileSize = link.link.size;
     peerRequest.partPath = partPath;
@@ -73,9 +86,30 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
         } catch (...) {
         }
     }
-    const auto transfer = downloadFromEd2kPeer(peerRequest, cancelled);
+
+    // Try the candidates in order. Parts a failed attempt finished stay in the
+    // part file and its records, so the next peer continues instead of starting
+    // over.
+    Ed2kPeerResult transfer;
+    std::string lastError = "no peer was tried";
+    for (const auto& candidate : candidates) {
+        if (cancelled.load()) {
+            result.error = "cancelled";
+            return result;
+        }
+        peerRequest.host = candidate.host;
+        peerRequest.port = candidate.port;
+        transfer = downloadFromEd2kPeer(peerRequest, cancelled);
+        if (transfer.ok) break;
+        lastError = transfer.error;
+        if (lastError == "cancelled") {
+            result.error = lastError;
+            result.received = transfer.received;
+            return result;
+        }
+    }
     if (!transfer.ok) {
-        result.error = transfer.error;
+        result.error = lastError;
         result.received = transfer.received;
         return result;
     }

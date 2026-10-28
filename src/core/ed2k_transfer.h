@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <utility>
 #include <cstdint>
 #include <string>
 
@@ -32,6 +33,10 @@ struct Ed2kPeerResult {
     std::int64_t received = 0;
     std::string error;
 };
+
+// Byte range of one part, inclusive at both ends. Exposed so the 64-bit math
+// can be checked without transferring a 4 GiB file.
+std::pair<std::int64_t, std::int64_t> ed2kPartRange(int index, std::int64_t fileSize);
 
 // Downloads one file from one peer over the eDonkey peer protocol on the
 // calling thread. Parts that a previous run already finished are kept only if

@@ -16,9 +16,9 @@ struct Ed2kTaskRequest {
     std::string destination;  // final path; the bytes land in <destination>.part first
     // Servers to ask for sources. At least one is needed unless a peer is given.
     std::vector<Ed2kServerEndpoint> servers;
-    // A peer to use without asking a server: manual entry, and the only way a
-    // test can point at a scripted peer.
-    Ed2kServerEndpoint peer;
+    // Peers to try in order without asking a server: manual entry, and the only
+    // way a test can point at scripted peers. The first one that serves wins.
+    std::vector<Ed2kServerEndpoint> peers;
     int timeoutMillis = 15000;
 };
 

@@ -259,6 +259,11 @@ bool verifyPart(const std::string& partPath, int index, std::int64_t size,
 }
 } // namespace
 
+std::pair<std::int64_t, std::int64_t> ed2kPartRange(int index, std::int64_t fileSize)
+{
+    return partRange(index, fileSize);
+}
+
 Ed2kResumeState inspectEd2kParts(const std::string& partPath, std::int64_t fileSize,
     const std::string& fileHash)
 {

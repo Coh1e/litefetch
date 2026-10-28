@@ -89,6 +89,32 @@ Ed2kLinkResult parseEd2kLink(std::string_view link)
         return result;
     }
     result.link.hash = std::string(fields[3]);
+    // "sources,ip:port,..." may follow the file fields.
+    for (std::size_t index = 4; index < fields.size(); ++index) {
+        const auto field = fields[index];
+        if (field.rfind("sources,", 0) != 0) continue;
+        std::size_t start = 8;
+        while (start < field.size()) {
+            const auto end = field.find(',', start);
+            const auto item = field.substr(start,
+                end == std::string_view::npos ? std::string_view::npos : end - start);
+            const auto colon = item.rfind(':');
+            if (colon != std::string_view::npos) {
+                const auto portText = item.substr(colon + 1);
+                int port = 0;
+                const auto parsed = std::from_chars(portText.data(),
+                    portText.data() + portText.size(), port);
+                if (parsed.ec == std::errc{} && port > 0 && port <= 65535) {
+                    Ed2kSource source;
+                    source.address = std::string(item.substr(0, colon));
+                    source.port = static_cast<std::uint16_t>(port);
+                    result.sources.push_back(std::move(source));
+                }
+            }
+            if (end == std::string_view::npos) break;
+            start = end + 1;
+        }
+    }
     result.ok = true;
     return result;
 }
