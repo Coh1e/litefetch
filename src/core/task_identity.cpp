@@ -57,8 +57,34 @@ private:
 };
 } // namespace
 
+namespace {
+// A magnet link identifies its content by the info hash, not by the whole URI:
+// different trackers or display names for the same torrent must share identity.
+std::string magnetIdentityKey(std::string_view source)
+{
+    if (source.rfind("magnet:", 0) != 0) return {};
+    std::string key;
+    std::size_t start = source.find("xt=urn:");
+    while (start != std::string_view::npos) {
+        const auto valueStart = source.find("urn:", start);
+        if (valueStart == std::string_view::npos) break;
+        const auto end = source.find('&', valueStart);
+        auto value = std::string(source.substr(valueStart + 4,
+            end == std::string_view::npos ? std::string_view::npos : end - valueStart - 4));
+        if (!value.empty()) {
+            key += value;
+            key += '\n';
+        }
+        start = end == std::string_view::npos ? std::string_view::npos : source.find("xt=urn:", end);
+    }
+    return key;
+}
+} // namespace
+
 std::string taskIdentity(std::string_view canonicalSource)
 {
+    const auto magnetKey = magnetIdentityKey(canonicalSource);
+    if (!magnetKey.empty()) canonicalSource = magnetKey;
     static const Algorithm algorithm;
     Hash hash(algorithm.get());
     hash.update(canonicalSource.data(), canonicalSource.size());

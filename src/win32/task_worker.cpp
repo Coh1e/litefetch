@@ -17,8 +17,10 @@
 
 namespace litefetch {
 
-TaskWorker::TaskWorker(std::filesystem::path databasePath, void* notifyWindow)
-    : databasePath_(std::move(databasePath)), notifyWindow_(notifyWindow)
+TaskWorker::TaskWorker(std::filesystem::path databasePath, void* notifyWindow,
+    TaskService::BtTransfer btTransfer)
+    : databasePath_(std::move(databasePath)), notifyWindow_(notifyWindow),
+      btTransfer_(std::move(btTransfer))
 {
 }
 
@@ -38,7 +40,8 @@ bool TaskWorker::start(std::string& error)
         service_ = std::make_unique<TaskService>(*repository_, transferHttp,
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total);
-            });
+            },
+            btTransfer_);
         // A running row can only come from a previous process that died; a
         // restart shows it as paused instead of resuming silently.
         service_->pauseInterrupted();
@@ -52,7 +55,7 @@ bool TaskWorker::start(std::string& error)
 }
 
 void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart,
-    std::uint64_t batchId, int line, bool allowDuplicate)
+    std::uint64_t batchId, int line, bool allowDuplicate, std::vector<int> files)
 {
     Command command;
     command.type = CommandType::Add;
@@ -62,6 +65,7 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     command.batchId = batchId;
     command.line = line;
     command.allowDuplicate = allowDuplicate;
+    command.files = std::move(files);
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -262,7 +266,7 @@ void TaskWorker::execute(const Command& command)
         switch (command.type) {
         case CommandType::Add: {
             const auto result = service_->execute(AddTaskCommand{
-                command.source, command.destination, command.allowDuplicate});
+                command.source, command.destination, command.allowDuplicate, command.files});
             AddResult addResult;
             addResult.batchId = command.batchId;
             addResult.line = command.line;

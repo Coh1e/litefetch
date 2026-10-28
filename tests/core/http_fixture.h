@@ -50,7 +50,7 @@ public:
         }();
         (void)winsockReady;
 
-        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        listener_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (listener_ == INVALID_SOCKET) throw std::runtime_error("fixture socket failed");
         BOOL reuse = TRUE;
         setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
@@ -58,11 +58,11 @@ public:
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         address.sin_port = 0;
-        if (bind(listener_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+        if (::bind(listener_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
             throw std::runtime_error("fixture bind failed");
-        if (listen(listener_, 8) != 0) throw std::runtime_error("fixture listen failed");
+        if (::listen(listener_, 8) != 0) throw std::runtime_error("fixture listen failed");
         int length = sizeof(address);
-        if (getsockname(listener_, reinterpret_cast<sockaddr*>(&address), &length) != 0)
+        if (::getsockname(listener_, reinterpret_cast<sockaddr*>(&address), &length) != 0)
             throw std::runtime_error("fixture getsockname failed");
         port_ = ntohs(address.sin_port);
         thread_ = std::jthread([this] { serve(); });
@@ -109,7 +109,7 @@ private:
         while (!stopping_.load()) {
             const SOCKET listener = listener_.load();
             if (listener == INVALID_SOCKET) break;
-            const SOCKET client = accept(listener, nullptr, nullptr);
+            const SOCKET client = ::accept(listener, nullptr, nullptr);
             if (client == INVALID_SOCKET) {
                 if (stopping_.load()) break;
                 continue;

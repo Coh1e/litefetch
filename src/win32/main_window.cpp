@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include "batch_dialog.h"
+#include "bt_engine.h"
 #include "column_dialog.h"
 #include "explorer_target.h"
 #include "new_download_dialog.h"
@@ -9,6 +10,7 @@
 #include "text_utf8.h"
 #include "ui_text.h"
 
+#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -27,6 +29,7 @@ constexpr int shutdownTimerMillis = 100;
 constexpr wchar_t title[] = L"lite fetch";
 constexpr unsigned int appRefreshColumnsMessage = WM_APP + 2;
 constexpr unsigned int appUpdateActionsMessage = WM_APP + 3;
+constexpr unsigned int appTorrentMetadataMessage = WM_APP + 4;
 
 std::wstring toWide(std::string_view utf8, const wchar_t* fallback = L"")
 {
@@ -256,6 +259,80 @@ INT_PTR CALLBACK credentialDialogProc(HWND dialog, UINT message, WPARAM wParam, 
         return FALSE;
     }
 }
+struct TorrentFetchResult {
+    BtMetadataResult metadata;
+    std::string source;
+};
+
+struct TorrentSelection {
+    std::wstring name;
+    std::vector<BtFile> files;
+    std::vector<int> selected;
+};
+
+// The dialog shows the metadata the engine already fetched; nothing is
+// downloaded until the user confirms the checked rows.
+INT_PTR CALLBACK torrentFilesDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* selection = reinterpret_cast<TorrentSelection*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        selection = reinterpret_cast<TorrentSelection*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!selection) return FALSE;
+        SetDlgItemTextW(dialog, IDC_TORRENT_NAME, selection->name.c_str());
+        const HWND list = GetDlgItem(dialog, IDC_TORRENT_LIST);
+        ListView_SetExtendedListViewStyle(list,
+            LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_CHECKBOXES);
+        LVCOLUMNW column{};
+        column.mask = LVCF_TEXT | LVCF_WIDTH;
+        column.pszText = const_cast<LPWSTR>(L"文件");
+        column.cx = 280;
+        ListView_InsertColumn(list, 0, &column);
+        column.pszText = const_cast<LPWSTR>(L"大小");
+        column.cx = 100;
+        ListView_InsertColumn(list, 1, &column);
+        for (std::size_t index = 0; index < selection->files.size(); ++index) {
+            const auto& file = selection->files[index];
+            const auto path = toWide(file.path);
+            const auto size = toWide(formatSize(file.size));
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(index);
+            item.pszText = const_cast<LPWSTR>(path.c_str());
+            ListView_InsertItem(list, &item);
+            ListView_SetItemText(list, static_cast<int>(index), 1, const_cast<LPWSTR>(size.c_str()));
+            ListView_SetCheckState(list, static_cast<int>(index), TRUE);
+        }
+        centerDialog(dialog, GetParent(dialog));
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            const HWND list = GetDlgItem(dialog, IDC_TORRENT_LIST);
+            if (selection) {
+                selection->selected.clear();
+                for (std::size_t index = 0; index < selection->files.size(); ++index) {
+                    if (ListView_GetCheckState(list, static_cast<int>(index)))
+                        selection->selected.push_back(selection->files[index].index);
+                }
+            }
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dialog, IDCANCEL);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 struct PropertyFields {
     std::wstring name;
     std::wstring source;
@@ -498,6 +575,15 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case appUpdateActionsMessage:
         updateActions();
         return 0;
+    case appTorrentMetadataMessage: {
+        auto* result = reinterpret_cast<TorrentFetchResult*>(lParam);
+        if (!result) return 0;
+        const auto metadata = std::move(result->metadata);
+        const auto source = std::move(result->source);
+        delete result;
+        handleTorrentMetadata(std::move(metadata), source);
+        return 0;
+    }
     case WM_DROPFILES:
         handleDrop(reinterpret_cast<HDROP>(wParam));
         return 0;
@@ -739,7 +825,7 @@ bool MainWindow::createControls()
     layoutStatusParts();
     DragAcceptFiles(hwnd_, TRUE);
 
-    worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_);
+    worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_, btDownload);
     std::string error;
     if (!worker_->start(error)) {
         MessageBoxW(hwnd_, toWide("无法打开任务数据库：" + error).c_str(), L"lite fetch",
@@ -1549,6 +1635,10 @@ void MainWindow::openNewDownload()
     if (!worker_ || isClosing()) return;
     const auto request = showNewDownloadDialog(hwnd_, options_.downloadDirectory);
     if (!request) return;
+    if (request->source.rfind("magnet:", 0) == 0) {
+        beginTorrentAdd(request->source);
+        return;
+    }
     if (request->switchToBatch) {
         openBatchAdd(request->batchText);
         return;
@@ -2080,7 +2170,7 @@ void MainWindow::handleDrop(HDROP drop)
     }
     DragFinish(drop);
 
-    bool torrent = false;
+    std::vector<std::filesystem::path> torrentPaths;
     bool otherFile = false;
     std::string text;
     for (const auto& path : paths) {
@@ -2088,7 +2178,7 @@ void MainWindow::handleDrop(HDROP drop)
         std::transform(extension.begin(), extension.end(), extension.begin(),
             [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
         if (extension == L".torrent") {
-            torrent = true;
+            torrentPaths.push_back(path);
         } else if (extension == L".txt") {
             std::string fileText;
             if (readTextFile(path, fileText)) {
@@ -2102,11 +2192,7 @@ void MainWindow::handleDrop(HDROP drop)
         }
     }
     if (!text.empty()) openBatchAdd(text);
-    if (torrent) {
-        MessageBoxW(hwnd_,
-            L"BT/磁力与种子文件将在后续版本接入（#9）。本次未创建或传输任何 BT 任务。",
-            L"打开种子", MB_OK | MB_ICONINFORMATION);
-    }
+    for (const auto& path : torrentPaths) beginTorrentAdd(utf8FromUtf16(path.wstring()));
     if (otherFile) {
         MessageBoxW(hwnd_,
             L"拖放的本地文件不会创建下载任务。\r\n请拖入 .txt 地址列表，或使用“批量添加”。",
@@ -2116,16 +2202,69 @@ void MainWindow::handleDrop(HDROP drop)
 
 void MainWindow::openTorrentBoundary()
 {
-    MessageBoxW(hwnd_,
-        L"BT/磁力与种子文件将在后续版本接入（#9）。本版本不会创建或传输 BT 任务。",
-        L"打开种子", MB_OK | MB_ICONINFORMATION);
+    wchar_t path[MAX_PATH]{};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd_;
+    dialog.lpstrFilter = L"种子文件 (*.torrent)\\0*.torrent\\0所有文件\\0*.*\\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&dialog)) return;
+    beginTorrentAdd(utf8FromUtf16(path));
+}
+
+void MainWindow::beginTorrentAdd(const std::string& source)
+{
+    if (!worker_ || isClosing()) return;
+    if (torrentFetchActive_) {
+        setNotice("已有种子正在读取元数据，请稍候");
+        return;
+    }
+    // Metadata is fetched on its own thread: a magnet with no peers can take
+    // seconds, and the window must stay responsive while it waits.
+    torrentFetchActive_ = true;
+    torrentFetchCancel_ = std::make_shared<std::atomic_bool>(false);
+    const HWND window = hwnd_;
+    const auto directory = options_.downloadDirectory.string();
+    std::thread([window, source, directory, cancel = torrentFetchCancel_] {
+        auto* result = new TorrentFetchResult{
+            btFetchMetadata(source, directory, 20000, *cancel), source};
+        if (!PostMessageW(window, appTorrentMetadataMessage, 0, reinterpret_cast<LPARAM>(result)))
+            delete result;
+    }).detach();
+}
+
+void MainWindow::handleTorrentMetadata(BtMetadataResult metadata, const std::string& source)
+{
+    torrentFetchActive_ = false;
+    if (!metadata.ok) {
+        MessageBoxW(hwnd_, toWide("无法读取种子元数据：" + metadata.error).c_str(), L"打开种子",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    TorrentSelection selection;
+    selection.name = toWide(metadata.metadata.name.empty() ? source : metadata.metadata.name);
+    selection.files = metadata.metadata.files;
+    const auto answer = DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_TORRENT_FILES),
+        hwnd_, torrentFilesDialogProc, reinterpret_cast<LPARAM>(&selection));
+    if (answer != IDOK) return;
+    if (selection.selected.empty()) {
+        setNotice("未勾选任何文件，未创建 BT 任务");
+        return;
+    }
+    worker_->postAdd(source, options_.downloadDirectory.string(), true, 0, 0, false,
+        selection.selected);
+    setNotice("已创建 BT 任务：" + std::to_string(selection.selected.size()) + " 个文件");
 }
 
 void MainWindow::showCapabilities()
 {
     MessageBoxW(hwnd_,
         L"本版本已实现：\n"
-        L"• 新建 HTTP 下载（真实传输、真实文件；HTTPS 由传输库支持，但尚未验收 #6）\n"
+        L"• 新建 HTTP/HTTPS 下载与 FTP 下载（真实传输、真实文件）\n"
+        L"• 暂停/续传（保留已下载片段）与资源变化后的确认重下\n"
+        L"• BT/磁力：先读元数据，勾选文件后再下载\n"
         L"• 批量添加（每行一个地址，逐行验证/报告；当前仅提交 HTTP/HTTPS）\n"
         L"• 多选、临时查找（Ctrl+F）、状态筛选、数值/时间排序\n"
         L"• 列顺序/宽度/显示与排序持久化，至少保留“名称”列\n"
@@ -2134,9 +2273,8 @@ void MainWindow::showCapabilities()
         L"• 相同来源默认定位现有任务，可明确另建一份；显示/复制会隐藏 URL 凭据\n"
         L"\n"
         L"尚未实现，因此按钮保持禁用：\n"
-        L"• 暂停/续传（#5）：当前的“停止”不是可续传暂停\n"
-        L"• FTP（#8）、BT/磁力/种子（#9）、ed2k（#12）：引擎接入前不会假报支持\n"
-        L"• 删除任务及文件、重新下载、任务属性、选项 — 后续版本\n",
+        L"• ed2k（#12）：引擎接入前不会假报支持\n"
+        L"• 删除任务及文件、重新下载、选项 — 后续版本\n",
         L"本版本能力说明", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -2152,6 +2290,7 @@ void MainWindow::showAbout()
 void MainWindow::beginClose()
 {
     if (closing_) return;
+    if (torrentFetchCancel_) torrentFetchCancel_->store(true);
     if (deleteDialog_) finishDeleteDialog(false);
     closing_ = true;
     KillTimer(hwnd_, IDT_REFRESH);

@@ -25,6 +25,16 @@ int body()
     check(first != taskIdentity(source + "?v=2"), "different sources have different identities");
     for (const char c : first)
         check((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'), "identity is lowercase hex");
+
+    // A magnet identifies its content by info hash: different trackers or
+    // display names for the same torrent share one identity.
+    const std::string magnet = "magnet:?xt=urn:btih:0123456789012345678901234567890123456789";
+    const auto magnetId = taskIdentity(magnet);
+    checkEqual(magnetId,
+        taskIdentity(magnet + "&dn=another-name&tr=udp%3A%2F%2Ftracker.example%3A80"),
+        "same info hash shares identity regardless of display name and trackers");
+    check(magnetId != taskIdentity("magnet:?xt=urn:btih:abcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+        "different info hashes have different identities");
     return 0;
 }
 } // namespace

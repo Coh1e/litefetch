@@ -1,6 +1,7 @@
 #pragma once
 
 #include "task.h"
+#include "task_service.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -62,14 +63,16 @@ struct WorkerSnapshot {
 // all worker threads before the process exits.
 class TaskWorker {
 public:
-    explicit TaskWorker(std::filesystem::path databasePath, void* notifyWindow = nullptr);
+    explicit TaskWorker(std::filesystem::path databasePath, void* notifyWindow = nullptr,
+        TaskService::BtTransfer btTransfer = {});
     ~TaskWorker();
     TaskWorker(const TaskWorker&) = delete;
     TaskWorker& operator=(const TaskWorker&) = delete;
 
     bool start(std::string& error);
     void postAdd(std::string source, std::string destination, bool autoStart,
-        std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false);
+        std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false,
+        std::vector<int> files = {});
     void postStart(std::string taskId, bool restartFromZero = false,
         std::string username = {}, std::string password = {});
     void postPause(std::string taskId);
@@ -104,6 +107,7 @@ private:
         std::string password;
         std::uint64_t batchId = 0;
         int line = 0;
+        std::vector<int> files;
     };
     struct StartJob {
         std::string taskId;
@@ -129,6 +133,7 @@ private:
     void* notifyWindow_ = nullptr;
     std::unique_ptr<TaskRepository> repository_;
     std::unique_ptr<TaskService> service_;
+    TaskService::BtTransfer btTransfer_;
     std::thread controlThread_;
     std::mutex mutex_;
     std::condition_variable condition_;

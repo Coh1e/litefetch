@@ -12,6 +12,7 @@
 #include <shellapi.h>
 
 #include "batch_dialog.h"
+#include "bt_engine.h"
 #include "batch_input.h"
 #include "columns.h"
 #include "startup.h"
@@ -19,6 +20,7 @@
 #include "task_view.h"
 #include "task_worker.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -122,6 +124,8 @@ private:
     void pasteFromClipboard();
     void handleDrop(HDROP drop);
     void openTorrentBoundary();
+    void beginTorrentAdd(const std::string& source);
+    void handleTorrentMetadata(BtMetadataResult metadata, const std::string& source);
 
     void startSelected();
     void pauseSelected();
@@ -185,6 +189,8 @@ private:
     std::uint64_t lastOutcomeSequence_ = 0;
     std::set<std::string, std::less<>> pendingDeleteIds_;
     std::set<std::string, std::less<>> promptedCredentials_;
+    std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
+    bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;
     std::size_t pendingDeleteTotal_ = 0;
     std::wstring tooltipText_;

@@ -147,7 +147,7 @@ if(WIN32)
         src/win32/batch_dialog.cpp src/win32/batch_dialog.h)
     target_compile_definitions(litefetch-win32-ui PUBLIC UNICODE _UNICODE)
     target_link_libraries(litefetch-win32-ui PUBLIC litefetch-ui-model litefetch-win32-runtime
-        PRIVATE comctl32 shell32 ole32 shlwapi)
+        PRIVATE litefetch-bt comctl32 shell32 ole32 shlwapi)
     if(MSVC)
         target_compile_options(litefetch-win32-ui PRIVATE /W4 /permissive- /utf-8)
     endif()
@@ -155,7 +155,7 @@ if(WIN32)
         src/win32/main.cpp
         src/win32/app.manifest
         src/win32/win32.rc)
-    target_link_libraries(litefetch-win32 PRIVATE litefetch-win32-ui
+    target_link_libraries(litefetch-win32 PRIVATE litefetch-win32-ui litefetch-bt
         comctl32 shell32 ole32 shlwapi)
     if(MSVC)
         target_compile_options(litefetch-win32 PRIVATE /W4 /permissive- /utf-8)
