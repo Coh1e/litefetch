@@ -26,6 +26,10 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <thread>
+#include <thread>
+#include <cstdio>
+#include <cstdio>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -125,8 +129,24 @@ void bitTorrentRoundTrip()
     const auto skipped = std::filesystem::file_size(downloadDirectory / "data" / "skip.bin", error);
     check(error || skipped == 0, "the unselected file was not downloaded");
 
-}
+    // Damage repair: corrupt a byte, then verify. The recheck must notice the
+    // bad piece and fetch it again instead of reporting success.
+    {
+        auto damaged = readFile(downloadDirectory / "data" / "keep.bin");
+        damaged[1000] = static_cast<char>(damaged[1000] ^ 0x7f);
+        writeFile(downloadDirectory / "data" / "keep.bin", damaged);
+    }
+    BtDownloadRequest verifyRequest = request;
+    verifyRequest.forceVerify = true;
+    verifyRequest.resumePath = (root.path() / "repair.resume").string();
+    const auto repaired = btDownload(verifyRequest, cancelled);
+    check(repaired.ok, ("verify run failed: " + repaired.error).c_str());
+    check(readFile(downloadDirectory / "data" / "keep.bin") == keep,
+        "the corrupted piece was repaired from the peer");
+    check(std::filesystem::exists(verifyRequest.resumePath),
+        "the finished transfer left resume data behind");
 
+}
 } // namespace
 
 int main()
