@@ -252,6 +252,10 @@ CommandResult TaskService::start(const StartTaskCommand& command)
                 request.choices.push_back(BtFileChoice{task.files[position], priority});
             }
             request.trackers = task.trackers;
+            // Fast resume: the engine keeps its piece map next to the data so a
+            // restart continues instead of rechecking every piece.
+            request.resumePath = (std::filesystem::path(task.destination)
+                / (".litefetch-" + task.id + ".resume")).string();
             try {
                 const auto result = btTransfer_(request, *active->cancelled,
                     [&](const BtProgressInfo& update) {

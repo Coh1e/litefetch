@@ -44,6 +44,14 @@ struct BtMetadataResult {
 BtMetadataResult btFetchMetadata(const std::string& source, const std::string& workingDirectory,
     int timeoutMillis, const std::atomic_bool& cancelled);
 
+// What to do once every wanted piece is on disk. 0 stops, 1 seeds until the
+// upload/download ratio is reached, 2 seeds for a number of minutes.
+struct BtSeedPolicy {
+    int mode = 0;
+    double ratioLimit = 1.0;
+    int minutesLimit = 0;
+};
+
 struct BtDownloadRequest {
     std::string source;      // magnet link or .torrent path
     std::string savePath;    // directory that receives the torrent's files
@@ -53,13 +61,26 @@ struct BtDownloadRequest {
     // Extra peers ("host:port") to connect immediately, used by the local swarm
     // tests and by the explicit peer entry a later ticket will surface.
     std::vector<std::string> peers;
+    // Where fast-resume data lives. It lets a restart continue without a full
+    // recheck, and it is rewritten when the transfer stops.
+    std::string resumePath;
+    // Recheck every piece before trusting what is on disk. This is how damaged
+    // data is found and repaired; a plain restart trusts the resume data.
+    bool forceVerify = false;
+    BtSeedPolicy seedPolicy;
 };
 
 struct BtProgressInfo {
     std::int64_t received = 0;
     std::int64_t total = -1;
     std::int32_t peers = 0;
+    std::int32_t seeds = 0;
     double rateBytesPerSecond = 0.0;
+    std::int64_t uploaded = 0;
+    double uploadBytesPerSecond = 0.0;
+    bool seeding = false;
+    // Loopback port the session listens on; 0 until the socket is open.
+    std::int32_t listenPort = 0;
 };
 
 struct BtDownloadResult {
@@ -67,6 +88,8 @@ struct BtDownloadResult {
     bool cancelled = false;
     std::string error;
     std::int64_t received = 0;
+    std::int64_t uploaded = 0;
+    bool seeding = false;
 };
 
 // Blocking transfer on the calling thread, like the HTTP engine. Only the
