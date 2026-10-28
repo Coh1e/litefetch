@@ -1076,10 +1076,26 @@ bool MainWindow::createControls()
     layoutStatusParts();
     DragAcceptFiles(hwnd_, TRUE);
 
+    // ed2k servers come from ed2k-servers.txt next to the database (one
+    // host:port per line) until the settings dialog owns this list.
+    std::vector<Ed2kServerEndpoint> ed2kServers;
+    {
+        std::ifstream servers(options_.databasePath.parent_path() / "ed2k-servers.txt");
+        std::string line;
+        while (std::getline(servers, line)) {
+            const auto colon = line.rfind(':');
+            if (colon == std::string::npos) continue;
+            const auto port = std::atoi(line.c_str() + colon + 1);
+            if (port <= 0 || port > 65535) continue;
+            ed2kServers.push_back({line.substr(0, colon), static_cast<std::uint16_t>(port)});
+        }
+    }
     worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_, btDownload,
-        [](const Ed2kTaskRequest& request, const std::atomic_bool& cancelled,
+        [ed2kServers](const Ed2kTaskRequest& request, const std::atomic_bool& cancelled,
             const std::function<void(std::int64_t, std::int64_t)>& progress) {
-            return downloadEd2kTask(request, cancelled, progress);
+            auto withServers = request;
+            withServers.servers = ed2kServers;
+            return downloadEd2kTask(withServers, cancelled, progress);
         });
     std::string error;
     if (!worker_->start(error)) {
