@@ -2,6 +2,7 @@
 
 #include "batch_dialog.h"
 #include "bt_engine.h"
+#include "ed2k_task.h"
 #include "column_dialog.h"
 #include "explorer_target.h"
 #include "new_download_dialog.h"
@@ -1075,7 +1076,11 @@ bool MainWindow::createControls()
     layoutStatusParts();
     DragAcceptFiles(hwnd_, TRUE);
 
-    worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_, btDownload);
+    worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_, btDownload,
+        [](const Ed2kTaskRequest& request, const std::atomic_bool& cancelled,
+            const std::function<void(std::int64_t, std::int64_t)>& progress) {
+            return downloadEd2kTask(request, cancelled, progress);
+        });
     std::string error;
     if (!worker_->start(error)) {
         MessageBoxW(hwnd_, toWide("无法打开任务数据库：" + error).c_str(), L"lite fetch",

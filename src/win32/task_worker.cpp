@@ -18,9 +18,9 @@
 namespace litefetch {
 
 TaskWorker::TaskWorker(std::filesystem::path databasePath, void* notifyWindow,
-    TaskService::BtTransfer btTransfer)
+    TaskService::BtTransfer btTransfer, TaskService::Ed2kTransfer ed2kTransfer)
     : databasePath_(std::move(databasePath)), notifyWindow_(notifyWindow),
-      btTransfer_(std::move(btTransfer))
+      btTransfer_(std::move(btTransfer)), ed2kTransfer_(std::move(ed2kTransfer))
 {
 }
 
@@ -41,7 +41,7 @@ bool TaskWorker::start(std::string& error)
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total, progress.peers);
             },
-            btTransfer_);
+            btTransfer_, ed2kTransfer_);
         // A running row can only come from a previous process that died; a
         // restart shows it as paused instead of resuming silently.
         service_->pauseInterrupted();

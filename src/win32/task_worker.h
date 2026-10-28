@@ -66,7 +66,7 @@ struct WorkerSnapshot {
 class TaskWorker {
 public:
     explicit TaskWorker(std::filesystem::path databasePath, void* notifyWindow = nullptr,
-        TaskService::BtTransfer btTransfer = {});
+        TaskService::BtTransfer btTransfer = {}, TaskService::Ed2kTransfer ed2kTransfer = {});
     ~TaskWorker();
     TaskWorker(const TaskWorker&) = delete;
     TaskWorker& operator=(const TaskWorker&) = delete;
@@ -150,6 +150,7 @@ private:
     std::unique_ptr<TaskRepository> repository_;
     std::unique_ptr<TaskService> service_;
     TaskService::BtTransfer btTransfer_;
+    TaskService::Ed2kTransfer ed2kTransfer_;
     std::thread controlThread_;
     std::mutex mutex_;
     std::condition_variable condition_;
