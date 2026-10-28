@@ -180,6 +180,90 @@ void siteAuthentication(const std::filesystem::path& root)
     check(!std::filesystem::exists(secure), "a failed TLS transfer published a file");
 }
 
+void segmentedTransfer(const std::filesystem::path& root)
+{
+    const auto body = payload(6 * 1024 * 1024);
+    HttpFixture server(HttpFixture::Options{body});
+    const auto destination = root / "segmented.bin";
+    const auto database = root / "segmented.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto started = service.execute(StartTaskCommand{added.task.id});
+    require(started.ok, "segmented start was not committed: " + started.error);
+    require(started.task.state == TaskState::Completed,
+        "segmented transfer did not complete: " + started.task.error);
+    check(readFile(destination) == body, "segmented download is not byte-identical");
+    require(server.requestCount() >= 5,
+        "one probe plus four ranges were not requested (got "
+            + std::to_string(server.requestCount()) + ")");
+    checkNoStaging(root, "segmented.bin");
+}
+
+void noRangeFallback(const std::filesystem::path& root)
+{
+    const auto body = payload(6 * 1024 * 1024);
+    HttpFixture::Options options{body};
+    options.supportsRange = false;
+    HttpFixture server(options);
+    const auto destination = root / "no-range-large.bin";
+    const auto database = root / "no-range-large.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto started = service.execute(StartTaskCommand{added.task.id});
+    require(started.ok, "fallback start was not committed: " + started.error);
+    require(started.task.state == TaskState::Completed,
+        "a server without range support did not complete: " + started.task.error);
+    check(readFile(destination) == body, "fallback download is not byte-identical");
+    checkNoStaging(root, "no-range-large.bin");
+}
+
+void cancelSegmentedKeepsPrefix(const std::filesystem::path& root)
+{
+    const auto body = payload(6 * 1024 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 16 * 1024, std::chrono::milliseconds(10)});
+    const auto destination = root / "segment-cancel.bin";
+    const auto database = root / "segment-cancel.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+
+    std::promise<CommandResult> finished;
+    auto result = finished.get_future();
+    std::jthread worker([&] { finished.set_value(service.execute(StartTaskCommand{added.task.id})); });
+    // Wait for the first range to start writing, then cancel while the other
+    // ranges are still in flight.
+    auto segmentPath = std::filesystem::path(partialPathFor(destination));
+    segmentPath += ".seg0";
+    require(waitFor([&] {
+        std::error_code error;
+        return std::filesystem::file_size(segmentPath, error) > 0 && !error;
+    }, std::chrono::seconds(20)), "no range started writing");
+
+    const auto paused = service.execute(PauseTaskCommand{added.task.id});
+    require(paused.ok, "pause failed: " + paused.error);
+    const auto firstRun = result.get();
+    worker.join();
+    require(firstRun.task.state == TaskState::Paused, "segmented pause did not commit");
+    check(!std::filesystem::exists(destination), "paused segmented transfer published a file");
+    const auto partial = std::filesystem::path(partialPathFor(destination));
+    require(std::filesystem::exists(partial), "paused segmented transfer kept no prefix");
+    const auto prefix = std::filesystem::file_size(partial);
+    require(prefix > 0, "paused segmented transfer kept no bytes");
+
+    // The next single-stream start resumes from the merged prefix.
+    const auto resumed = service.execute(StartTaskCommand{added.task.id});
+    require(resumed.ok, "resume failed: " + resumed.error);
+    require(resumed.task.state == TaskState::Completed,
+        "resume after a paused segmented run did not complete: " + resumed.task.error);
+    check(readFile(destination) == body, "resumed file after segmentation is not byte-identical");
+    checkNoStaging(root, "segment-cancel.bin");
+}
+
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -483,6 +567,9 @@ int body()
     TempDir root;
     completeRoundTrip(root.path());
     siteAuthentication(root.path());
+    segmentedTransfer(root.path());
+    noRangeFallback(root.path());
+    cancelSegmentedKeepsPrefix(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

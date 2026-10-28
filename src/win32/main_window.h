@@ -14,6 +14,7 @@
 #include "batch_dialog.h"
 #include "batch_input.h"
 #include "columns.h"
+#include "startup.h"
 #include "task_list_model.h"
 #include "task_view.h"
 #include "task_worker.h"
@@ -30,11 +31,6 @@
 #include <vector>
 
 namespace litefetch::ui {
-
-struct AppOptions {
-    std::filesystem::path databasePath;
-    std::filesystem::path downloadDirectory;
-};
 
 // Native main window: OS-drawn caption, native menu, compact toolbar, Details
 // ListView, temporary find overlay and the four-part status bar. Commands are

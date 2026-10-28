@@ -1,5 +1,6 @@
 #include "main_window.h"
 
+#include "startup.h"
 #include "text_utf8.h"
 
 #include <commctrl.h>
@@ -62,29 +63,16 @@ void enablePerMonitorDpi()
     if (setContext) setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
-struct StartupOptions {
-    litefetch::ui::AppOptions window;
-    std::string error;
-};
-
-StartupOptions parseArguments(const std::vector<std::wstring>& arguments)
+// The product fills the defaults from the user's known folders; the shared
+// parser (and its unit test) owns everything after the executable name.
+litefetch::ui::StartupOptions parseArguments(const std::vector<std::wstring>& arguments)
 {
-    StartupOptions options;
-    options.window.databasePath = knownFolder(FOLDERID_LocalAppData) / L"LiteFetch" / L"tasks.db";
-    options.window.downloadDirectory = knownFolder(FOLDERID_Downloads);
-    if (options.window.downloadDirectory.empty())
-        options.window.downloadDirectory = std::filesystem::current_path();
-    for (std::size_t index = 1; index < arguments.size(); ++index) {
-        const auto& argument = arguments[index];
-        if (argument == L"--db" && index + 1 < arguments.size()) {
-            options.window.databasePath = arguments[++index];
-        } else if (argument == L"--download-dir" && index + 1 < arguments.size()) {
-            options.window.downloadDirectory = arguments[++index];
-        } else {
-            options.error = "unknown option; usage: litefetch-win32 [--db <path>] [--download-dir <path>]";
-        }
-    }
-    return options;
+    litefetch::ui::AppOptions defaults;
+    defaults.databasePath = knownFolder(FOLDERID_LocalAppData) / L"LiteFetch" / L"tasks.db";
+    defaults.downloadDirectory = knownFolder(FOLDERID_Downloads);
+    if (defaults.downloadDirectory.empty())
+        defaults.downloadDirectory = std::filesystem::current_path();
+    return litefetch::ui::parseStartupOptions(defaults, arguments);
 }
 } // namespace
 

@@ -1,9 +1,14 @@
-﻿# Process-level smoke test for the Win32 product.
+# Process-level smoke test for the Win32 product.
 #
 # Everything else about the window is covered in-process by ui-window-tests,
 # which drives the real MainWindow without a second process. This script keeps
 # the one thing that only a real launch can prove: the built exe starts on its
 # own, shows the window, and exits with code 0 when closed.
+#
+# Per ticket acceptance does NOT run this. It belongs to the release check
+# (#28) because it needs a real desktop session and because Windows may ask the
+# signed-in user to confirm an unsigned binary at launch; see
+# docs/adr/0001-acceptance-without-a-second-process.md.
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win32-smoke.ps1
 param(

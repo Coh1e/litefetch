@@ -1,5 +1,6 @@
 #include "http_engine.h"
 
+#include "segmented_transfer.h"
 #include "text_utf8.h"
 
 #include <curl/curl.h>
@@ -26,6 +27,8 @@
 
 namespace litefetch {
 namespace {
+// Below this size the probe round trip costs more than the concurrency saves.
+constexpr std::int64_t segmentMinimumSize = 4 * 1024 * 1024;
 CURLcode initializeCurl()
 {
     static const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -436,6 +439,20 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
         offset = 0;
     }
     meta.source = metaSource;
+
+    // A fresh transfer may use several ranges when the server advertises them
+    // and the resource is big enough. Anything unusual in the probe falls back
+    // to the single-stream path below, which is also the resume path.
+    if (offset == 0 && !cancelled.load()) {
+        const auto probe = probeForSegments(parsedSource.url, username, password, cancelled);
+        if (probe.ok && probe.ranges && probe.total >= segmentMinimumSize) {
+            const int segments = static_cast<int>((std::min)(std::int64_t{4},
+                probe.total / (512 * 1024)));
+            if (segments > 1)
+                return transferSegmented(parsedSource.url, username, password, destination, partial,
+                    metaPath, probe, segments, cancelled, progress);
+        }
+    }
 
     std::ofstream output(partial, std::ios::binary | (offset > 0 ? std::ios::app : std::ios::trunc));
     if (!output) return failure(TransferError::Destination, "cannot create the partial file");

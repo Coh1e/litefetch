@@ -6,6 +6,7 @@
 // this test instead of an external script.
 #include "main_window.h"
 
+#include "columns.h"
 #include "http_fixture.h"
 #include "resource.h"
 #include "task_service.h"
@@ -13,6 +14,7 @@
 #include "test_support.h"
 
 #include <commctrl.h>
+#include <gdiplus.h>
 #include <ole2.h>
 #include <uiautomation.h>
 
@@ -104,6 +106,115 @@ int listClientWidth(HWND list)
     RECT client{};
     GetClientRect(list, &client);
     return static_cast<int>(client.right - client.left);
+}
+
+std::wstring itemText(HWND list, int row, int column)
+{
+    wchar_t text[512]{};
+    LVITEMW item{};
+    item.iSubItem = column;
+    item.pszText = text;
+    item.cchTextMax = 512;
+    SendMessageW(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item));
+    return text;
+}
+
+int rowOf(HWND list, const std::wstring& name)
+{
+    const int count = static_cast<int>(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+    for (int row = 0; row < count; ++row)
+        if (itemText(list, row, 0) == name) return row;
+    return -1;
+}
+
+bool commandEnabled(HWND toolbar, int command)
+{
+    return SendMessageW(toolbar, TB_ISBUTTONENABLED, static_cast<WPARAM>(command), 0) != 0;
+}
+
+std::wstring clipboardText()
+{
+    std::wstring text;
+    if (!OpenClipboard(nullptr)) return text;
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* characters = static_cast<const wchar_t*>(GlobalLock(data))) {
+            text = characters;
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
+// The live ListView must show exactly what the layout model computes for its own
+// client width and DPI; this is the seam between the Figma pitches and the real
+// control. Only valid while the column settings are still the defaults.
+void checkColumnGeometry(HWND handle, HWND list, const char* label)
+{
+    const int client = listClientWidth(list);
+    const int dpi = static_cast<int>(GetDpiForWindow(handle));
+    const auto expected = columnWidths(defaultColumnSettings(), client, dpi);
+    std::string detail = std::string(label) + ": dpi=" + std::to_string(dpi)
+        + " client=" + std::to_string(client) + " widths=";
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        const int actual = static_cast<int>(SendMessageW(list, LVM_GETCOLUMNWIDTH,
+            static_cast<WPARAM>(index), 0));
+        detail += std::to_string(actual) + "/" + std::to_string(expected[index]) + " ";
+        if (actual != expected[index]) throw std::runtime_error(detail + "(" + label + ")");
+    }
+    check(static_cast<int>(expected.size()) == headerColumnCount(list),
+        "layout model and list agree on the column count");
+}
+
+int pngEncoder(CLSID& encoder)
+{
+    UINT count = 0;
+    UINT size = 0;
+    if (Gdiplus::GetImageEncodersSize(&count, &size) != Gdiplus::Ok || size == 0) return -1;
+    std::vector<BYTE> buffer(size);
+    auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if (Gdiplus::GetImageEncoders(count, size, encoders) != Gdiplus::Ok) return -1;
+    for (UINT index = 0; index < count; ++index) {
+        if (wcscmp(encoders[index].MimeType, L"image/png") == 0) {
+            encoder = encoders[index].Clsid;
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+// Evidence screenshots are produced here instead of by an external driver: the
+// window is already on this thread, so PrintWindow needs no desktop session and
+// steals no foreground. Skipped unless LITEFETCH_EVIDENCE_DIR is set.
+void captureWindow(HWND handle, const std::string& name)
+{
+    const auto directory = environmentValue("LITEFETCH_EVIDENCE_DIR");
+    if (directory.empty()) return;
+    RECT rect{};
+    if (!GetWindowRect(handle, &rect)) return;
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return;
+
+    const HDC screen = GetDC(nullptr);
+    const HDC memory = CreateCompatibleDC(screen);
+    const HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height);
+    const HGDIOBJ previous = SelectObject(memory, bitmap);
+    const BOOL printed = PrintWindow(handle, memory, 2 /* PW_RENDERFULLCONTENT */);
+    SelectObject(memory, previous);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    CLSID encoder{};
+    if (printed && pngEncoder(encoder) >= 0) {
+        const Gdiplus::Bitmap image(bitmap, nullptr);
+        const auto path = std::filesystem::path(directory) / (name + ".png");
+        image.Save(path.wstring().c_str(), &encoder, nullptr);
+    }
+    DeleteObject(bitmap);
+    check(printed != FALSE, "PrintWindow captured the window for evidence");
 }
 
 
@@ -244,6 +355,20 @@ void runChecks()
         check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4; }, 5000),
             "seeded tasks reach the list");
         checkAutomationSurface(handle, 4);
+        checkColumnGeometry(handle, list, "default window");
+        captureWindow(handle, "ui-window-default");
+
+        // A queued task: start is available, pause is not, and the link is
+        // copied from the same row the user selected.
+        const int queuedRow = rowOf(list, L"one.bin");
+        check(queuedRow >= 0, "the seeded queued task is visible by name");
+        selectRow(list, queuedRow);
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_COPY_LINK, 0), 0);
+        check(clipboardText() == L"http://example.invalid/one.bin",
+            "copy link puts the selected task source on the clipboard");
+        check(commandEnabled(toolbar, ID_TASK_START), "start is enabled for a queued task");
+        check(!commandEnabled(toolbar, ID_TASK_PAUSE), "pause is disabled for a queued task");
+        captureWindow(handle, "ui-window-queued");
 
         // Commands are synchronous: when the send returns, the handler has run.
         const HWND searchEdit = GetDlgItem(handle, IDC_SEARCH);
@@ -265,11 +390,27 @@ void runChecks()
         // Start the real transfer from the list and wait for the published file.
         selectRow(list, 2);
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
-        check(pumpUntil([&] {
+        const bool published = pumpUntil([&] {
             std::error_code error;
             return std::filesystem::file_size(destination, error) == body.size();
-        }, 30000), "starting the task publishes the downloaded file");
+        }, 30000);
+        if (!published) {
+            std::string detail = "status=" + std::string(statusText(status, 0).begin(),
+                statusText(status, 0).end());
+            detail += " | error=" + std::string(statusText(status, 3).begin(), statusText(status, 3).end());
+            detail += " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+            throw std::runtime_error("download did not publish: " + detail);
+        }
         check(readBytes(destination) == body, "downloaded bytes match the controlled peer");
+
+        const int completedRow = rowOf(list, L"payload.bin");
+        check(completedRow >= 0, "the downloaded task is visible by name");
+        check(itemText(list, completedRow, 2) == L"100.0%", "completed row reports 100.0% progress");
+        check(itemText(list, completedRow, 5) == L"已完成", "completed row reports the completed status");
+        selectRow(list, completedRow);
+        check(!commandEnabled(toolbar, ID_TASK_START), "start is disabled for a completed task");
+        check(!commandEnabled(toolbar, ID_TASK_STOP), "stop is disabled for a completed task");
+        captureWindow(handle, "ui-window-completed");
 
         // Deleting the record must keep the downloaded file.
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_DELETE, 0), 0);
@@ -323,12 +464,15 @@ void runChecks()
 
         // Layout at both extremes: the columns always cover the client width.
         check(listColumnWidthSum(list) == listClientWidth(list), "columns fill the default width");
+        checkColumnGeometry(handle, list, "restored default window");
         SetWindowPos(handle, nullptr, 0, 0, 700, 480, SWP_NOMOVE | SWP_NOZORDER);
         check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
             "columns fill a narrow window");
+        checkColumnGeometry(handle, list, "narrow window");
         SetWindowPos(handle, nullptr, 0, 0, 1200, 800, SWP_NOMOVE | SWP_NOZORDER);
         check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
             "columns fill a wide window");
+        checkColumnGeometry(handle, list, "wide window");
 
         // A header drag is the only way the window saves a column width.
         const HWND header = childOfClass(list, L"SysHeader32");
@@ -413,11 +557,15 @@ int main()
     common.dwICC = ICC_WIN95_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&common);
     if (FAILED(OleInitialize(nullptr))) return 1;
+    Gdiplus::GdiplusStartupInput gdiplusInput;
+    ULONG_PTR gdiplusToken = 0;
+    if (Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr) != Gdiplus::Ok) return 1;
 
     const int result = run("ui-window", [] {
         runChecks();
         return 0;
     });
+    Gdiplus::GdiplusShutdown(gdiplusToken);
     OleUninitialize();
     return result;
 }

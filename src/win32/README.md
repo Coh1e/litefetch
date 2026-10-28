@@ -19,8 +19,8 @@ target.
   pixels, like `flex-[1_0_0]`. Below that width all six columns shrink
   proportionally, so 状态 never collapses to 0/1 px and there is no cliff at
   the threshold. Widths scale with DPI and are recomputed on resize;
-  `scripts/win32-e2e.ps1` asserts the real ListView widths, the wide resize,
-  the narrow widths at 900/763/762/761 px, and the restored design layout.
+  `ui-window` asserts that the live ListView shows exactly the widths
+  `columnWidths()` computes for its own client width and DPI.
 - "新建下载" native dialog: one HTTP address (the engine accepts HTTPS, but
   this ticket only exercises HTTP; HTTPS is #6), explicit save folder,
   `浏览...`, "添加后立即开始". The file name is derived from the URL and the
@@ -64,28 +64,35 @@ and acceptance runs and write only to the given project-local paths.
 
 ## Tests
 
+Acceptance for a ticket is one command. It never launches a second process:
+
 ```powershell
-ctest --test-dir out/build/windows-core --output-on-failure
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win32-e2e.ps1
+test-local.cmd
 ```
 
 - `ui-window` — creates the real main window in-process and drives it with the
   same commands a user would: search overlay, filters, status parts, toolbar
-  toggle, a real HTTP download started from the list, delete-record-keeps-file,
-  the open-folder failure dialog, column drag and persistence across a reopen,
-  the UI Automation surface, and a clean close (exit code 0). Dialogs are
-  dismissed with a callback timer, so nothing races a second process.
+  toggle, the live column geometry against `columnWidths()`, toolbar enablement
+  for a queued and a completed task, copy link into the clipboard, a real HTTP
+  download started from the list, delete-record-keeps-file, the open-folder
+  decision, column drag and persistence across a reopen, the UI Automation
+  surface, and a clean close (exit code 0). Dialogs are dismissed with a
+  callback timer, so nothing races a second process. With
+  `LITEFETCH_EVIDENCE_DIR` set (ctest sets it to `.pi/evidence/ui-window`) it
+  also writes PNG screenshots of the window through `PrintWindow`.
 - `ui-model` — column formatting, measured speed/remaining time, status
-  parts, action enablement and URL/file-name parsing (no window needed).
+  parts, action enablement, URL/file-name parsing, the startup command line and
+  the Explorer target of `打开文件夹` (no window needed).
 - `ui-worker` — the real worker threads against a controlled HTTP peer:
   add+start completion, cancel, close-during-download shutdown and the
   no-publish/no-staging guarantees.
 - `core-unicode-path` — a Chinese destination directory/file and a Chinese
   database path survive the UTF-8 command boundary.
-- `scripts/win32-smoke.ps1` — the only check that needs a real launch: the
-  built exe starts, shows the window and exits with code 0. Everything else
-  about the window is covered in-process, so ordinary runs never touch a
-  second process, its dialogs or its timers.
+- `scripts/win32-smoke.ps1` — not part of ticket acceptance. It is the release
+  check (#28): the built exe starts, shows its window and exits with code 0.
+  It needs a real desktop session, and Windows may ask the signed-in user to
+  confirm an unsigned binary, which is exactly why nothing else runs it. See
+  [ADR-0001](../../docs/adr/0001-acceptance-without-a-second-process.md).
 
 ## Icons
 

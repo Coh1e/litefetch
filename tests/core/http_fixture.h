@@ -131,6 +131,7 @@ private:
         const auto lineEnd = request.find("\r\n");
         const auto firstSpace = request.find(' ');
         if (lineEnd == std::string::npos || firstSpace == std::string::npos) return;
+        const std::string method = request.substr(0, firstSpace);
         const auto secondSpace = request.find(' ', firstSpace + 1);
         if (secondSpace == std::string::npos) return;
         const std::string path = request.substr(firstSpace + 1, secondSpace - firstSpace - 1);
@@ -178,6 +179,7 @@ private:
         }
 
         std::size_t start = 0;
+        std::size_t end = options_.body.size() == 0 ? 0 : options_.body.size() - 1;
         const std::string range = header("Range");
         const std::string ifRange = header("If-Range");
         bool partial = false;
@@ -193,6 +195,17 @@ private:
                     const bool validatorMatches = ifRange.empty() || ifRange == options_.etag;
                     if (validatorMatches && requested < options_.body.size()) {
                         start = requested;
+                        // Honor the requested end: a segment asks for one slice,
+                        // not the rest of the file.
+                        const auto endText = range.substr(dash + 1);
+                        if (!endText.empty()) {
+                            std::size_t requestedEnd = 0;
+                            if (std::from_chars(endText.data(), endText.data() + endText.size(),
+                                    requestedEnd).ec == std::errc{}
+                                && requestedEnd >= start && requestedEnd < options_.body.size()) {
+                                end = requestedEnd;
+                            }
+                        }
                         partial = true;
                     } else if (validatorMatches && requested >= options_.body.size()) {
                         const std::string response = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */"
@@ -204,25 +217,28 @@ private:
             }
         }
 
-        const std::size_t remaining = options_.body.size() - start;
+        const std::size_t remaining = end + 1 - start;
         std::string head = partial ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n";
         head += "Content-Type: application/octet-stream\r\n";
         head += "ETag: " + options_.etag + "\r\n";
+        if (options_.supportsRange) head += "Accept-Ranges: bytes\r\n";
         head += "Content-Length: " + std::to_string(remaining) + "\r\n";
         if (partial) {
             head += "Content-Range: bytes " + std::to_string(start) + "-"
-                + std::to_string(options_.body.size() - 1) + "/"
-                + std::to_string(options_.body.size()) + "\r\n";
+                + std::to_string(end) + "/" + std::to_string(options_.body.size()) + "\r\n";
         }
         head += "Connection: close\r\n\r\n";
         if (!sendAll(client, head.data(), head.size())) return;
+        // A HEAD probe gets headers only. Sending a body here would block the
+        // single-connection fixture once the client stops reading it.
+        if (method == "HEAD") return;
 
         const std::size_t chunk = options_.chunk == 0 ? remaining : options_.chunk;
-        for (std::size_t offset = start; offset < options_.body.size(); offset += chunk) {
+        for (std::size_t offset = start; offset <= end && offset < options_.body.size(); offset += chunk) {
             if (stopping_.load()) return;
             if (options_.chunkDelay.count() > 0)
                 std::this_thread::sleep_for(options_.chunkDelay);
-            const auto size = (std::min)(chunk, options_.body.size() - offset);
+            const auto size = (std::min)(chunk, end + 1 - offset);
             if (!sendAll(client, reinterpret_cast<const char*>(options_.body.data() + offset), size)) return;
         }
     }

@@ -17,6 +17,7 @@ add_library(litefetch-core STATIC
     src/core/task_store.cpp src/core/task_store.h
     src/core/text_utf8.cpp src/core/text_utf8.h
     src/core/http_engine.cpp src/core/http_engine.h
+    src/core/segmented_transfer.cpp src/core/segmented_transfer.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
@@ -35,6 +36,8 @@ add_library(litefetch-ui-model STATIC
     src/win32/columns.cpp src/win32/columns.h
     src/win32/task_view.cpp src/win32/task_view.h
     src/win32/batch_input.cpp src/win32/batch_input.h
+    src/win32/startup.cpp src/win32/startup.h
+    src/win32/explorer_target.cpp src/win32/explorer_target.h
     src/win32/task_list_model.cpp src/win32/task_list_model.h)
 target_include_directories(litefetch-ui-model PUBLIC src/win32)
 target_link_libraries(litefetch-ui-model PUBLIC litefetch-core)
@@ -68,7 +71,7 @@ if(BUILD_TESTING)
     add_executable(core-service-tests tests/core/service_test.cpp)
     target_link_libraries(core-service-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME core-service COMMAND core-service-tests)
-    set_tests_properties(core-service PROPERTIES TIMEOUT 60)
+    set_tests_properties(core-service PROPERTIES TIMEOUT 240)
     add_executable(core-storage-failure-tests tests/core/storage_failure_test.cpp)
     target_link_libraries(core-storage-failure-tests PRIVATE litefetch-core unofficial::sqlite3::sqlite3)
     add_test(NAME core-storage-failure COMMAND core-storage-failure-tests)
@@ -150,10 +153,10 @@ if(WIN32)
         # race a second process, its dialogs or its timers.
         add_executable(ui-window-tests tests/win32/window_test.cpp src/win32/win32.rc)
         target_include_directories(ui-window-tests PRIVATE tests/core)
-        target_link_libraries(ui-window-tests PRIVATE litefetch-win32-ui uiautomationcore oleaut32)
+        target_link_libraries(ui-window-tests PRIVATE litefetch-win32-ui uiautomationcore oleaut32 gdiplus)
         add_test(NAME ui-window COMMAND ui-window-tests)
         set_tests_properties(ui-window PROPERTIES TIMEOUT 90
-            ENVIRONMENT "LITEFETCH_TEST_TEMP=${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
+            ENVIRONMENT "LITEFETCH_TEST_TEMP=${CMAKE_SOURCE_DIR}/tmp/core-test-temp;LITEFETCH_EVIDENCE_DIR=${CMAKE_SOURCE_DIR}/.pi/evidence/ui-window")
         if(MSVC)
             target_compile_options(ui-window-tests PRIVATE /W4 /permissive- /utf-8)
         endif()

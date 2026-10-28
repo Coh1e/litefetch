@@ -5,6 +5,8 @@
 #include "ui_text.h"
 #include "url_filename.h"
 #include "list_layout.h"
+#include "explorer_target.h"
+#include "startup.h"
 
 #include <algorithm>
 #include <array>
@@ -282,6 +284,78 @@ void pauseAndResumeRows()
     check(model.actionsFor("refused").start, "a refused resume can be started again");
 }
 
+// The command line is the only startup logic with branches; the rest of wWinMain
+// is Win32 boilerplate that only a real launch can exercise.
+void startupOptions()
+{
+    AppOptions defaults;
+    defaults.databasePath = "D:/LiteFetch/tasks.db";
+    defaults.downloadDirectory = "D:/Downloads";
+
+    auto options = parseStartupOptions(defaults, {L"litefetch-win32.exe"});
+    check(options.error.empty(), "no arguments means no error");
+    check(options.window.databasePath == defaults.databasePath, "no arguments keeps the default database");
+    check(options.window.downloadDirectory == defaults.downloadDirectory,
+        "no arguments keeps the default download folder");
+
+    options = parseStartupOptions(defaults, {L"litefetch-win32.exe", L"--db", L"D:/run/tasks.db"});
+    check(options.error.empty() && options.window.databasePath == L"D:/run/tasks.db",
+        "--db overrides the database");
+    check(options.window.downloadDirectory == defaults.downloadDirectory,
+        "--db leaves the download folder alone");
+
+    options = parseStartupOptions(defaults, {L"litefetch-win32.exe", L"--download-dir", L"D:/run/out"});
+    check(options.error.empty() && options.window.downloadDirectory == L"D:/run/out",
+        "--download-dir overrides the download folder");
+    check(options.window.databasePath == defaults.databasePath,
+        "--download-dir leaves the database alone");
+
+    options = parseStartupOptions(defaults,
+        {L"litefetch-win32.exe", L"--db", L"D:/run/tasks.db", L"--download-dir", L"D:/run/out"});
+    check(options.error.empty() && options.window.databasePath == L"D:/run/tasks.db"
+            && options.window.downloadDirectory == L"D:/run/out",
+        "both acceptance switches apply together");
+
+    options = parseStartupOptions(defaults, {L"litefetch-win32.exe", L"--db"});
+    check(options.error.find("usage:") != std::string::npos,
+        "a switch without its value reports the usage text");
+    check(options.window.databasePath == defaults.databasePath,
+        "a broken command line keeps the default database");
+
+    options = parseStartupOptions(defaults, {L"litefetch-win32.exe", L"--unknown"});
+    check(!options.error.empty(), "an unknown switch is an error");
+}
+
+// `打开文件夹` decides between selecting the finished file and opening its
+// folder; the launch of Explorer itself stays out of the test.
+void explorerTarget()
+{
+    const auto root = std::filesystem::temp_directory_path() / "litefetch-explorer-target";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "downloads", error);
+    const auto file = root / "downloads" / "payload.bin";
+    {
+        std::ofstream output(file, std::ios::binary);
+        output << 'x';
+    }
+
+    const auto finished = explorerCommandLine(file);
+    check(finished.has_value(), "an existing file has an Explorer target");
+    check(finished.has_value() && *finished == L"/select,\"" + file.wstring() + L"\"",
+        "an existing file is selected in its folder");
+
+    const auto missingFile = explorerCommandLine(root / "downloads" / "gone.bin");
+    check(missingFile.has_value() && *missingFile == L"\"" + (root / "downloads").wstring() + L"\"",
+        "a missing file falls back to its folder");
+
+    check(!explorerCommandLine(root / "no-such-folder" / "gone.bin").has_value(),
+        "a missing folder has no Explorer target");
+    check(!explorerCommandLine({}).has_value(), "an empty destination has no Explorer target");
+
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 int main()
@@ -290,6 +364,8 @@ int main()
         formatting();
         sourceParsing();
         listLayout();
+        startupOptions();
+        explorerTarget();
         modelProgressAndActions();
         pauseAndResumeRows();
         std::cout << "ui-model: PASS\n";

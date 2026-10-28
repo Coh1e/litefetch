@@ -3,10 +3,10 @@ setlocal
 cd /d "%~dp0"
 set "TEMP=%CD%\.deps\tmp"
 set "TMP=%CD%\.deps\tmp"
-set "PATH=%CD%\.deps\installed\x64-windows\debug\bin;%PATH%"
+set "PATH=%CD%\.deps\installed-core\x64-windows\debug\bin;%CD%\.deps\installed\x64-windows\debug\bin;%PATH%"
 if "%~1"=="--torrent-selection" goto torrent_selection
 if "%~1"=="--amule-runtime" goto amule_runtime
-"C:\Program Files\JetBrains\CLion 2026.2.3\bin\cmake\win\x64\bin\ctest.exe" --test-dir out/build/windows-local --output-on-failure --no-tests=error %*
+"C:\Program Files\JetBrains\CLion 2026.2.3\bin\cmake\win\x64\bin\ctest.exe" --test-dir out/build/windows-core --output-on-failure --no-tests=error %*
 exit /b %ERRORLEVEL%
 :torrent_selection
 out\build\windows-local\download-torrent-tests.exe --only-selection

@@ -2,6 +2,7 @@
 
 #include "batch_dialog.h"
 #include "column_dialog.h"
+#include "explorer_target.h"
 #include "new_download_dialog.h"
 #include "resource.h"
 #include "task_view.h"
@@ -1893,21 +1894,14 @@ void MainWindow::openFolderSelected()
         MessageBoxW(hwnd_, L"任务保存路径无效。", L"打开文件", MB_OK | MB_ICONERROR);
         return;
     }
-    std::error_code error;
-    std::wstring commandLine;
-    if (std::filesystem::is_regular_file(destination, error)) {
-        commandLine = L"/select,\"" + destination.wstring() + L"\"";
-    } else {
-        const auto parent = destination.parent_path();
-        if (!std::filesystem::is_directory(parent, error)) {
-            MessageBoxW(hwnd_, (L"文件夹不存在或无法访问：\r\n" + parent.wstring()).c_str(),
-                L"打开文件", MB_OK | MB_ICONWARNING);
-            return;
-        }
-        commandLine = L"\"" + parent.wstring() + L"\"";
+    const auto commandLine = explorerCommandLine(destination);
+    if (!commandLine) {
+        MessageBoxW(hwnd_, (L"文件夹不存在或无法访问：\r\n" + destination.parent_path().wstring()).c_str(),
+            L"打开文件", MB_OK | MB_ICONWARNING);
+        return;
     }
     const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", L"explorer.exe",
-        commandLine.c_str(), nullptr, SW_SHOWNORMAL));
+        commandLine->c_str(), nullptr, SW_SHOWNORMAL));
     if (result <= 32) {
         MessageBoxW(hwnd_, (L"无法启动资源管理器。\r\n" + shellErrorText(result)).c_str(),
             L"打开文件", MB_OK | MB_ICONERROR);
