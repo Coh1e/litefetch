@@ -74,10 +74,13 @@ public:
     bool start(std::string& error);
     void postAdd(std::string source, std::string destination, bool autoStart,
         std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false,
-        std::vector<int> files = {}, std::string identity = {});
+        std::vector<int> files = {}, std::string identity = {},
+        std::vector<TorrentFileInfo> torrentFiles = {}, bool torrentPrivate = false);
     void postStart(std::string taskId, bool restartFromZero = false,
         std::string username = {}, std::string password = {});
     void postPause(std::string taskId);
+    void postUpdateTorrent(std::string taskId, std::vector<int> files, std::vector<int> priorities,
+        std::vector<std::string> trackers);
     void postCancel(std::string taskId);
     void postDelete(std::string taskId);
     void postRefresh();
@@ -96,7 +99,7 @@ public:
     WorkerSnapshot snapshot();
 
 private:
-    enum class CommandType { Add, Start, Pause, Cancel, Delete, Refresh };
+    enum class CommandType { Add, Start, Pause, Cancel, Delete, Refresh, UpdateTorrent };
     struct Command {
         CommandType type = CommandType::Refresh;
         std::string source;
@@ -111,6 +114,10 @@ private:
         int line = 0;
         std::vector<int> files;
         std::string identity;
+        std::vector<TorrentFileInfo> torrentFiles;
+        std::vector<int> priorities;
+        std::vector<std::string> trackers;
+        bool torrentPrivate = false;
     };
     struct StartJob {
         std::string taskId;

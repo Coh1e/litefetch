@@ -56,7 +56,7 @@ bool TaskWorker::start(std::string& error)
 
 void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart,
     std::uint64_t batchId, int line, bool allowDuplicate, std::vector<int> files,
-    std::string identity)
+    std::string identity, std::vector<TorrentFileInfo> torrentFiles, bool torrentPrivate)
 {
     Command command;
     command.type = CommandType::Add;
@@ -68,6 +68,8 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     command.allowDuplicate = allowDuplicate;
     command.files = std::move(files);
     command.identity = std::move(identity);
+    command.torrentFiles = std::move(torrentFiles);
+    command.torrentPrivate = torrentPrivate;
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -98,6 +100,23 @@ void TaskWorker::postPause(std::string taskId)
     Command command;
     command.type = CommandType::Pause;
     command.taskId = std::move(taskId);
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
+void TaskWorker::postUpdateTorrent(std::string taskId, std::vector<int> files,
+    std::vector<int> priorities, std::vector<std::string> trackers)
+{
+    Command command;
+    command.type = CommandType::UpdateTorrent;
+    command.taskId = std::move(taskId);
+    command.files = std::move(files);
+    command.priorities = std::move(priorities);
+    command.trackers = std::move(trackers);
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -278,6 +297,8 @@ void TaskWorker::execute(const Command& command)
             add.allowDuplicate = command.allowDuplicate;
             add.files = command.files;
             add.identity = command.identity;
+            add.torrentFiles = command.torrentFiles;
+            add.torrentPrivate = command.torrentPrivate;
             const auto result = service_->execute(add);
             AddResult addResult;
             addResult.batchId = command.batchId;
@@ -307,6 +328,17 @@ void TaskWorker::execute(const Command& command)
             const auto result = service_->execute(CancelTaskCommand{command.taskId});
             if (!result.ok)
                 publishError("停止失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
+        case CommandType::UpdateTorrent: {
+            UpdateTorrentOptionsCommand update;
+            update.taskId = command.taskId;
+            update.files = command.files;
+            update.filePriorities = command.priorities;
+            update.trackers = command.trackers;
+            const auto result = service_->execute(update);
+            if (!result.ok)
+                publishError("属性应用失败: " + (result.error.empty() ? "unknown error" : result.error));
             break;
         }
         case CommandType::Delete: {

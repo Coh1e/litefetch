@@ -16,6 +16,12 @@ enum class TaskState { Queued, Running, Completed, Failed, Cancelled, Paused };
 std::string_view taskStateName(TaskState state);
 std::optional<TaskState> parseTaskState(std::string_view name);
 
+// One file inside a torrent, as reported by the metadata.
+struct TorrentFileInfo {
+    std::string path;
+    std::int64_t size = 0;
+};
+
 struct TaskSnapshot {
     std::string id;
     std::string source;
@@ -33,6 +39,9 @@ struct TaskSnapshot {
     std::vector<int> filePriorities;
     // BitTorrent only: extra trackers the user added for this task.
     std::vector<std::string> trackers;
+    // BitTorrent only: the file list and privacy flag from the metadata.
+    std::vector<TorrentFileInfo> torrentFiles;
+    bool torrentPrivate = false;
     // Live peer count reported by the engine; never persisted.
     int peers = 0;
     std::int64_t createdAt = 0;
@@ -54,6 +63,10 @@ struct AddTaskCommand {
     // content itself, so a magnet and a .torrent for the same torrent share one
     // task even though their source strings differ.
     std::string identity;
+    // BitTorrent only: the metadata the selection dialog showed, kept so the
+    // properties page can list the files without re-fetching.
+    std::vector<TorrentFileInfo> torrentFiles;
+    bool torrentPrivate = false;
 };
 struct StartTaskCommand {
     std::string taskId;
@@ -84,6 +97,8 @@ struct UpdateTorrentOptionsCommand {
     std::vector<int> files;
     std::vector<int> filePriorities;
     std::vector<std::string> trackers;
+    std::vector<TorrentFileInfo> torrentFiles;
+    bool torrentPrivate = false;
 };
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,

@@ -149,6 +149,8 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     task.files = command.files;
     task.filePriorities = command.filePriorities;
     task.trackers = command.trackers;
+    task.torrentFiles = command.torrentFiles;
+    task.torrentPrivate = command.torrentPrivate;
     task.createdAt = nowMillis();
     task.updatedAt = task.createdAt;
     try {

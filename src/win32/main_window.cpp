@@ -333,6 +333,174 @@ INT_PTR CALLBACK torrentFilesDialogProc(HWND dialog, UINT message, WPARAM wParam
     }
 }
 
+struct TorrentDetailsState {
+    std::wstring name;
+    std::wstring state;
+    std::wstring size;
+    std::wstring peers;
+    std::vector<TorrentFileInfo> files;
+    std::vector<int> priorities;
+    std::vector<std::string> trackers;
+    bool privateTorrent = false;
+    bool dirty = false;
+    std::function<void(const TorrentDetailsState&)> apply;
+};
+
+std::wstring priorityText(int priority)
+{
+    if (priority <= 0) return L"跳过";
+    if (priority >= 2) return L"高";
+    return L"正常";
+}
+
+void refreshTorrentFileList(HWND list, const TorrentDetailsState& state)
+{
+    for (std::size_t index = 0; index < state.files.size(); ++index) {
+        const auto text = priorityText(index < state.priorities.size() ? state.priorities[index] : 1);
+        ListView_SetItemText(list, static_cast<int>(index), 2, const_cast<LPWSTR>(text.c_str()));
+    }
+}
+
+// The properties page stages every edit: priority buttons and tracker edits
+// only touch the working copy until 应用 posts the command.
+INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* state = reinterpret_cast<TorrentDetailsState*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        state = reinterpret_cast<TorrentDetailsState*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!state) return FALSE;
+        SetDlgItemTextW(dialog, IDC_TD_NAME, state->name.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_STATE, state->state.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_SIZE, state->size.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_PEERS, state->peers.c_str());
+
+        const HWND files = GetDlgItem(dialog, IDC_TD_FILES);
+        ListView_SetExtendedListViewStyle(files, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        LVCOLUMNW column{};
+        column.mask = LVCF_TEXT | LVCF_WIDTH;
+        column.pszText = const_cast<LPWSTR>(L"文件");
+        column.cx = 350;
+        ListView_InsertColumn(files, 0, &column);
+        column.pszText = const_cast<LPWSTR>(L"大小");
+        column.cx = 80;
+        ListView_InsertColumn(files, 1, &column);
+        column.pszText = const_cast<LPWSTR>(L"优先级");
+        column.cx = 60;
+        ListView_InsertColumn(files, 2, &column);
+        for (std::size_t index = 0; index < state->files.size(); ++index) {
+            const auto& file = state->files[index];
+            const auto path = toWide(file.path);
+            const auto size = toWide(formatSize(file.size));
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(index);
+            item.pszText = const_cast<LPWSTR>(path.c_str());
+            ListView_InsertItem(files, &item);
+            ListView_SetItemText(files, static_cast<int>(index), 1, const_cast<LPWSTR>(size.c_str()));
+        }
+        refreshTorrentFileList(files, *state);
+
+        const HWND trackers = GetDlgItem(dialog, IDC_TD_TRACKERS);
+        ListView_SetExtendedListViewStyle(trackers, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        column.pszText = const_cast<LPWSTR>(L"追踪器");
+        column.cx = 480;
+        ListView_InsertColumn(trackers, 0, &column);
+        for (std::size_t index = 0; index < state->trackers.size(); ++index) {
+            const auto text = toWide(state->trackers[index]);
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(index);
+            item.pszText = const_cast<LPWSTR>(text.c_str());
+            ListView_InsertItem(trackers, &item);
+        }
+
+        // A private torrent may only use the trackers baked into it.
+        if (state->privateTorrent) {
+            EnableWindow(GetDlgItem(dialog, IDC_TD_TRACKER), FALSE);
+            EnableWindow(GetDlgItem(dialog, IDC_TD_ADD), FALSE);
+            EnableWindow(GetDlgItem(dialog, IDC_TD_REMOVE), FALSE);
+            SetDlgItemTextW(dialog, IDC_TD_TRACKER, L"私有种子不可修改追踪器");
+        }
+        EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), FALSE);
+        centerDialog(dialog, GetParent(dialog));
+        return TRUE;
+    }
+    case WM_COMMAND: {
+        const auto id = LOWORD(wParam);
+        if (!state) return FALSE;
+        const HWND files = GetDlgItem(dialog, IDC_TD_FILES);
+        if (id == IDC_TD_SKIP || id == IDC_TD_NORMAL || id == IDC_TD_HIGH) {
+            const int priority = id == IDC_TD_SKIP ? 0 : (id == IDC_TD_HIGH ? 2 : 1);
+            const int selected = ListView_GetNextItem(files, -1, LVNI_SELECTED);
+            int changed = 0;
+            const int first = selected == -1 ? 0 : selected;
+            const int last = selected == -1 ? static_cast<int>(state->priorities.size()) - 1
+                                            : selected;
+            for (int index = first; index <= last && index < static_cast<int>(state->priorities.size());
+                 ++index) {
+                if (index < 0) continue;
+                state->priorities[static_cast<std::size_t>(index)] = priority;
+                ++changed;
+            }
+            if (changed > 0) {
+                refreshTorrentFileList(files, *state);
+                state->dirty = true;
+                EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), TRUE);
+            }
+            return TRUE;
+        }
+        if (id == IDC_TD_ADD) {
+            wchar_t buffer[1024]{};
+            GetDlgItemTextW(dialog, IDC_TD_TRACKER, buffer, 1024);
+            const auto url = utf8FromUtf16(buffer);
+            if (!url.empty()) {
+                state->trackers.push_back(url);
+                const HWND trackers = GetDlgItem(dialog, IDC_TD_TRACKERS);
+                const auto text = toWide(url);
+                LVITEMW item{};
+                item.mask = LVIF_TEXT;
+                item.iItem = static_cast<int>(state->trackers.size()) - 1;
+                item.pszText = const_cast<LPWSTR>(text.c_str());
+                ListView_InsertItem(trackers, &item);
+                SetDlgItemTextW(dialog, IDC_TD_TRACKER, L"");
+                state->dirty = true;
+                EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), TRUE);
+            }
+            return TRUE;
+        }
+        if (id == IDC_TD_REMOVE) {
+            const HWND trackers = GetDlgItem(dialog, IDC_TD_TRACKERS);
+            const int selected = ListView_GetNextItem(trackers, -1, LVNI_SELECTED);
+            if (selected >= 0 && selected < static_cast<int>(state->trackers.size())) {
+                state->trackers.erase(state->trackers.begin() + selected);
+                ListView_DeleteItem(trackers, selected);
+                state->dirty = true;
+                EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), TRUE);
+            }
+            return TRUE;
+        }
+        if (id == IDC_TD_APPLY) {
+            if (state->apply) state->apply(*state);
+            state->dirty = false;
+            EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), FALSE);
+            return TRUE;
+        }
+        if (id == IDOK || id == IDCANCEL) {
+            EndDialog(dialog, id);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    case WM_CLOSE:
+        EndDialog(dialog, IDOK);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 struct PropertyFields {
     std::wstring name;
     std::wstring source;
@@ -1919,6 +2087,34 @@ void MainWindow::showProperties()
 {
     const auto row = rowForId(focusedId());
     if (!row) return;
+    if (!row->torrentFiles.empty()) {
+        TorrentDetailsState state;
+        state.name = toWide(row->name);
+        state.state = toWide(row->status + "  " + row->protocol);
+        state.size = toWide(row->size);
+        state.peers = row->connections.empty() ? L"——" : toWide(row->connections);
+        state.files = row->torrentFiles;
+        state.priorities = row->filePriorities;
+        state.priorities.resize(state.files.size(), 1);
+        state.trackers = row->trackers;
+        state.privateTorrent = row->torrentPrivate;
+        const auto taskId = row->id;
+        state.apply = [this, taskId](const TorrentDetailsState& edited) {
+            std::vector<int> files;
+            std::vector<int> priorities;
+            for (std::size_t index = 0; index < edited.files.size(); ++index) {
+                const int priority = index < edited.priorities.size() ? edited.priorities[index] : 1;
+                if (priority <= 0) continue;
+                files.push_back(static_cast<int>(index));
+                priorities.push_back(priority);
+            }
+            worker_->postUpdateTorrent(taskId, files, priorities, edited.trackers);
+            setNotice("已应用种子设置：" + std::to_string(files.size()) + " 个文件");
+        };
+        DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_TORRENT_DETAILS), hwnd_,
+            torrentDetailsDialogProc, reinterpret_cast<LPARAM>(&state));
+        return;
+    }
     PropertyFields fields;
     fields.name = toWide(row->name);
     fields.source = toWide(row->address);
@@ -2253,8 +2449,12 @@ void MainWindow::handleTorrentMetadata(BtMetadataResult metadata, const std::str
         setNotice("未勾选任何文件，未创建 BT 任务");
         return;
     }
+    std::vector<TorrentFileInfo> files;
+    for (const auto& file : metadata.metadata.files)
+        files.push_back(TorrentFileInfo{file.path, file.size});
     worker_->postAdd(source, options_.downloadDirectory.string(), true, 0, 0, false,
-        selection.selected, metadata.metadata.infoHash);
+        selection.selected, metadata.metadata.infoHash, std::move(files),
+        metadata.metadata.isPrivate);
     setNotice("已创建 BT 任务：" + std::to_string(selection.selected.size()) + " 个文件");
 }
 

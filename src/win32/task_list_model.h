@@ -38,6 +38,11 @@ struct TaskRow {
     bool interrupted = false;
     // Stored bytes no longer match the resource; restarting asks first.
     bool restartRequired = false;
+    // BitTorrent detail for the properties page.
+    std::vector<TorrentFileInfo> torrentFiles;
+    std::vector<int> filePriorities;
+    std::vector<std::string> trackers;
+    bool torrentPrivate = false;
     std::int64_t received = 0;
     std::int64_t total = -1;
     double speedBytesPerSecond = 0.0;
