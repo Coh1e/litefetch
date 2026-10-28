@@ -161,6 +161,7 @@ public:
     }
     ~FakeEd2kPeer() { if (listener_ != INVALID_SOCKET) closesocket(listener_); }
     std::uint16_t port() const { return port_; }
+    std::size_t bytesSent() const { return bytesSent_.load(); }
 
 private:
     static bool sendAll(SOCKET socket, const void* data, int size)
@@ -230,6 +231,7 @@ private:
                 if (stopAfter_ != 0 && offset >= stopAfter_) break;
             }
             sendAll(client, packet.data(), static_cast<int>(packet.size()));
+            bytesSent_ += packet.size();
             if (stopAfter_ != 0 && offset >= stopAfter_) break;
             partStart = partEnd + 1;
         }
@@ -241,6 +243,7 @@ private:
     std::vector<unsigned char> payload_;
     bool refuseFile_;
     std::size_t stopAfter_ = 0;
+    std::atomic<std::size_t> bytesSent_{0};
     SOCKET listener_ = INVALID_SOCKET;
     std::uint16_t port_ = 0;
     std::jthread thread_;
@@ -293,6 +296,34 @@ void peerResume(const std::filesystem::path& root)
         checkEqual(static_cast<long long>(again.verifiedParts), 2, "both parts verify after resume");
         checkEqual(static_cast<long long>(again.missingParts), 0, "nothing is missing after resume");
     }
+}
+void switchPeersKeepsFinishedParts(const std::filesystem::path& root)
+{
+    // The first peer serves one part and disappears; the second must only be
+    // asked for the missing part, not the whole file again.
+    const auto payload = litefetch::test::payload(static_cast<std::size_t>(ed2kPartSize) + 2000);
+    const auto expectedPath = root / "switch-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto hash = ed2kFileHash(expectedPath.string());
+    const std::string link = "ed2k://|file|switch.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/";
+
+    FakeEd2kPeer first(payload, false, static_cast<std::size_t>(ed2kPartSize));
+    FakeEd2kPeer second(payload);
+    Ed2kTaskRequest request;
+    request.link = link;
+    request.destination = (root / "switch-out.bin").string();
+    request.peers = {{"127.0.0.1", first.port()}, {"127.0.0.1", second.port()}};
+    request.timeoutMillis = 10000;
+    const std::atomic_bool cancelled{false};
+    const auto result = downloadEd2kTask(request, cancelled);
+    check(result.ok, ("peer switch failed: " + result.error).c_str());
+    check(readFile(root / "switch-out.bin") == payload, "the switched download is complete");
+
+    // The second peer only sent the second part plus one packet header.
+    const auto sent = second.bytesSent();
+    check(sent < static_cast<std::size_t>(ed2kPartSize),
+        "the second peer was only asked for the missing part");
 }
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
@@ -549,6 +580,7 @@ int main()
         peerResume(root.path());
         taskPipeline(root.path());
         multiSourceAndPublish(root.path());
+        switchPeersKeepsFinishedParts(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;
