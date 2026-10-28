@@ -21,6 +21,13 @@ add_library(litefetch-core STATIC
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
+
+# BitTorrent lives in its own library so binaries that never touch torrents do
+# not link libtorrent at all.
+find_package(LibtorrentRasterbar CONFIG REQUIRED)
+add_library(litefetch-bt STATIC src/core/bt_engine.cpp src/core/bt_engine.h)
+target_include_directories(litefetch-bt PUBLIC src/core)
+target_link_libraries(litefetch-bt PUBLIC litefetch-core LibtorrentRasterbar::torrent-rasterbar)
 if(WIN32)
     target_link_libraries(litefetch-core PRIVATE bcrypt ws2_32)
 endif()
@@ -99,6 +106,16 @@ if(BUILD_TESTING)
     target_link_libraries(ui-batch-tests PRIVATE litefetch-ui-model)
     add_test(NAME ui-batch COMMAND ui-batch-tests)
     set_tests_properties(ui-batch PROPERTIES TIMEOUT 20)
+    # BitTorrent boundary test: builds a local swarm and downloads one file.
+    # Off by default while the download loop still aborts inside libtorrent.
+    option(LITEFETCH_ENABLE_BT_TESTS "Build the BitTorrent swarm test" OFF)
+    if(LITEFETCH_ENABLE_BT_TESTS)
+        add_executable(core-bt-tests tests/core/bt_test.cpp)
+        target_include_directories(core-bt-tests PRIVATE tests/core)
+        target_link_libraries(core-bt-tests PRIVATE litefetch-bt ws2_32)
+        add_test(NAME core-bt COMMAND core-bt-tests)
+        set_tests_properties(core-bt PROPERTIES TIMEOUT 120)
+    endif()
     add_executable(ui-worker-tests tests/win32/task_worker_test.cpp)
     target_include_directories(ui-worker-tests PRIVATE tests/core)
     target_link_libraries(ui-worker-tests PRIVATE litefetch-win32-runtime ws2_32)
