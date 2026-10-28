@@ -6,6 +6,7 @@
 // this test instead of an external script.
 #include "main_window.h"
 
+#include "http_fixture.h"
 #include "resource.h"
 #include "task_service.h"
 #include "task_store.h"
@@ -13,10 +14,13 @@
 
 #include <commctrl.h>
 #include <ole2.h>
+#include <uiautomation.h>
 
 #include <functional>
+#include <fstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace litefetch;
 using namespace litefetch::test;
@@ -139,6 +143,86 @@ void stopDismiss()
     RemovePropW(GetDesktopWindow(), L"LiteFetchDismiss");
 }
 
+// Semantic probe: exactly the surface a UI Automation client (FlaUI, pywinauto,
+// WinAppDriver) sees. Asserting through it keeps the checks off raw messages and
+// exercises the accessibility contract ticket #26 must ship anyway.
+void checkAutomationSurface(HWND handle)
+{
+    IUIAutomation* automation = nullptr;
+    HRESULT result = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&automation));
+    check(SUCCEEDED(result) && automation != nullptr, "UI Automation client starts");
+
+    IUIAutomationElement* window = nullptr;
+    result = automation->ElementFromHandle(handle, &window);
+    check(SUCCEEDED(result) && window != nullptr, "automation reaches the main window");
+
+    VARIANT kind;
+    VariantInit(&kind);
+    kind.vt = VT_I4;
+    kind.lVal = UIA_ListControlTypeId;
+    IUIAutomationCondition* isList = nullptr;
+    automation->CreatePropertyCondition(UIA_ControlTypePropertyId, kind, &isList);
+    IUIAutomationElement* list = nullptr;
+    window->FindFirst(TreeScope_Descendants, isList, &list);
+    check(list != nullptr, "automation exposes the task list");
+
+    VARIANT itemKind;
+    VariantInit(&itemKind);
+    itemKind.vt = VT_I4;
+    itemKind.lVal = UIA_ListItemControlTypeId;
+    IUIAutomationCondition* isItem = nullptr;
+    automation->CreatePropertyCondition(UIA_ControlTypePropertyId, itemKind, &isItem);
+    IUIAutomationElementArray* rows = nullptr;
+    list->FindAll(TreeScope_Descendants, isItem, &rows);
+    int rowCount = 0;
+    if (rows) rows->get_Length(&rowCount);
+    if (rowCount != 3)
+        throw std::runtime_error("automation row count is " + std::to_string(rowCount));
+
+    IUIAutomationElement* firstRow = nullptr;
+    if (rows) rows->GetElement(0, &firstRow);
+    BSTR name = nullptr;
+    if (firstRow) firstRow->get_CurrentName(&name);
+    check(name != nullptr && SysStringLen(name) > 0, "list items expose a readable name");
+    SysFreeString(name);
+
+    // A screen reader needs a selection pattern, not just a raw HWND.
+    IUIAutomationSelectionPattern* selection = nullptr;
+    list->GetCurrentPatternAs(UIA_SelectionPatternId, IID_PPV_ARGS(&selection));
+    check(selection != nullptr, "the list exposes a selection pattern");
+    if (selection) selection->Release();
+
+    if (firstRow) firstRow->Release();
+    if (rows) rows->Release();
+    if (isItem) isItem->Release();
+    if (list) list->Release();
+    if (isList) isList->Release();
+    if (window) window->Release();
+    automation->Release();
+}
+
+void selectRow(HWND list, int index){
+    const int count = static_cast<int>(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+    for (int row = 0; row < count; ++row) {
+        LVITEMW clear{};
+        clear.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+        clear.state = 0;
+        SendMessageW(list, LVM_SETITEMSTATE, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&clear));
+    }
+    LVITEMW item{};
+    item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+    item.state = LVIS_SELECTED | LVIS_FOCUSED;
+    SendMessageW(list, LVM_SETITEMSTATE, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&item));
+}
+
+std::vector<unsigned char> readBytes(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return std::vector<unsigned char>(std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
+}
+
 void runChecks()
 {
     TempDir directory;
@@ -147,105 +231,180 @@ void runChecks()
     options.downloadDirectory = directory.path() / "downloads";
     std::filesystem::create_directories(options.downloadDirectory);
 
+    const auto body = payload(96 * 1024);
+    HttpFixture fixture(HttpFixture::Options{body});
+    const auto destination = options.downloadDirectory / "payload.bin";
+
     // Seed rows through the same core service the window reads, before the
     // window opens its own worker on the database.
     {
         TaskRepository repository(options.databasePath);
         TaskService service(repository);
         for (const char* url : {"http://example.invalid/one.bin",
-                 "http://example.invalid/two.bin", "http://example.invalid/three.bin"}) {
+                 "http://example.invalid/two.bin"}) {
             const auto added = service.execute(AddTaskCommand{
                 url, (options.downloadDirectory / std::filesystem::path(url).filename()).string()});
             check(added.ok, "seed task is added");
         }
+        const auto added = service.execute(AddTaskCommand{fixture.url("/payload.bin"),
+            destination.string()});
+        check(added.ok, "download task is queued");
     }
 
     const HINSTANCE instance = GetModuleHandleW(nullptr);
-    MainWindow window(options);
-    check(window.create(instance, SW_SHOWNORMAL), "main window is created");
-    const HWND handle = window.handle();
-    check(handle != nullptr, "window handle is available");
+    int widthAfterDrag = 0;
+    {
+        MainWindow window(options);
+        check(window.create(instance, SW_SHOWNORMAL), "main window is created");
+        const HWND handle = window.handle();
+        check(handle != nullptr, "window handle is available");
 
-    check(pumpUntil([&] { return IsWindowVisible(handle) != FALSE; }, 5000), "window becomes visible");
-    check(windowTitle(handle) == L"lite fetch", "title is the product name");
+        check(pumpUntil([&] { return IsWindowVisible(handle) != FALSE; }, 5000), "window becomes visible");
+        check(windowTitle(handle) == L"lite fetch", "title is the product name");
 
-    const HWND list = childOfClass(handle, L"SysListView32");
-    const HWND toolbar = childOfClass(handle, L"ToolbarWindow32");
-    const HWND status = childOfClass(handle, L"msctls_statusbar32");
-    check(list != nullptr && toolbar != nullptr && status != nullptr,
-        "list, toolbar and status bar exist");
-    check(headerColumnCount(list) == 6, "six default columns");
-    check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
-    check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3; }, 5000),
-        "seeded tasks reach the list");
+        const HWND list = childOfClass(handle, L"SysListView32");
+        const HWND toolbar = childOfClass(handle, L"ToolbarWindow32");
+        const HWND status = childOfClass(handle, L"msctls_statusbar32");
+        check(list != nullptr && toolbar != nullptr && status != nullptr,
+            "list, toolbar and status bar exist");
+        check(headerColumnCount(list) == 6, "six default columns");
+        check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3; }, 5000),
+            "seeded tasks reach the list");
+        checkAutomationSurface(handle);
 
-    // Commands are synchronous: when the send returns, the handler has run.
-    const HWND searchEdit = GetDlgItem(handle, IDC_SEARCH);
-    check(searchEdit != nullptr, "search field is addressable by id");
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_FIND, 0), 0);
-    check(IsWindowVisible(searchEdit), "find shows the search field");
-    SendMessageW(searchEdit, WM_KEYDOWN, VK_ESCAPE, 0);
-    check(!IsWindowVisible(searchEdit), "escape hides the search field");
+        // Commands are synchronous: when the send returns, the handler has run.
+        const HWND searchEdit = GetDlgItem(handle, IDC_SEARCH);
+        check(searchEdit != nullptr, "search field is addressable by id");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_FIND, 0), 0);
+        check(IsWindowVisible(searchEdit), "find shows the search field");
+        SendMessageW(searchEdit, WM_KEYDOWN, VK_ESCAPE, 0);
+        check(!IsWindowVisible(searchEdit), "escape hides the search field");
 
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_FAILED, 0), 0);
-    check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 0, "failed filter hides queued tasks");
-    check(statusText(status, 0).find(L"可见: 0 / 3") != std::wstring::npos,
-        "status separates visible from total while filtering");
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_ALL, 0), 0);
-    check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3, "all filter restores the queue");
-    check(statusText(status, 0).find(L"任务: 3") != std::wstring::npos,
-        "status reports the queue total without a filter");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_FAILED, 0), 0);
+        check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 0, "failed filter hides queued tasks");
+        check(statusText(status, 0).find(L"可见: 0 / 3") != std::wstring::npos,
+            "status separates visible from total while filtering");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_FILTER_ALL, 0), 0);
+        check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3, "all filter restores the queue");
+        check(statusText(status, 0).find(L"任务: 3") != std::wstring::npos,
+            "status reports the queue total without a filter");
 
-    // Delete asks first and cancelling keeps the records.
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_SELECT_ALL, 0), 0);
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_DELETE, 0), 0);
-    HWND confirm = FindWindowW(nullptr, L"删除任务");
-    check(confirm != nullptr, "delete asks for confirmation");
-    PostMessageW(confirm, WM_COMMAND, MAKEWPARAM(IDCANCEL, 0),
-        reinterpret_cast<LPARAM>(GetDlgItem(confirm, IDCANCEL)));
-    check(pumpUntil([&] { return FindWindowW(nullptr, L"删除任务") == nullptr; }, 3000),
-        "confirm dialog closes on cancel");
-    check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 3, "cancelling delete keeps every record");
+        // Start the real transfer from the list and wait for the published file.
+        selectRow(list, 2);
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        check(pumpUntil([&] {
+            std::error_code error;
+            return std::filesystem::file_size(destination, error) == body.size();
+        }, 30000), "starting the task publishes the downloaded file");
+        check(readBytes(destination) == body, "downloaded bytes match the controlled peer");
 
-    // Open folder for a task whose directory is gone shows the real reason and
-    // returns once the user acknowledges it.
-    std::filesystem::remove_all(options.downloadDirectory);
-    scheduleDismiss(L"打开文件夹");
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_OPEN_FOLDER, 0), 0);
-    stopDismiss();
-    check(true, "open folder failure is acknowledged without aborting");
-
-    // Layout at both extremes: the columns always cover the client width.
-    check(listColumnWidthSum(list) == listClientWidth(list), "columns fill the default width");
-    SetWindowPos(handle, nullptr, 0, 0, 700, 480, SWP_NOMOVE | SWP_NOZORDER);
-    check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
-        "columns fill a narrow window");
-    SetWindowPos(handle, nullptr, 0, 0, 1200, 800, SWP_NOMOVE | SWP_NOZORDER);
-    check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
-        "columns fill a wide window");
-
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_TOOLBAR, 0), 0);
-    check(!IsWindowVisible(toolbar), "toolbar can be hidden");
-    SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_TOOLBAR, 0), 0);
-    check(IsWindowVisible(toolbar), "toolbar can be shown again");
-
-    // Close: the loop must end with WM_QUIT(0). An abort or a stuck loop fails
-    // here instead of in a separate acceptance script.
-    PostMessageW(handle, WM_CLOSE, 0, 0);
-    MSG message{};
-    const ULONGLONG start = GetTickCount64();
-    bool quit = false;
-    while (GetTickCount64() - start < 30000) {
-        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-            if (message.message == WM_QUIT) { quit = true; break; }
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+        // Deleting the record must keep the downloaded file.
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_DELETE, 0), 0);
+        HWND confirm = FindWindowW(nullptr, L"删除任务");
+        check(confirm != nullptr, "delete asks for confirmation");
+        PostMessageW(confirm, WM_COMMAND, MAKEWPARAM(IDOK, 0),
+            reinterpret_cast<LPARAM>(GetDlgItem(confirm, IDOK)));
+        const bool deleted = pumpUntil([&] {
+            return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 2
+                && FindWindowW(nullptr, L"删除任务") == nullptr;
+        }, 10000);
+        if (!deleted) {
+            std::wstring detail = L"count=" + std::to_wstring(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+            if (FindWindowW(nullptr, L"删除任务记录失败") != nullptr) detail += L" error-dialog";
+            if (FindWindowW(nullptr, L"删除任务") != nullptr) detail += L" confirm-open";
+            throw std::runtime_error(std::string(detail.begin(), detail.end()));
         }
-        if (quit) break;
-        Sleep(1);
+        check(std::filesystem::exists(destination), "deleting the record keeps the file");
+
+        // Open folder for a task whose directory is gone shows the real reason
+        // and returns once the user acknowledges it.
+        std::filesystem::remove_all(options.downloadDirectory);
+        scheduleDismiss(L"打开文件夹");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_OPEN_FOLDER, 0), 0);
+        stopDismiss();
+
+        // Layout at both extremes: the columns always cover the client width.
+        check(listColumnWidthSum(list) == listClientWidth(list), "columns fill the default width");
+        SetWindowPos(handle, nullptr, 0, 0, 700, 480, SWP_NOMOVE | SWP_NOZORDER);
+        check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
+            "columns fill a narrow window");
+        SetWindowPos(handle, nullptr, 0, 0, 1200, 800, SWP_NOMOVE | SWP_NOZORDER);
+        check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
+            "columns fill a wide window");
+
+        // A header drag is the only way the window saves a column width.
+        const HWND header = childOfClass(list, L"SysHeader32");
+        check(header != nullptr, "list header exists");
+        const int beforeDrag = static_cast<int>(SendMessageW(list, LVM_GETCOLUMNWIDTH, 0, 0));
+        RECT headerRect{};
+        GetClientRect(header, &headerRect);
+        const int divider = beforeDrag;
+        const int middle = (headerRect.bottom - headerRect.top) / 2;
+        SendMessageW(header, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(divider, middle));
+        SendMessageW(header, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(divider + 40, middle));
+        SendMessageW(header, WM_LBUTTONUP, 0, MAKELPARAM(divider + 40, middle));
+        check(std::filesystem::exists(uiStatePathFor(options.databasePath)),
+            "column settings are saved beside the database");
+        widthAfterDrag = static_cast<int>(SendMessageW(list, LVM_GETCOLUMNWIDTH, 0, 0));
+        check(widthAfterDrag > beforeDrag, "dragging the divider widens the name column");
+
+        // The drag is a user pitch; a resize re-applies it to the layout.
+        SetWindowPos(handle, nullptr, 0, 0, 900, 620, SWP_NOMOVE | SWP_NOZORDER);
+        check(pumpUntil([&] { return listColumnWidthSum(list) == listClientWidth(list); }, 3000),
+            "columns fill the width after a drag and resize");
+
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_TOOLBAR, 0), 0);
+        check(!IsWindowVisible(toolbar), "toolbar can be hidden");
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_TOOLBAR, 0), 0);
+        check(IsWindowVisible(toolbar), "toolbar can be shown again");
+
+        // Close: the loop must end with WM_QUIT(0). An abort or a stuck loop
+        // fails here instead of in a separate acceptance script.
+        PostMessageW(handle, WM_CLOSE, 0, 0);
+        MSG message{};
+        const ULONGLONG start = GetTickCount64();
+        bool quit = false;
+        while (GetTickCount64() - start < 30000) {
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message == WM_QUIT) { quit = true; break; }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            if (quit) break;
+            Sleep(1);
+        }
+        check(quit, "closing the window ends the message loop");
+        check(message.wParam == 0, "clean close reports exit code 0");
     }
-    check(quit, "closing the window ends the message loop");
-    check(message.wParam == 0, "clean close reports exit code 0");
+
+    // Reopening the window restores the width saved by the drag.
+    {
+        MainWindow reopened(options);
+        check(reopened.create(instance, SW_SHOWNORMAL), "window reopens on the same database");
+        const HWND handle = reopened.handle();
+        const HWND list = childOfClass(handle, L"SysListView32");
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 2; }, 5000),
+            "records survive the restart");
+        const int restored = static_cast<int>(SendMessageW(list, LVM_GETCOLUMNWIDTH, 0, 0));
+        check(restored > 0 && restored != widthAfterDrag, "restored width is recomputed for the layout");
+        check(listColumnWidthSum(list) == listClientWidth(list),
+            "restored columns fill the list client width");
+        PostMessageW(handle, WM_CLOSE, 0, 0);
+        MSG message{};
+        const ULONGLONG start = GetTickCount64();
+        bool quit = false;
+        while (GetTickCount64() - start < 30000) {
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message == WM_QUIT) { quit = true; break; }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            if (quit) break;
+            Sleep(1);
+        }
+        check(quit, "second window closes cleanly");
+    }
 }
 
 } // namespace

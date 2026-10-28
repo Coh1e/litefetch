@@ -286,7 +286,11 @@ bool MainWindow::create(HINSTANCE instance, int showCommand)
         scale(16, 96), scale(16, 96), LR_DEFAULTCOLOR));
     windowClassInfo.hIcon = largeIcon_;
     windowClassInfo.hIconSm = smallIcon_;
-    if (!RegisterClassExW(&windowClassInfo)) return false;
+    if (!RegisterClassExW(&windowClassInfo)) {
+        // A second window in the same process (acceptance restart, reopened
+        // window) reuses the class the first one registered.
+        if (GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+    }
 
     menu_ = LoadMenuW(instance_, MAKEINTRESOURCEW(IDR_MAIN_MENU));
     accelerators_ = LoadAcceleratorsW(instance_, MAKEINTRESOURCEW(IDR_ACCELERATORS));
@@ -731,7 +735,7 @@ void MainWindow::createToolbar()
 
 void MainWindow::createList()
 {
-    list_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
+    list_ = CreateWindowExW(0, WC_LISTVIEWW, L"任务列表",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SHOWSELALWAYS,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
     if (!list_) return;

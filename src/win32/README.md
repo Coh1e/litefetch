@@ -69,6 +69,12 @@ ctest --test-dir out/build/windows-core --output-on-failure
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win32-e2e.ps1
 ```
 
+- `ui-window` — creates the real main window in-process and drives it with the
+  same commands a user would: search overlay, filters, status parts, toolbar
+  toggle, a real HTTP download started from the list, delete-record-keeps-file,
+  the open-folder failure dialog, column drag and persistence across a reopen,
+  the UI Automation surface, and a clean close (exit code 0). Dialogs are
+  dismissed with a callback timer, so nothing races a second process.
 - `ui-model` — column formatting, measured speed/remaining time, status
   parts, action enablement and URL/file-name parsing (no window needed).
 - `ui-worker` — the real worker threads against a controlled HTTP peer:
@@ -76,11 +82,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win32-e2e.ps1
   no-publish/no-staging guarantees.
 - `core-unicode-path` — a Chinese destination directory/file and a Chinese
   database path survive the UTF-8 command boundary.
-- `scripts/win32-e2e.ps1` — drives the real window through real messages: menu
-  command, native dialog controls, toolbar start, clipboard, Explorer, file
-  hash, SQLite row, real ListView/status-bar text, column geometry (including
-  window resize) and window close during a throttled download. It captures
-  screenshots under `.pi/evidence/issue-03/`.
+- `scripts/win32-smoke.ps1` — the only check that needs a real launch: the
+  built exe starts, shows the window and exits with code 0. Everything else
+  about the window is covered in-process, so ordinary runs never touch a
+  second process, its dialogs or its timers.
 
 ## Icons
 

@@ -150,7 +150,7 @@ if(WIN32)
         # race a second process, its dialogs or its timers.
         add_executable(ui-window-tests tests/win32/window_test.cpp src/win32/win32.rc)
         target_include_directories(ui-window-tests PRIVATE tests/core)
-        target_link_libraries(ui-window-tests PRIVATE litefetch-win32-ui)
+        target_link_libraries(ui-window-tests PRIVATE litefetch-win32-ui uiautomationcore oleaut32)
         add_test(NAME ui-window COMMAND ui-window-tests)
         set_tests_properties(ui-window PROPERTIES TIMEOUT 90
             ENVIRONMENT "LITEFETCH_TEST_TEMP=${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
