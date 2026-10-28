@@ -68,6 +68,73 @@ std::vector<char> buildTorrent(const std::filesystem::path& seedDirectory)
     return std::vector<char>(buffer.begin(), buffer.end());
 }
 
+// Upload: our completed download keeps seeding while a second session fetches
+// the same torrent from us, so bytes really leave the process to a peer.
+void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::path& torrentPath,
+    const std::filesystem::path& downloadDirectory, const TempDir& root, std::uint16_t seedPort)
+{
+    const auto secondDirectory = root.path() / "second";
+    std::atomic_bool seedingCancelled{false};
+    std::atomic_bool seeding{false};
+    std::int32_t listenPort = 0;
+    BtDownloadRequest seedRequest;
+    seedRequest.source = torrentPath.string();
+    seedRequest.savePath = downloadDirectory.string();
+    seedRequest.choices = {BtFileChoice{0, 1}};
+    seedRequest.peers = {"127.0.0.1:" + std::to_string(seedPort)};
+    seedRequest.seedPolicy = BtSeedPolicy{2, 1.0, 1};
+    BtDownloadResult seedResult;
+    std::thread seederThread([&] {
+        seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {
+            if (update.listenPort != 0) listenPort = update.listenPort;
+            if (update.seeding) seeding = true;
+        });
+    });
+
+    // Wait for the seeding session, then fetch from it. Everything that could
+    // throw happens after the thread is joined.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!seeding.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const bool seedingUp = seeding.load();
+
+    bool leeched = false;
+    if (seedingUp && listenPort != 0) {
+        lt::settings_pack probeSettings;
+        probeSettings.set_str(lt::settings_pack::listen_interfaces, "127.0.0.1:0");
+        probeSettings.set_bool(lt::settings_pack::enable_dht, false);
+        probeSettings.set_bool(lt::settings_pack::enable_lsd, false);
+        lt::session leecher{lt::session_params(probeSettings)};
+        lt::add_torrent_params leechParams = lt::load_torrent_buffer(
+            {torrentBytes.data(), static_cast<int>(torrentBytes.size())});
+        leechParams.save_path = secondDirectory.string();
+        const auto leechHandle = leecher.add_torrent(std::move(leechParams));
+        // The seeder only holds the first file, so the leecher wants only that
+        // file too; asking for the skipped one would wait for pieces nobody has.
+        leechHandle.prioritize_files({lt::default_priority, lt::download_priority_t{0}});
+        const auto leechDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (std::chrono::steady_clock::now() < leechDeadline) {
+            leechHandle.connect_peer(lt::tcp::endpoint(lt::make_address("127.0.0.1"),
+                static_cast<unsigned short>(listenPort)));
+            leecher.wait_for_alert(std::chrono::milliseconds(500));
+            const auto status = leechHandle.status();
+            if (status.total_wanted > 0 && status.total_wanted_done >= status.total_wanted) {
+                leeched = true;
+                break;
+            }
+        }
+    }
+
+    seedingCancelled.store(true);
+    seederThread.join();
+
+    check(seedingUp, "the completed task kept seeding instead of stopping");
+    check(listenPort != 0, "the seeding session reported its listen port");
+    check(leeched, "a second peer downloaded the torrent from us");
+    check(seedResult.uploaded > 0, "the seeding task counted uploaded bytes");
+    check(readFile(secondDirectory / "data" / "keep.bin") == payload(64 * 1024),
+        "the uploaded bytes match the original file");
+}
 void bitTorrentRoundTrip()
 {
     TempDir root;
@@ -145,6 +212,7 @@ void bitTorrentRoundTrip()
         "the corrupted piece was repaired from the peer");
     check(std::filesystem::exists(verifyRequest.resumePath),
         "the finished transfer left resume data behind");
+    uploadToPeer(torrentBytes, torrentPath, downloadDirectory, root, seedPort);
 
 
 }
