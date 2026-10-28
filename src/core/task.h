@@ -11,7 +11,7 @@ namespace litefetch {
 
 // Persisted task states. The text form is the storage format and must stay
 // append-only; never renumber or silently rename an existing state.
-enum class TaskState { Queued, Running, Completed, Failed, Cancelled, Paused };
+enum class TaskState { Queued, Running, Seeding, Completed, Failed, Cancelled, Paused };
 
 std::string_view taskStateName(TaskState state);
 std::optional<TaskState> parseTaskState(std::string_view name);

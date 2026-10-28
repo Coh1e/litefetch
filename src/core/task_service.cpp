@@ -259,6 +259,10 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             try {
                 const auto result = btTransfer_(request, *active->cancelled,
                     [&](const BtProgressInfo& update) {
+                        // Seeding is its own state: the download is complete but
+                        // the task still runs because it serves other peers.
+                        if (update.seeding && task.state == TaskState::Running)
+                            task.state = TaskState::Seeding;
                         progress(TransferProgressInfo{update.received, update.total, update.peers});
                     });
                 transferResult.received = result.received;

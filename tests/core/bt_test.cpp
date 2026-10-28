@@ -146,6 +146,7 @@ void bitTorrentRoundTrip()
     check(std::filesystem::exists(verifyRequest.resumePath),
         "the finished transfer left resume data behind");
 
+
 }
 } // namespace
 

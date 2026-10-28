@@ -20,6 +20,7 @@ std::string stateText(const TaskRow& row)
     case TaskState::Running:
         if (row.interrupted) return "已中断";
         return row.received > 0 ? "下载中" : "正在连接";
+    case TaskState::Seeding: return "做种中";
     case TaskState::Completed: return "已完成";
     case TaskState::Failed: return "下载失败";
     case TaskState::Cancelled: return "已停止";

@@ -72,7 +72,8 @@ int body()
         check(repository.all().empty(), "new database is empty");
         repository.insert(sample("task-a"));
         repository.insert(sample("task-b", TaskState::Failed));
-        checkEqual(static_cast<long long>(repository.all().size()), 2, "inserted row count");
+    repository.insert(sample("task-c", TaskState::Seeding));
+        checkEqual(static_cast<long long>(repository.all().size()), 3, "inserted row count");
 
         auto loaded = repository.find("task-a");
         check(loaded.has_value(), "inserted task can be found");
@@ -97,7 +98,7 @@ int body()
     {
         TaskRepository repository(database);
         const auto tasks = repository.all();
-        checkEqual(static_cast<long long>(tasks.size()), 2, "rows survive reopen");
+        checkEqual(static_cast<long long>(tasks.size()), 3, "rows survive reopen");
         check(tasks[0].state == TaskState::Completed, "completed state survives reopen");
         check(tasks[0].received == 1024, "progress survives reopen");
 
