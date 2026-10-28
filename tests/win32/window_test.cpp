@@ -430,7 +430,10 @@ void runChecks()
         const int completedRow = rowOf(list, L"payload.bin");
         check(completedRow >= 0, "the downloaded task is visible by name");
         check(itemText(list, completedRow, 2) == L"100.0%", "completed row reports 100.0% progress");
-        check(itemText(list, completedRow, 5) == L"已完成", "completed row reports the completed status");
+        // The row catches up on the next refresh tick; wait for it instead of
+        // assuming the tick already happened.
+        check(pumpUntil([&] { return itemText(list, completedRow, 5) == L"已完成"; }, 5000),
+            "completed row reports the completed status");
         selectRow(list, completedRow);
         check(!commandEnabled(toolbar, ID_TASK_START), "start is disabled for a completed task");
         check(!commandEnabled(toolbar, ID_TASK_STOP), "stop is disabled for a completed task");
@@ -463,6 +466,14 @@ void runChecks()
             std::error_code error;
             return std::filesystem::file_size(slowPartial, error) > 0;
         }, 15000), "slow download starts writing partial data");
+        // Pause only once the row reports a running transfer: a pause sent while
+        // the task is still queued is a no-op, and the transfer would finish.
+        const int slowRow = rowOf(list, L"slow.bin");
+        check(slowRow >= 0, "the slow task is listed");
+        check(pumpUntil([&] {
+            const auto status = itemText(list, slowRow, 5);
+            return status == L"下载中" || status == L"正在连接";
+        }, 15000), "the slow task reports a running transfer before the pause");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PAUSE, 0), 0);
         check(pumpUntil([&] {
             std::error_code error;
