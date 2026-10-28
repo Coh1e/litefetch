@@ -510,6 +510,25 @@ void torrentPauseUsesSharedStop(const std::filesystem::path& root)
     const auto resumed = service.execute(StartTaskCommand{added.task.id});
     require(resumed.ok, "torrent resume failed: " + resumed.error);
     require(resumed.task.state == TaskState::Completed, "torrent resume did not complete");
+
+    // A stop (not a pause) leaves the task cancelled, not paused. A completed
+    // task cannot start again, so this uses a second torrent task.
+    entered.store(false);
+    AddTaskCommand addTwo;
+    addTwo.source = "magnet:?xt=urn:btih:1111222233334444555566667777888899990000";
+    addTwo.destination = savePath.string();
+    const auto addedTwo = service.execute(addTwo);
+    require(addedTwo.ok, "second torrent add failed: " + addedTwo.error);
+    std::promise<CommandResult> second;
+    auto secondResult = second.get_future();
+    std::jthread stopper([&] { second.set_value(service.execute(StartTaskCommand{addedTwo.task.id})); });
+    require(waitFor([&] { return entered.load(); }, std::chrono::seconds(10)),
+        "the torrent engine was never entered for the stop run");
+    require(service.execute(CancelTaskCommand{addedTwo.task.id}).ok, "torrent stop failed");
+    const auto stopped = secondResult.get();
+    stopper.join();
+    require(stopped.ok, "stopped torrent state was not committed: " + stopped.error);
+    require(stopped.task.state == TaskState::Cancelled, "torrent stop did not produce the cancelled state");
 }
 void sameDestinationRace(const std::filesystem::path& root)
 {
