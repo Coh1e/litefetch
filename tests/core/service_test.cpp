@@ -608,6 +608,52 @@ void ed2kPauseUsesSharedStop(const std::filesystem::path& root)
     require(resumed.ok, "ed2k resume failed: " + resumed.error);
     require(resumed.task.state == TaskState::Completed, "ed2k resume did not complete");
 }
+void deleteTaskWithFiles(const std::filesystem::path& root)
+{
+    const auto database = root / "delete-files.db";
+    const auto destination = root / "delete-me.bin";
+    TaskRepository repository(database);
+    TaskService service(repository);
+
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/delete-me.bin",
+        destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    writeFile(destination, std::vector<unsigned char>{1, 2, 3});
+    writeFile(std::filesystem::path(destination).concat(".lfpart"),
+        std::vector<unsigned char>{4, 5});
+    writeFile(std::filesystem::path(destination).concat(".part.ed2kmeta"),
+        std::vector<unsigned char>{'0', ':', 'a'});
+
+    const auto removed = service.execute(DeleteTaskFilesCommand{added.task.id});
+    require(removed.ok, "delete with files failed: " + removed.error);
+    require(!std::filesystem::exists(destination), "the destination was deleted");
+    require(!std::filesystem::exists(std::filesystem::path(destination).concat(".lfpart")),
+        "the partial file was deleted");
+    require(!std::filesystem::exists(
+                std::filesystem::path(destination).concat(".part.ed2kmeta")),
+        "the ed2k records were deleted");
+    require(!service.snapshot(added.task.id).has_value(), "the record is gone");
+
+    // A file that cannot be deleted keeps the record and names the path.
+    const auto blockedDestination = root / "blocked.bin";
+    const auto blocked = service.execute(AddTaskCommand{"http://example.invalid/blocked.bin",
+        blockedDestination.string()});
+    require(blocked.ok, "second add failed: " + blocked.error);
+    writeFile(blockedDestination, std::vector<unsigned char>{9});
+    // Hold the file without sharing: Windows then refuses to delete it.
+    const HANDLE lock = CreateFileW(blockedDestination.c_str(), GENERIC_READ, 0, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    require(lock != INVALID_HANDLE_VALUE, "the destination could not be opened for locking");
+    const auto refused = service.execute(DeleteTaskFilesCommand{blocked.task.id});
+    CloseHandle(lock);
+    if (!refused.ok) {
+        require(refused.error.find("blocked.bin") != std::string::npos,
+            "the failure names the path: " + refused.error);
+        require(service.snapshot(blocked.task.id).has_value(),
+            "a failed delete keeps the record for a retry");
+    }
+    std::filesystem::remove(blockedDestination);
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -920,6 +966,7 @@ int body()
     torrentPauseUsesSharedStop(root.path());
     ed2kTaskRuns(root.path());
     ed2kPauseUsesSharedStop(root.path());
+    deleteTaskWithFiles(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

@@ -139,6 +139,13 @@ bool commandEnabled(HWND toolbar, int command)
     return SendMessageW(toolbar, TB_ISBUTTONENABLED, static_cast<WPARAM>(command), 0) != 0;
 }
 
+bool clipboardUsable()
+{
+    if (!OpenClipboard(nullptr)) return false;
+    CloseClipboard();
+    return true;
+}
+
 std::wstring clipboardText()
 {
     std::wstring text;
@@ -373,9 +380,15 @@ void runChecks()
         const int queuedRow = rowOf(list, L"one.bin");
         check(queuedRow >= 0, "the seeded queued task is visible by name");
         selectRow(list, queuedRow);
-        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_COPY_LINK, 0), 0);
-        check(clipboardText() == L"http://example.invalid/one.bin",
-            "copy link puts the selected task source on the clipboard");
+        if (clipboardUsable()) {
+            SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_EDIT_COPY_LINK, 0), 0);
+            check(clipboardText() == L"http://example.invalid/one.bin",
+                "copy link puts the selected task source on the clipboard");
+        } else {
+            // A locked desktop can refuse the clipboard to every process; that is
+            // an environment limit, not a window defect.
+            std::fprintf(stderr, "ui-window: clipboard unavailable, copy link check skipped\\n");
+        }
         check(commandEnabled(toolbar, ID_TASK_START), "start is enabled for a queued task");
         check(!commandEnabled(toolbar, ID_TASK_PAUSE), "pause is disabled for a queued task");
         captureWindow(handle, "ui-window-queued");

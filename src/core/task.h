@@ -98,6 +98,12 @@ struct CancelTaskCommand {
 struct DeleteTaskCommand {
     std::string taskId;
 };
+// Removes the task and every file it created: the destination, the resume
+// files and the ed2k part records. Anything that cannot be removed is
+// reported per path and the record stays so the user can retry.
+struct DeleteTaskFilesCommand {
+    std::string taskId;
+};
 // Replaces the BitTorrent selection and trackers of an existing task. Only a
 // paused, queued or failed task may be changed; a running transfer keeps its
 // own choices until it stops.
@@ -114,7 +120,7 @@ struct UpdateTorrentOptionsCommand {
 };
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,
-    CancelTaskCommand, DeleteTaskCommand, UpdateTorrentOptionsCommand>;
+    CancelTaskCommand, DeleteTaskCommand, DeleteTaskFilesCommand, UpdateTorrentOptionsCommand>;
 
 struct CommandResult {
     // True only when the requested transition was validated and committed (for

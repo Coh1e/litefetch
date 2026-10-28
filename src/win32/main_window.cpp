@@ -1010,9 +1010,20 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_TASK_REDOWNLOAD:
             setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
             return 0;
-        case ID_TASK_DELETE_FILES:
-            setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除文件。");
+        case ID_TASK_DELETE_FILES: {
+            // Deleting files is its own confirmation: the record alone is what
+            // the other menu item removes.
+            const auto row = rowForId(focusedId());
+            if (!row) return 0;
+            const auto answer = MessageBoxW(hwnd_,
+                toWide("将删除任务记录以及它下载的文件：\n" + row->savePath
+                    + "\n\n已下载或未完成的片段都会删除，且不可恢复。是否继续？").c_str(),
+                L"删除任务及文件", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+            if (answer != IDYES) return 0;
+            worker_->postDeleteFiles(row->id);
+            setNotice("正在删除任务及文件：" + row->name);
             return 0;
+        }
         case ID_TASK_PROPERTIES:            showProperties();
             return 0;
         case ID_TOOLS_OPTIONS:
@@ -1652,7 +1663,7 @@ void MainWindow::updateActions()
     enableMenu(ID_TASK_STOP, interactive && actions.stop);
     enableMenu(ID_TASK_REDOWNLOAD, false);
     enableMenu(ID_TASK_DELETE, interactive && actions.deleteTask);
-    enableMenu(ID_TASK_DELETE_FILES, false);
+    enableMenu(ID_TASK_DELETE_FILES, interactive && actions.selectedCount == 1);
     enableMenu(ID_TASK_OPEN_FILE, interactive && actions.openFile);
     enableMenu(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
     enableMenu(ID_TASK_PROPERTIES, interactive && actions.selectedCount == 1);

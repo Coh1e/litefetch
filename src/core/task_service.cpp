@@ -70,6 +70,8 @@ CommandResult TaskService::execute(const TaskCommand& command)
         if (const auto* pauseCommand = std::get_if<PauseTaskCommand>(&command))
             return pause(*pauseCommand);
         if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
+        if (const auto* deleteFiles = std::get_if<DeleteTaskFilesCommand>(&command))
+            return removeWithFiles(*deleteFiles);
         if (const auto* updateCommand = std::get_if<UpdateTorrentOptionsCommand>(&command))
             return updateTorrent(*updateCommand);
         return cancel(std::get<CancelTaskCommand>(command));
@@ -480,6 +482,52 @@ int TaskService::pauseInterrupted()
         ++changed;
     }
     return changed;
+}
+
+CommandResult TaskService::removeWithFiles(const DeleteTaskFilesCommand& command)
+{
+    {
+        std::lock_guard lock(activeMutex_);
+        if (active_.contains(command.taskId))
+            return failure("task is running; stop it before deleting its files");
+    }
+    const auto task = repository_.find(command.taskId);
+    if (!task) return failure("unknown task");
+
+    std::vector<std::filesystem::path> paths;
+    const auto destination = std::filesystem::path(pathFromUtf8(task->destination));
+    paths.push_back(destination);
+    paths.push_back(std::filesystem::path(partialPathFor(task->destination)));
+    paths.push_back(std::filesystem::path(partialPathFor(task->destination)).concat(".meta"));
+    paths.push_back(std::filesystem::path(task->destination).concat(".part"));
+    paths.push_back(std::filesystem::path(task->destination).concat(".part.ed2kmeta"));
+    paths.push_back(std::filesystem::path(task->destination)
+        .concat(".litefetch-" + task->id + ".resume"));
+
+    std::string failures;
+    for (const auto& path : paths) {
+        std::error_code error;
+        if (!std::filesystem::exists(path, error)) continue;
+        std::filesystem::remove_all(path, error);
+        if (error) {
+            if (!failures.empty()) failures += "\n";
+            failures += path.string() + ": " + error.message();
+        }
+    }
+    if (!failures.empty()) {
+        CommandResult result;
+        result.ok = false;
+        result.error = "some files could not be deleted:\n" + failures;
+        return result;
+    }
+    try {
+        repository_.remove(command.taskId);
+    } catch (const StorageError& error) {
+        return storageFailure(error);
+    }
+    CommandResult result;
+    result.ok = true;
+    return result;
 }
 
 CommandResult TaskService::updateTorrent(const UpdateTorrentOptionsCommand& command)

@@ -143,6 +143,19 @@ void TaskWorker::postCancel(std::string taskId)
     condition_.notify_all();
 }
 
+void TaskWorker::postDeleteFiles(std::string taskId)
+{
+    Command command;
+    command.type = CommandType::DeleteFiles;
+    command.taskId = std::move(taskId);
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
 void TaskWorker::postDelete(std::string taskId)
 {
     Command command;
@@ -347,6 +360,12 @@ void TaskWorker::execute(const Command& command)
             const auto result = service_->execute(update);
             if (!result.ok)
                 publishError("属性应用失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
+        case CommandType::DeleteFiles: {
+            const auto result = service_->execute(DeleteTaskFilesCommand{command.taskId});
+            if (!result.ok)
+                publishError("删除任务及文件失败: " + (result.error.empty() ? "unknown error" : result.error));
             break;
         }
         case CommandType::Delete: {
