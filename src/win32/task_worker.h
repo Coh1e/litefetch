@@ -72,7 +72,7 @@ public:
     bool start(std::string& error);
     void postAdd(std::string source, std::string destination, bool autoStart,
         std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false,
-        std::vector<int> files = {});
+        std::vector<int> files = {}, std::string identity = {});
     void postStart(std::string taskId, bool restartFromZero = false,
         std::string username = {}, std::string password = {});
     void postPause(std::string taskId);
@@ -108,6 +108,7 @@ private:
         std::uint64_t batchId = 0;
         int line = 0;
         std::vector<int> files;
+        std::string identity;
     };
     struct StartJob {
         std::string taskId;

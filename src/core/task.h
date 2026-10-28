@@ -42,6 +42,10 @@ struct AddTaskCommand {
     bool allowDuplicate = false;
     // BitTorrent only: the confirmed file indices; empty means every file.
     std::vector<int> files;
+    // BitTorrent only: the info hash learned from metadata. It identifies the
+    // content itself, so a magnet and a .torrent for the same torrent share one
+    // task even though their source strings differ.
+    std::string identity;
 };
 struct StartTaskCommand {
     std::string taskId;

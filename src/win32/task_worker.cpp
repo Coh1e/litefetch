@@ -55,7 +55,8 @@ bool TaskWorker::start(std::string& error)
 }
 
 void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart,
-    std::uint64_t batchId, int line, bool allowDuplicate, std::vector<int> files)
+    std::uint64_t batchId, int line, bool allowDuplicate, std::vector<int> files,
+    std::string identity)
 {
     Command command;
     command.type = CommandType::Add;
@@ -66,6 +67,7 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     command.line = line;
     command.allowDuplicate = allowDuplicate;
     command.files = std::move(files);
+    command.identity = std::move(identity);
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -266,7 +268,8 @@ void TaskWorker::execute(const Command& command)
         switch (command.type) {
         case CommandType::Add: {
             const auto result = service_->execute(AddTaskCommand{
-                command.source, command.destination, command.allowDuplicate, command.files});
+                command.source, command.destination, command.allowDuplicate, command.files,
+                command.identity});
             AddResult addResult;
             addResult.batchId = command.batchId;
             addResult.line = command.line;

@@ -406,10 +406,21 @@ void torrentSelectionPersists(const std::filesystem::path& root)
         add.source = magnet;
         add.destination = savePath.string();
         add.files = {2, 0};
+        add.identity = "0123456789abcdef0123456789abcdef01234567";
         const auto added = service.execute(add);
         require(added.ok, "torrent add failed: " + added.error);
         id = added.task.id;
         require(added.task.files == std::vector<int>({2, 0}), "selection is stored in order");
+        checkEqual(added.task.id, taskIdentity(add.identity),
+            "a torrent task takes its identity from the info hash");
+
+        // The same torrent through a different source string locates this task.
+        AddTaskCommand variant;
+        variant.source = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=other";
+        variant.destination = savePath.string();
+        variant.identity = add.identity;
+        const auto located = service.execute(variant);
+        require(located.ok && located.existing, "the same info hash did not locate the task");
 
         // Without a BitTorrent engine the start is refused with a clear reason
         // instead of pretending to download.

@@ -2254,7 +2254,7 @@ void MainWindow::handleTorrentMetadata(BtMetadataResult metadata, const std::str
         return;
     }
     worker_->postAdd(source, options_.downloadDirectory.string(), true, 0, 0, false,
-        selection.selected);
+        selection.selected, metadata.metadata.infoHash);
     setNotice("已创建 BT 任务：" + std::to_string(selection.selected.size()) + " 个文件");
 }
 

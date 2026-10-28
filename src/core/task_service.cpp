@@ -101,7 +101,7 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");
 
-    const auto baseId = taskIdentity(command.source);
+    const auto baseId = taskIdentity(command.identity.empty() ? command.source : command.identity);
     std::string id = baseId;
     if (const auto existing = repository_.find(baseId)) {
         if (!command.allowDuplicate) {
@@ -120,8 +120,9 @@ CommandResult TaskService::add(const AddTaskCommand& command)
         // chosen id is persisted, so it stays stable across restarts.
         bool allocated = false;
         for (int copy = 2; copy < 10000; ++copy) {
-            const auto candidate = taskIdentity(command.source + "\n#duplicate:"
-                + std::to_string(copy));
+            const auto candidate = taskIdentity(
+                (command.identity.empty() ? command.source : command.identity)
+                + "\n#duplicate:" + std::to_string(copy));
             if (!repository_.find(candidate)) {
                 id = candidate;
                 allocated = true;
