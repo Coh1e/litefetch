@@ -12,8 +12,17 @@ using namespace litefetch::test;
 namespace {
 TaskSnapshot sample(const std::string& id, TaskState state = TaskState::Queued)
 {
-    return TaskSnapshot{id, "http://127.0.0.1:1/file.bin", "D:\\data\\file.bin", state,
-        0, 1024, "", false, 1000, 1000};
+    TaskSnapshot snapshot;
+    snapshot.id = id;
+    snapshot.source = "http://127.0.0.1:1/file.bin";
+    snapshot.destination = "D:\\data\\file.bin";
+    snapshot.state = state;
+    snapshot.received = 0;
+    snapshot.total = 1024;
+    snapshot.error.clear();
+    snapshot.createdAt = 1000;
+    snapshot.updatedAt = 1000;
+    return snapshot;
 }
 
 void legacyCoexistence(const std::filesystem::path& database)

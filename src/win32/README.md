@@ -88,10 +88,10 @@ test-local.cmd
   no-publish/no-staging guarantees.
 - `core-unicode-path` — a Chinese destination directory/file and a Chinese
   database path survive the UTF-8 command boundary.
-- `scripts/win32-smoke.ps1` — not part of ticket acceptance. It is the release
-  check (#28): the built exe starts, shows its window and exits with code 0.
-  It needs a real desktop session, and Windows may ask the signed-in user to
-  confirm an unsigned binary, which is exactly why nothing else runs it. See
+- `scripts/win32-smoke.ps1` — not part of ticket acceptance; the release check
+  (#28) launches the built exe once and closes it, failing with evidence instead
+  of hanging. Why it avoids the shell, and why a double-click still shows
+  "unknown publisher" until #27 signs the binary, is in the script header. See
   [ADR-0001](../../docs/adr/0001-acceptance-without-a-second-process.md).
 
 ## Icons

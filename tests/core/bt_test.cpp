@@ -25,7 +25,6 @@
 #include <libtorrent/torrent_info.hpp>
 
 #include <chrono>
-#include <iostream>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -72,9 +71,7 @@ void bitTorrentRoundTrip()
     writeFile(seedDirectory / "data" / "keep.bin", keep);
     writeFile(seedDirectory / "data" / "skip.bin", skip);
 
-    std::cerr << "bt step 1: files written\n";
     const auto torrentBytes = buildTorrent(seedDirectory);
-    std::cerr << "bt step 2: torrent built " << torrentBytes.size() << " bytes\n";
     const auto torrentPath = root.file("fixture.torrent");
     {
         std::ofstream output(torrentPath, std::ios::binary | std::ios::trunc);
@@ -87,14 +84,12 @@ void bitTorrentRoundTrip()
     seedParams.save_path = seedDirectory.string();
     seedParams.flags |= lt::torrent_flags::seed_mode;
     const auto seedHandle = seeder.add_torrent(std::move(seedParams));
-    std::cerr << "bt step 3: seeder added\n";
     const auto seedPort = seeder.listen_port();
     check(seedPort != 0, "seeder listens on a loopback port");
     seeder.wait_for_alert(std::chrono::milliseconds(500));
 
     // Metadata only: the file list is what the selection dialog shows.
     std::atomic_bool cancelled{false};
-    std::cerr << "bt step 4: fetching metadata\n";
     const auto metadata = btFetchMetadata(torrentPath.string(), (root.path() / "meta").string(),
         10000, cancelled);
     check(metadata.ok, ("metadata fetch failed: " + metadata.error).c_str());
@@ -112,7 +107,6 @@ void bitTorrentRoundTrip()
     request.files = {0};
     request.peers = {"127.0.0.1:" + std::to_string(seedPort)};
     std::int64_t lastReceived = 0;
-    std::cerr << "bt step 5: downloading\n";
     const auto result = btDownload(request, cancelled, [&](const BtProgressInfo& progress) {
         lastReceived = progress.received;
     });

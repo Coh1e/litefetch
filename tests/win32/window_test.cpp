@@ -12,6 +12,7 @@
 #include "task_service.h"
 #include "task_store.h"
 #include "test_support.h"
+#include "text_utf8.h"
 
 #include <commctrl.h>
 #include <ole2.h>
@@ -404,10 +405,12 @@ void runChecks()
             return std::filesystem::file_size(destination, error) == body.size();
         }, 30000);
         if (!published) {
-            std::string detail = "status=" + std::string(statusText(status, 0).begin(),
-                statusText(status, 0).end());
-            detail += " | error=" + std::string(statusText(status, 3).begin(), statusText(status, 3).end());
-            detail += " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+            // Read each status part once: taking begin() from one temporary and
+            // end() from another is undefined behaviour, and it crashed here as
+            // 0xc0000409 instead of reporting why the download stalled.
+            std::string detail = "status=" + utf8FromUtf16(statusText(status, 0))
+                + " | error=" + utf8FromUtf16(statusText(status, 3))
+                + " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
             throw std::runtime_error("download did not publish: " + detail);
         }
         check(readBytes(destination) == body, "downloaded bytes match the controlled peer");

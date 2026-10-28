@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace litefetch {
 
@@ -26,6 +27,8 @@ struct TaskSnapshot {
     // The stored partial data no longer matches the resource: starting again
     // needs the user's confirmation before the bytes are discarded.
     bool restartRequired = false;
+    // BitTorrent only: the file indices the user confirmed for this task.
+    std::vector<int> files;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };
@@ -37,6 +40,8 @@ struct AddTaskCommand {
     // instead of creating a second row. An explicit user choice to keep another
     // copy sets this and receives a new, restart-stable identity.
     bool allowDuplicate = false;
+    // BitTorrent only: the confirmed file indices; empty means every file.
+    std::vector<int> files;
 };
 struct StartTaskCommand {
     std::string taskId;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bt_engine.h"
 #include "http_engine.h"
 #include "task.h"
 #include "task_store.h"
@@ -25,9 +26,13 @@ public:
     // It must be cheap and must not throw; failures are ignored so an observer
     // can never break the transfer or its persistence.
     using ProgressObserver = std::function<void(std::string_view taskId, const TransferProgressInfo&)>;
+    // Torrent transfers go through their own engine so the core never links
+    // libtorrent; the caller supplies it when BitTorrent is available.
+    using BtTransfer = std::function<BtDownloadResult(const BtDownloadRequest&, const std::atomic_bool&,
+        const std::function<void(const BtProgressInfo&)>&)>;
 
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
-        ProgressObserver observer = {});
+        ProgressObserver observer = {}, BtTransfer btTransfer = {});
 
     // Storage/read failures during a command are returned as ok=false. Query
     // methods are not commands and throw StorageError if the read fails.
@@ -58,6 +63,7 @@ private:
 
     TaskRepository& repository_;
     TransferFunction transfer_;
+    BtTransfer btTransfer_;
     ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<ActiveTransfer>, std::less<>> active_;

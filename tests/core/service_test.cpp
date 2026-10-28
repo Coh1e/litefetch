@@ -391,6 +391,43 @@ void ftpResumeAndRestart(const std::filesystem::path& root)
     check(!std::filesystem::exists(refusedDestination), "refused ftp resume published a file");
 }
 
+void torrentSelectionPersists(const std::filesystem::path& root)
+{
+    const auto database = root / "torrent.db";
+    const auto savePath = root / "torrent-data";
+    std::filesystem::create_directories(savePath);
+    const std::string magnet =
+        "magnet:?xt=urn:btih:0123456789012345678901234567890123456789&dn=fixture";
+    std::string id;
+    {
+        TaskRepository repository(database);
+        TaskService service(repository);
+        AddTaskCommand add;
+        add.source = magnet;
+        add.destination = savePath.string();
+        add.files = {2, 0};
+        const auto added = service.execute(add);
+        require(added.ok, "torrent add failed: " + added.error);
+        id = added.task.id;
+        require(added.task.files == std::vector<int>({2, 0}), "selection is stored in order");
+
+        // Without a BitTorrent engine the start is refused with a clear reason
+        // instead of pretending to download.
+        const auto started = service.execute(StartTaskCommand{id});
+        require(started.ok, "torrent start was not committed: " + started.error);
+        require(started.task.state == TaskState::Failed, "a start without the engine did not fail");
+        require(started.task.error.find("BitTorrent") != std::string::npos,
+            "the missing engine is not named: " + started.task.error);
+    }
+    {
+        TaskRepository reopened(database);
+        const auto loaded = reopened.find(id);
+        require(loaded.has_value(), "torrent task did not survive reopen");
+        require(loaded->files == std::vector<int>({2, 0}), "selection did not survive reopen");
+        require(loaded->destination == savePath.string(), "save path did not survive reopen");
+    }
+}
+
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -699,6 +736,7 @@ int body()
     cancelSegmentedKeepsPrefix(root.path());
     ftpTransfers(root.path());
     ftpResumeAndRestart(root.path());
+    torrentSelectionPersists(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

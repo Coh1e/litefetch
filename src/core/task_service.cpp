@@ -17,6 +17,13 @@ std::int64_t nowMillis()
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+bool torrentSource(std::string_view source)
+{
+    if (source.rfind("magnet:", 0) == 0) return true;
+    return source.size() > 8
+        && (source.ends_with(".torrent") || source.ends_with(".TORRENT"));
+}
+
 bool httpSource(std::string_view source)
 {
     auto startsWith = [&](std::string_view prefix) {
@@ -47,8 +54,10 @@ CommandResult storageFailure(const StorageError& error)
 
 } // namespace
 
-TaskService::TaskService(TaskRepository& repository, TransferFunction transfer, ProgressObserver observer)
-    : repository_(repository), transfer_(std::move(transfer)), observer_(std::move(observer))
+TaskService::TaskService(TaskRepository& repository, TransferFunction transfer,
+    ProgressObserver observer, BtTransfer btTransfer)
+    : repository_(repository), transfer_(std::move(transfer)), btTransfer_(std::move(btTransfer)),
+      observer_(std::move(observer))
 {
     if (!transfer_) transfer_ = transferHttp;
 }
@@ -82,8 +91,12 @@ std::vector<TaskSnapshot> TaskService::snapshots()
 
 CommandResult TaskService::add(const AddTaskCommand& command)
 {
-    if (!httpSource(command.source))
-        return failure("only HTTP(S) and FTP sources are supported by the core boundary");
+    const bool torrent = torrentSource(command.source);
+    if (!torrent && !httpSource(command.source))
+        return failure("only HTTP(S), FTP and BitTorrent sources are supported by the core boundary");
+    if (torrent && command.source.rfind("magnet:", 0) != 0
+        && !std::filesystem::is_regular_file(pathFromUtf8(command.source)))
+        return failure("torrent file does not exist");
     const std::filesystem::path destination = pathFromUtf8(command.destination);
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");
@@ -117,8 +130,10 @@ CommandResult TaskService::add(const AddTaskCommand& command)
         }
         if (!allocated) return failure("cannot allocate a duplicate task identity");
     }
+    // A torrent saves into a directory, which normally already exists; the
+    // single-file "do not overwrite" rule applies to HTTP/FTP destinations only.
     std::error_code existsError;
-    if (std::filesystem::exists(destination, existsError))
+    if (!torrent && std::filesystem::exists(destination, existsError))
         return failure("destination already exists");
     if (existsError) return failure("cannot inspect destination: " + existsError.message());
 
@@ -128,6 +143,7 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     task.destination = command.destination;
     task.state = TaskState::Queued;
     task.total = -1;
+    task.files = command.files;
     task.createdAt = nowMillis();
     task.updatedAt = task.createdAt;
     try {
@@ -213,19 +229,53 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     };
 
     TransferResult transferResult;
-    try {
-        transferResult = transfer_(TransferRequest{task.source, task.destination,
-            command.restartFromZero, command.username, command.password}, *active->cancelled, progress);
-    } catch (const std::exception& error) {
-        transferResult.status = TransferStatus::Failed;
-        transferResult.error = TransferError::Internal;
-        transferResult.message = error.what();
-    } catch (...) {
-        transferResult.status = TransferStatus::Failed;
-        transferResult.error = TransferError::Internal;
-        transferResult.message = "transfer raised an unknown exception";
+    const bool torrent = torrentSource(task.source);
+    if (torrent) {
+        if (!btTransfer_) {
+            transferResult.status = TransferStatus::Failed;
+            transferResult.error = TransferError::Internal;
+            transferResult.message = "the BitTorrent engine is not available in this build";
+        } else {
+            BtDownloadRequest request;
+            request.source = task.source;
+            request.savePath = std::filesystem::path(pathFromUtf8(task.destination)).string();
+            request.files = task.files;
+            try {
+                const auto result = btTransfer_(request, *active->cancelled,
+                    [&](const BtProgressInfo& update) {
+                        progress(TransferProgressInfo{update.received, update.total});
+                    });
+                transferResult.received = result.received;
+                transferResult.total = -1;
+                if (result.ok) {
+                    transferResult.status = TransferStatus::Completed;
+                } else if (result.cancelled) {
+                    transferResult.status = TransferStatus::Cancelled;
+                } else {
+                    transferResult.status = TransferStatus::Failed;
+                    transferResult.error = TransferError::Network;
+                    transferResult.message = result.error;
+                }
+            } catch (const std::exception& error) {
+                transferResult.status = TransferStatus::Failed;
+                transferResult.error = TransferError::Internal;
+                transferResult.message = error.what();
+            }
+        }
+    } else {
+        try {
+            transferResult = transfer_(TransferRequest{task.source, task.destination,
+                command.restartFromZero, command.username, command.password}, *active->cancelled, progress);
+        } catch (const std::exception& error) {
+            transferResult.status = TransferStatus::Failed;
+            transferResult.error = TransferError::Internal;
+            transferResult.message = error.what();
+        } catch (...) {
+            transferResult.status = TransferStatus::Failed;
+            transferResult.error = TransferError::Internal;
+            transferResult.message = "transfer raised an unknown exception";
+        }
     }
-
     task.received = transferResult.received;
     task.total = transferResult.total;
     task.updatedAt = nowMillis();
