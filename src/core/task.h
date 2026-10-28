@@ -33,6 +33,8 @@ struct TaskSnapshot {
     std::vector<int> filePriorities;
     // BitTorrent only: extra trackers the user added for this task.
     std::vector<std::string> trackers;
+    // Live peer count reported by the engine; never persisted.
+    int peers = 0;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };

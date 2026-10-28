@@ -253,7 +253,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             try {
                 const auto result = btTransfer_(request, *active->cancelled,
                     [&](const BtProgressInfo& update) {
-                        progress(TransferProgressInfo{update.received, update.total});
+                        progress(TransferProgressInfo{update.received, update.total, update.peers});
                     });
                 transferResult.received = result.received;
                 transferResult.total = -1;

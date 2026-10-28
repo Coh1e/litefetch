@@ -24,6 +24,7 @@
 #include <libtorrent/socket.hpp>
 #include <libtorrent/torrent_info.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -107,11 +108,14 @@ void bitTorrentRoundTrip()
     request.choices = {BtFileChoice{0, 1}};
     request.peers = {"127.0.0.1:" + std::to_string(seedPort)};
     std::int64_t lastReceived = 0;
+    int maxPeers = 0;
     const auto result = btDownload(request, cancelled, [&](const BtProgressInfo& progress) {
         lastReceived = progress.received;
+        maxPeers = (std::max)(maxPeers, static_cast<int>(progress.peers));
     });
     check(result.ok, ("torrent download failed: " + result.error).c_str());
     check(lastReceived > 0, "progress reported received bytes");
+    check(maxPeers > 0, "progress reported the connected peer");
     check(readFile(downloadDirectory / "data" / "keep.bin") == keep,
         "downloaded file matches the seeded content");
     std::error_code error;

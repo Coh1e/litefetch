@@ -39,7 +39,7 @@ bool TaskWorker::start(std::string& error)
         repository_ = std::make_unique<TaskRepository>(databasePath_);
         service_ = std::make_unique<TaskService>(*repository_, transferHttp,
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
-                updateProgress(std::string(taskId), progress.received, progress.total);
+                updateProgress(std::string(taskId), progress.received, progress.total, progress.peers);
             },
             btTransfer_);
         // A running row can only come from a previous process that died; a
@@ -187,7 +187,12 @@ WorkerSnapshot TaskWorker::snapshot()
     std::lock_guard lock(mutex_);
     WorkerSnapshot result;
     result.tasks = tasks_;
+    for (auto& task : result.tasks) {
+        const auto found = peers_.find(task.id);
+        if (found != peers_.end()) task.peers = found->second;
+    }
     result.active = active_;
+    result.peers = peers_;
     result.addResults = addResults_;
     result.outcomes = outcomes_;
     result.lastError = lastError_;
@@ -483,7 +488,8 @@ void TaskWorker::appendOutcome(const ActionOutcome& outcome)
     wakeUi();
 }
 
-void TaskWorker::updateProgress(const std::string& taskId, std::int64_t received, std::int64_t total)
+void TaskWorker::updateProgress(const std::string& taskId, std::int64_t received,
+    std::int64_t total, int peers)
 {
     {
         std::lock_guard lock(mutex_);
@@ -497,6 +503,7 @@ void TaskWorker::updateProgress(const std::string& taskId, std::int64_t received
             // commit and the row would otherwise stay "waiting" while bytes
             // are already moving.
             if (task.state == TaskState::Queued) task.state = TaskState::Running;
+            peers_[taskId] = peers;
             break;
         }
     }

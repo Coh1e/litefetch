@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -43,6 +44,7 @@ struct ActionOutcome {
 struct WorkerSnapshot {
     std::vector<TaskSnapshot> tasks;
     std::vector<std::string> active;
+    std::map<std::string, int, std::less<>> peers;
     std::vector<AddResult> addResults;
     std::vector<ActionOutcome> outcomes;
     std::string lastError;
@@ -127,7 +129,8 @@ private:
     void publishError(std::string message);
     void appendAddResult(const AddResult& result);
     void appendOutcome(const ActionOutcome& outcome);
-    void updateProgress(const std::string& taskId, std::int64_t received, std::int64_t total);
+    void updateProgress(const std::string& taskId, std::int64_t received, std::int64_t total,
+        int peers = 0);
     bool anyJobFinished() const;
 
     std::filesystem::path databasePath_;
@@ -146,6 +149,7 @@ private:
     std::vector<StartJob> jobs_; // control thread only
     std::vector<TaskSnapshot> tasks_;
     std::vector<std::string> active_;
+    std::map<std::string, int, std::less<>> peers_;
     std::vector<AddResult> addResults_;
     std::vector<ActionOutcome> outcomes_;
     std::string lastError_;

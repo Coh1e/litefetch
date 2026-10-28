@@ -26,6 +26,8 @@ struct TransferRequest {
 struct TransferProgressInfo {
     std::int64_t received = 0;
     std::int64_t total = -1;
+    // Connected peers, reported by the BitTorrent engine only.
+    int peers = 0;
 };
 
 struct TransferResult {

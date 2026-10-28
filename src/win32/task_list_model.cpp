@@ -48,6 +48,7 @@ void TaskListModel::update(std::vector<TaskSnapshot> tasks, const std::vector<st
         row.savePath = snapshot.destination;
         row.error = snapshot.error;
         row.restartRequired = snapshot.restartRequired;
+        if (snapshot.peers > 0) row.connections = std::to_string(snapshot.peers);
         row.state = snapshot.state;
         row.received = snapshot.received;
         row.total = snapshot.total;
