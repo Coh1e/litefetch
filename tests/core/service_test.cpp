@@ -566,6 +566,48 @@ void ed2kTaskRuns(const std::filesystem::path& root)
     const auto refused = service.execute(bad);
     require(!refused.ok, "a server link must not become a task");
 }
+void ed2kPauseUsesSharedStop(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "ed2k-pause.db");
+    std::atomic_bool entered{false};
+    auto stub = [&](const Ed2kTaskRequest&, const std::atomic_bool& cancelled,
+                    const std::function<void(std::int64_t, std::int64_t)>&) {
+        entered.store(true);
+        for (int step = 0; step < 500 && !cancelled.load(); ++step)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        Ed2kTaskResult result;
+        if (cancelled.load()) {
+            result.error = "cancelled";
+        } else {
+            result.ok = true;
+            result.received = 1024;
+        }
+        return result;
+    };
+    TaskService service(repository, transferHttp, {}, {}, stub);
+
+    AddTaskCommand add;
+    add.source = "ed2k://|file|pause.bin|1024|0123456789abcdef0123456789abcdef|/";
+    add.destination = (root / "ed2k-pause.bin").string();
+    const auto added = service.execute(add);
+    require(added.ok, "ed2k add failed: " + added.error);
+
+    std::promise<CommandResult> first;
+    auto firstResult = first.get_future();
+    std::jthread worker([&] { first.set_value(service.execute(StartTaskCommand{added.task.id})); });
+    require(waitFor([&] { return entered.load(); }, std::chrono::seconds(10)),
+        "the ed2k engine was never entered");
+    const auto paused = service.execute(PauseTaskCommand{added.task.id});
+    require(paused.ok, "ed2k pause failed: " + paused.error);
+    const auto firstRun = firstResult.get();
+    worker.join();
+    require(firstRun.ok, "paused ed2k state was not committed: " + firstRun.error);
+    require(firstRun.task.state == TaskState::Paused, "ed2k pause did not produce paused state");
+
+    const auto resumed = service.execute(StartTaskCommand{added.task.id});
+    require(resumed.ok, "ed2k resume failed: " + resumed.error);
+    require(resumed.task.state == TaskState::Completed, "ed2k resume did not complete");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -877,6 +919,7 @@ int body()
     torrentSelectionPersists(root.path());
     torrentPauseUsesSharedStop(root.path());
     ed2kTaskRuns(root.path());
+    ed2kPauseUsesSharedStop(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());
