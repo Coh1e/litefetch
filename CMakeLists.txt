@@ -20,6 +20,7 @@ add_library(litefetch-core STATIC
     src/core/segmented_transfer.cpp src/core/segmented_transfer.h
     src/core/ed2k_link.cpp src/core/ed2k_link.h
     src/core/ed2k_client.cpp src/core/ed2k_client.h
+    src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
@@ -109,6 +110,11 @@ if(BUILD_TESTING)
     add_test(NAME ui-batch COMMAND ui-batch-tests)
     set_tests_properties(ui-batch PROPERTIES TIMEOUT 20)
     # BitTorrent boundary test: builds a local swarm and downloads one file.
+    add_executable(win32-native-bridge-tests tests/win32/native_bridge_test.cpp)
+    target_include_directories(win32-native-bridge-tests PRIVATE tests/core src/win32)
+    target_link_libraries(win32-native-bridge-tests PRIVATE litefetch-core ws2_32)
+    add_test(NAME win32-native-bridge COMMAND win32-native-bridge-tests)
+    set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
     add_executable(core-ed2k-tests tests/core/ed2k_test.cpp)
     target_include_directories(core-ed2k-tests PRIVATE tests/core)
     target_link_libraries(core-ed2k-tests PRIVATE litefetch-core ws2_32)
