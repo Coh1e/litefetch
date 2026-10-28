@@ -35,6 +35,26 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
         return result;
     }
 
+    const auto partPath = partPathFor(request.destination);
+    {
+        // A finished part file from an interrupted run needs no peer at all:
+        // verify it and publish.
+        const auto resume = inspectEd2kParts(partPath, link.link.size, link.link.hash);
+        if (resume.missingParts == 0 && resume.verifiedParts > 0
+            && ed2kFileHash(partPath) == link.link.hash) {
+            std::error_code publishError;
+            std::filesystem::rename(partPath, request.destination, publishError);
+            if (publishError) {
+                result.error = "cannot move the finished file into place: " + publishError.message();
+                return result;
+            }
+            std::filesystem::remove(partPath + ".ed2kmeta", publishError);
+            result.ok = true;
+            result.received = link.link.size;
+            return result;
+        }
+    }
+
     std::vector<Ed2kServerEndpoint> candidates = request.peers;
     // Peers named in the link itself need no server at all.
     for (const auto& source : link.sources)
@@ -66,7 +86,6 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
         }
     }
 
-    const auto partPath = partPathFor(request.destination);
     const auto directory = std::filesystem::path(request.destination).parent_path();
     std::error_code error;
     if (!directory.empty()) std::filesystem::create_directories(directory, error);

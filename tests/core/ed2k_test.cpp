@@ -325,6 +325,107 @@ void switchPeersKeepsFinishedParts(const std::filesystem::path& root)
     check(sent < static_cast<std::size_t>(ed2kPartSize),
         "the second peer was only asked for the missing part");
 }
+void publishAfterInterruption(const std::filesystem::path& root)
+{
+    const auto payload = litefetch::test::payload(15000);
+    const auto expectedPath = root / "publish-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto hash = ed2kFileHash(expectedPath.string());
+    const std::string link = "ed2k://|file|publish.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/";
+    const auto destination = root / "publish-out.bin";
+    const auto partPath = destination.string() + ".part";
+
+    // Fetch straight into the part file, which is what a crash between the last
+    // byte and the rename leaves behind.
+    {
+        FakeEd2kPeer peer(payload);
+        Ed2kPeerRequest request;
+        request.host = "127.0.0.1";
+        request.port = peer.port();
+        request.fileHash = hash;
+        request.fileSize = static_cast<std::int64_t>(payload.size());
+        request.partPath = partPath;
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto fetched = downloadFromEd2kPeer(request, cancelled);
+        check(fetched.ok, ("part fetch failed: " + fetched.error).c_str());
+        check(!std::filesystem::exists(destination), "the file is not published yet");
+    }
+
+    // A later run with no peer at all must recognise the finished part file and
+    // publish it instead of starting over or failing for lack of sources.
+    {
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = destination.string();
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto published = downloadEd2kTask(request, cancelled);
+        check(published.ok, ("publishing failed: " + published.error).c_str());
+        check(readFile(destination) == payload, "the published file matches");
+        check(!std::filesystem::exists(partPath), "the part file was moved into place");
+    }
+
+    // A destination that cannot be replaced keeps the part file intact.
+    {
+        const auto blocked = root / "publish-blocked";
+        std::filesystem::create_directories(blocked);
+        const auto blockedPart = blocked.string() + ".part";
+        FakeEd2kPeer peer(payload);
+        Ed2kPeerRequest request;
+        request.host = "127.0.0.1";
+        request.port = peer.port();
+        request.fileHash = hash;
+        request.fileSize = static_cast<std::int64_t>(payload.size());
+        request.partPath = blockedPart;
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto fetched = downloadFromEd2kPeer(request, cancelled);
+        check(fetched.ok, "the blocked part fetch succeeds");
+
+        Ed2kTaskRequest task;
+        task.link = link;
+        task.destination = blocked.string();
+        task.timeoutMillis = 5000;
+        const auto published = downloadEd2kTask(task, cancelled);
+        check(!published.ok, "a blocked destination is reported");
+        check(std::filesystem::exists(blockedPart), "the part file survives a failed publish");
+    }
+}
+void manyPartsTransfer(const std::filesystem::path& root)
+{
+    // Five parts, so the transfer spans several part boundaries instead of the
+    // single part most fixtures use.
+    const auto size = static_cast<std::size_t>(ed2kPartSize) * 5 + 777;
+    const auto payload = litefetch::test::payload(size);
+    const auto expectedPath = root / "big-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto hash = ed2kFileHash(expectedPath.string());
+    const std::string link = "ed2k://|file|big.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/";
+
+    FakeEd2kPeer peer(payload);
+    Ed2kTaskRequest request;
+    request.link = link;
+    request.destination = (root / "big-out.bin").string();
+    request.peers = {{"127.0.0.1", peer.port()}};
+    request.timeoutMillis = 20000;
+    std::atomic_bool cancelled{false};
+    std::int64_t lastProgress = 0;
+    const auto result = downloadEd2kTask(request, cancelled,
+        [&](std::int64_t received, std::int64_t total) {
+            check(total == static_cast<std::int64_t>(size), "progress reports the file size");
+            lastProgress = received;
+        });
+    check(result.ok, ("multi-part transfer failed: " + result.error).c_str());
+    checkEqual(result.received, static_cast<long long>(size), "every byte arrived");
+    checkEqual(lastProgress, static_cast<long long>(size), "progress ends at the file size");
+    check(readFile(root / "big-out.bin") == payload, "the multi-part file matches");
+    const auto state = inspectEd2kParts((root / "big-out.bin.part").string(),
+        static_cast<std::int64_t>(size), hash);
+    checkEqual(static_cast<long long>(state.missingParts), 6, "nothing was fetched into the part file");
+}
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(18000);
@@ -581,6 +682,8 @@ int main()
         taskPipeline(root.path());
         multiSourceAndPublish(root.path());
         switchPeersKeepsFinishedParts(root.path());
+        publishAfterInterruption(root.path());
+        manyPartsTransfer(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;
