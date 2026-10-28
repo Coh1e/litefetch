@@ -267,6 +267,10 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
         bool completed = false;
         while (true) {
             if (cancelled.load()) {
+                // Report the counters from the moment of cancellation: the loop
+                // may not have sampled them after the last uploaded piece.
+                result.uploaded = handle.status().all_time_upload;
+                result.received = handle.status().total_wanted_done;
                 saveResumeData(session, handle, request.resumePath);
                 session.pause();
                 result.cancelled = true;
@@ -285,7 +289,9 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
             if (done && !completed) {
                 completed = true;
                 if (request.seedPolicy.mode == 0) {
+                    result.uploaded = handle.status().all_time_upload;
                     result.ok = true;
+                    result.uploaded = handle.status().all_time_upload;
                     saveResumeData(session, handle, request.resumePath);
                     return result;
                 }
@@ -301,6 +307,7 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
                     || (request.seedPolicy.mode == 2
                         && minutes >= request.seedPolicy.minutesLimit)) {
                     result.ok = true;
+                    result.uploaded = handle.status().all_time_upload;
                     saveResumeData(session, handle, request.resumePath);
                     return result;
                 }

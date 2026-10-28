@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdio>
 #include <thread>
 #include <thread>
 #include <cstdio>
@@ -82,6 +83,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     const auto secondDirectory = root.path() / "second";
     std::atomic_bool seedingCancelled{false};
     std::atomic_bool seeding{false};
+    std::atomic<long long> seedUploaded{0};
     std::int32_t listenPort = 0;
     BtDownloadRequest seedRequest;
     seedRequest.source = torrentPath.string();
@@ -94,6 +96,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
         seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {
             if (update.listenPort != 0) listenPort = update.listenPort;
             if (update.seeding) seeding = true;
+            if (update.uploaded > seedUploaded.load()) seedUploaded.store(update.uploaded);
         });
     });
 
@@ -131,17 +134,24 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
         }
     }
 
+    // The seeder accounts uploaded bytes asynchronously; wait for the counter
+    // before stopping instead of racing it.
+    const auto uploadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (seedUploaded.load() == 0 && std::chrono::steady_clock::now() < uploadDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
     seedingCancelled.store(true);
     seederThread.join();
 
     check(seedingUp, "the completed task kept seeding instead of stopping");
     check(listenPort != 0, "the seeding session reported its listen port");
     check(leeched, "a second peer downloaded the torrent from us");
-    check(seedResult.uploaded > 0, "the seeding task counted uploaded bytes");
+    check(seedUploaded.load() > 0 || seedResult.uploaded > 0,
+        "the seeding task counted uploaded bytes");
     check(readFile(secondDirectory / "data" / "keep.bin") == payload(64 * 1024),
         "the uploaded bytes match the original file");
 }
-void bitTorrentRoundTrip()
+void bitTorrentRoundTrip(TorrentFlavour flavour)
 {
     TempDir root;
     const auto seedDirectory = root.path() / "seed";
@@ -152,7 +162,17 @@ void bitTorrentRoundTrip()
     writeFile(seedDirectory / "data" / "keep.bin", keep);
     writeFile(seedDirectory / "data" / "skip.bin", skip);
 
-    const auto torrentBytes = buildTorrent(seedDirectory);
+    const auto torrentBytes = buildTorrent(seedDirectory, flavour);
+    {
+        // The fixture must carry the hashes the flavour promises, otherwise the
+        // rest of the test would silently exercise the wrong thing.
+        const auto probe = lt::load_torrent_buffer(
+            {torrentBytes.data(), static_cast<int>(torrentBytes.size())});
+        check(probe.ti->info_hashes().has_v2() == (flavour != TorrentFlavour::v1),
+            "fixture v2 hash presence matches the flavour");
+        check(probe.ti->info_hashes().has_v1() == (flavour != TorrentFlavour::v2),
+            "fixture v1 hash presence matches the flavour");
+    }
     const auto torrentPath = root.file("fixture.torrent");
     {
         std::ofstream output(torrentPath, std::ios::binary | std::ios::trunc);
@@ -227,7 +247,9 @@ void bitTorrentRoundTrip()
 int main()
 {
     return run("bt", [] {
-        bitTorrentRoundTrip();
+        bitTorrentRoundTrip(TorrentFlavour::v1);
+        bitTorrentRoundTrip(TorrentFlavour::hybrid);
+        bitTorrentRoundTrip(TorrentFlavour::v2);
         return 0;
     });
 }
