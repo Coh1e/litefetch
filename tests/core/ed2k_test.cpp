@@ -7,6 +7,7 @@
 #include <ws2tcpip.h>
 
 #include "ed2k_client.h"
+#include "ed2k_serve.h"
 #include "ed2k_task.h"
 #include "ed2k_transfer.h"
 #include "ed2k_link.h"
@@ -184,10 +185,10 @@ private:
     {
         const SOCKET client = ::accept(listener_, nullptr, nullptr);
         if (client == INVALID_SOCKET) return;
-        std::vector<unsigned char> hello(27);
-        if (!receiveExact(client, hello.data(), 27)) { closesocket(client); return; }
-        std::vector<unsigned char> answer{0x4C};
-        answer.resize(1 + 32, 0);
+        std::vector<unsigned char> hello(28);
+        if (!receiveExact(client, hello.data(), 28)) { closesocket(client); return; }
+        std::vector<unsigned char> answer{0xE3, 0x4C};
+        answer.resize(2 + 32, 0);
         if (!sendAll(client, answer.data(), static_cast<int>(answer.size()))) { closesocket(client); return; }
 
         std::vector<unsigned char> request(17);
@@ -425,6 +426,33 @@ void manyPartsTransfer(const std::filesystem::path& root)
     const auto state = inspectEd2kParts((root / "big-out.bin.part").string(),
         static_cast<std::int64_t>(size), hash);
     checkEqual(static_cast<long long>(state.missingParts), 6, "nothing was fetched into the part file");
+}
+void twoLiteFetchPeers(const std::filesystem::path& root)
+{
+    // The seeder and the downloader are both this implementation: two processes
+    // can form their own ed2k network with no third-party client in the loop.
+    const auto payload = litefetch::test::payload(25000);
+    const auto sharedPath = root / "seeded.bin";
+    writeFile(sharedPath, payload);
+    const auto hash = ed2kFileHash(sharedPath.string());
+    check(!hash.empty(), "the seeded file has a hash");
+
+    Ed2kPeerServer server(sharedPath.string(), hash, 0);
+    std::string startError;
+    check(server.start(startError), ("the seeder did not start: " + startError).c_str());
+    check(server.port() != 0, "the seeder reports its port");
+
+    const std::string link = "ed2k://|file|seeded.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/|sources,127.0.0.1:" + std::to_string(server.port()) + "|/";
+    Ed2kTaskRequest request;
+    request.link = link;
+    request.destination = (root / "downloaded.bin").string();
+    request.timeoutMillis = 10000;
+    const std::atomic_bool cancelled{false};
+    const auto result = downloadEd2kTask(request, cancelled);
+    server.stop();
+    check(result.ok, ("download from our own seeder failed: " + result.error).c_str());
+    check(readFile(root / "downloaded.bin") == payload, "the bytes match the seeded file");
 }
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
@@ -684,6 +712,7 @@ int main()
         switchPeersKeepsFinishedParts(root.path());
         publishAfterInterruption(root.path());
         manyPartsTransfer(root.path());
+        twoLiteFetchPeers(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;

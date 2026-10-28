@@ -22,6 +22,7 @@ add_library(litefetch-core STATIC
     src/core/ed2k_client.cpp src/core/ed2k_client.h
     src/core/ed2k_transfer.cpp src/core/ed2k_transfer.h
     src/core/ed2k_task.cpp src/core/ed2k_task.h
+    src/core/ed2k_serve.cpp src/core/ed2k_serve.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
@@ -119,6 +120,11 @@ if(BUILD_TESTING)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
     add_executable(litefetch-ed2khash src/tools/ed2khash.cpp)
     target_link_libraries(litefetch-ed2khash PRIVATE litefetch-core bcrypt)
+    add_executable(litefetch-ed2kseed src/tools/ed2kseed.cpp)
+    target_link_libraries(litefetch-ed2kseed PRIVATE litefetch-core bcrypt ws2_32)
+
+    add_executable(litefetch-ed2kget src/tools/ed2kget.cpp)
+    target_link_libraries(litefetch-ed2kget PRIVATE litefetch-core bcrypt ws2_32)
 
     add_executable(core-ed2k-tests tests/core/ed2k_test.cpp)
     target_include_directories(core-ed2k-tests PRIVATE tests/core)

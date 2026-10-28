@@ -12,6 +12,15 @@
 
 namespace litefetch {
 namespace {
+void ensureWinsock()
+{
+    static const bool ready = [] {
+        WSADATA data{};
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    (void)ready;
+}
+
 constexpr unsigned char protocolMarker = 0xE3;
 constexpr unsigned char loginRequest = 0x01;
 constexpr unsigned char idChange = 0x40;
@@ -92,6 +101,7 @@ Ed2kSourceQuery queryEd2kSources(const Ed2kServerEndpoint& server, const Ed2kFil
     const auto deadline = std::chrono::steady_clock::now()
         + std::chrono::milliseconds(timeoutMillis);
 
+    ensureWinsock();
     Socket socket;
     if (!socket.open()) {
         query.error = "cannot create a socket";

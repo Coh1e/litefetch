@@ -17,6 +17,18 @@
 
 namespace litefetch {
 namespace {
+// Winsock has to be initialised once per process; the engine does it lazily so
+// callers do not have to remember.
+void ensureWinsock()
+{
+    static const bool ready = [] {
+        WSADATA data{};
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    (void)ready;
+}
+
+constexpr unsigned char protocolMarker = 0xE3;
 constexpr unsigned char helloRequest = 0x01;
 constexpr unsigned char helloAnswer = 0x4C;
 constexpr unsigned char fileRequest = 0x58;
@@ -293,6 +305,7 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
         return result;
     }
 
+    ensureWinsock();
     PeerSocket peer;
     if (!peer.open(request.timeoutMillis)) {
         result.error = "cannot create a socket";
@@ -303,8 +316,9 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
         return result;
     }
 
-    // Hello: hash, client id, port, no tags.
-    std::vector<unsigned char> hello{helloRequest};
+    // The first packet of a peer connection carries the protocol marker, then
+    // the hello: hash, client id, port, no tags.
+    std::vector<unsigned char> hello{protocolMarker, helloRequest};
     hello.insert(hello.end(), hash.begin(), hash.end());
     appendUint32(hello, 0);
     hello.push_back(0);
@@ -315,12 +329,12 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
         return result;
     }
 
-    unsigned char answer = 0;
-    if (!peer.receiveExact(&answer, 1)) {
+    unsigned char answer[2]{};
+    if (!peer.receiveExact(answer, 2)) {
         result.error = "the peer did not answer the hello";
         return result;
     }
-    if (answer != helloAnswer) {
+    if (answer[0] != protocolMarker || answer[1] != helloAnswer) {
         result.error = "unexpected answer to the hello";
         return result;
     }
