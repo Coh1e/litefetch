@@ -15,5 +15,8 @@ std::string formatProgress(std::int64_t received, std::int64_t total);
 std::string formatSpeed(double bytesPerSecond);
 std::string formatRemaining(double seconds);
 std::string fileNameFromPath(std::string_view utf8Path);
+// Local time in the fixed YYYY-MM-DD HH:MM form; non-positive timestamps are
+// unknown. Times shown in the list come from the persisted task row only.
+std::string formatDateTime(std::int64_t epochMillis);
 
 } // namespace litefetch::ui

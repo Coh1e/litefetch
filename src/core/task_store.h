@@ -34,6 +34,9 @@ public:
 
     void insert(const TaskSnapshot& task);
     void update(const TaskSnapshot& task);
+    // Deletes the record only. Callers are responsible for stopping writers
+    // first; owned files are never removed here.
+    void remove(std::string_view id);
     std::optional<TaskSnapshot> find(std::string_view id);
     std::vector<TaskSnapshot> all();
 

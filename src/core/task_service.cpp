@@ -58,6 +58,7 @@ CommandResult TaskService::execute(const TaskCommand& command)
     try {
         if (const auto* addCommand = std::get_if<AddTaskCommand>(&command)) return add(*addCommand);
         if (const auto* startCommand = std::get_if<StartTaskCommand>(&command)) return start(*startCommand);
+        if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
         return cancel(std::get<CancelTaskCommand>(command));
     } catch (const StorageError& error) {
         // This also covers read failures before a command reaches its write.
@@ -84,14 +85,34 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");
 
-    const auto id = taskIdentity(command.source);
-    if (const auto existing = repository_.find(id)) {
-        if (existing->destination != command.destination)
-            return failure("task identity already exists with another destination");
-        CommandResult result;
-        result.ok = true;
-        result.task = *existing;
-        return result;
+    const auto baseId = taskIdentity(command.source);
+    std::string id = baseId;
+    if (const auto existing = repository_.find(baseId)) {
+        if (!command.allowDuplicate) {
+            if (existing->destination != command.destination)
+                return failure("task identity already exists with another destination");
+            CommandResult result;
+            result.ok = true;
+            result.task = *existing;
+            result.existing = true;
+            return result;
+        }
+        if (existing->destination == command.destination)
+            return failure("a duplicate copy needs a different destination");
+        // The user explicitly asked for a second copy. Derive a new stable
+        // identity from the same source without touching the existing row; the
+        // chosen id is persisted, so it stays stable across restarts.
+        bool allocated = false;
+        for (int copy = 2; copy < 10000; ++copy) {
+            const auto candidate = taskIdentity(command.source + "\n#duplicate:"
+                + std::to_string(copy));
+            if (!repository_.find(candidate)) {
+                id = candidate;
+                allocated = true;
+                break;
+            }
+        }
+        if (!allocated) return failure("cannot allocate a duplicate task identity");
     }
     std::error_code existsError;
     if (std::filesystem::exists(destination, existsError))
@@ -291,6 +312,24 @@ CommandResult TaskService::cancel(const CancelTaskCommand& command)
         return result;
     }
     CommandResult result = failure("cancellation was not committed");
+    result.task = *task;
+    return result;
+}
+
+CommandResult TaskService::remove(const DeleteTaskCommand& command)
+{
+    std::lock_guard lock(activeMutex_);
+    if (active_.contains(command.taskId))
+        return failure("task is running; stop it before deleting the record");
+    const auto task = repository_.find(command.taskId);
+    if (!task) return failure("unknown task");
+    try {
+        repository_.remove(command.taskId);
+    } catch (const StorageError& error) {
+        return storageFailure(error);
+    }
+    CommandResult result;
+    result.ok = true;
     result.task = *task;
     return result;
 }

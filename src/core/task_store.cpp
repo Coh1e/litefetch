@@ -213,6 +213,16 @@ void TaskRepository::update(const TaskSnapshot& task)
     if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not updated");
 }
 
+void TaskRepository::remove(std::string_view id)
+{
+    std::lock_guard lock(mutex_);
+    if (readOnly_) throw StorageError("Database is read-only");
+    Statement statement(database_, "DELETE FROM native_tasks WHERE id=?");
+    statement.text(1, id);
+    statement.done();
+    if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not deleted");
+}
+
 std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 {
     std::lock_guard lock(mutex_);

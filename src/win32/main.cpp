@@ -6,11 +6,40 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
 namespace {
+std::filesystem::path failureLogPath;
+
+// std::terminate means a C++ exception left a noexcept boundary (a destructor,
+// a window procedure, a thread body). The default abort reports exit code 3
+// with no reason, so record it beside the database first.
+void logAndAbort()
+{
+    {
+        std::ofstream log(failureLogPath, std::ios::app);
+        log << "terminate: ";
+        if (const auto error = std::current_exception()) {
+            try {
+                std::rethrow_exception(error);
+            } catch (const std::exception& caught) {
+                log << caught.what();
+            } catch (...) {
+                log << "unknown exception";
+            }
+        } else {
+            log << "no active exception";
+        }
+        log << '\n';
+    }
+    std::abort();
+}
+
 std::filesystem::path knownFolder(REFKNOWNFOLDERID id)
 {
     PWSTR raw = nullptr;
@@ -73,6 +102,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         LocalFree(rawArguments);
     }
     const auto options = parseArguments(arguments);
+    failureLogPath = options.window.databasePath.parent_path() / L"ui-error.log";
+    std::set_terminate(logAndAbort);
     if (!options.error.empty()) {
         MessageBoxW(nullptr, litefetch::utf16FromUtf8(options.error).c_str(), L"lite fetch",
             MB_OK | MB_ICONERROR);
@@ -80,11 +111,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         return 2;
     }
 
-    {
+    try {
         litefetch::ui::MainWindow window(options.window);
         if (window.create(instance, showCommand)) {
             MSG message{};
             while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+                if (window.activeDialog() && IsDialogMessageW(window.activeDialog(), &message))
+                    continue;
                 if (window.accelerators()
                     && TranslateAcceleratorW(window.handle(), window.accelerators(), &message))
                     continue;
@@ -92,7 +125,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
                 DispatchMessageW(&message);
             }
             result = static_cast<int>(message.wParam);
+            {
+                std::ofstream trace(failureLogPath, std::ios::app);
+                trace << "message loop exited: wParam=" << message.wParam << " result=" << result << "\n";
+            }
         }
+    } catch (const std::exception& error) {
+        std::ofstream debug(failureLogPath, std::ios::app);
+        debug << "wWinMain exception: " << error.what() << "\n";
+        result = 3;
+    } catch (...) {
+        std::ofstream debug(failureLogPath, std::ios::app);
+        debug << "wWinMain unknown exception\n";
+        result = 3;
     }
     OleUninitialize();
     return result;

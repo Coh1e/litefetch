@@ -38,6 +38,7 @@ private:
     CommandResult add(const AddTaskCommand& command);
     CommandResult start(const StartTaskCommand& command);
     CommandResult cancel(const CancelTaskCommand& command);
+    CommandResult remove(const DeleteTaskCommand& command);
     void unregister(std::string_view id, const std::shared_ptr<std::atomic_bool>& flag);
 
     TaskRepository& repository_;

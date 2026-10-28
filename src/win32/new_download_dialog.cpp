@@ -14,6 +14,7 @@ namespace litefetch::ui {
 namespace {
 struct DialogContext {
     std::filesystem::path initialDirectory;
+    std::string initialUrl;
     std::optional<NewDownloadRequest> result;
 };
 
@@ -83,12 +84,22 @@ bool accept(HWND dialog, DialogContext& context)
         MessageBoxW(dialog, L"请输入下载地址。", L"新建下载", MB_OK | MB_ICONWARNING);
         SetFocus(GetDlgItem(dialog, IDC_URL));
         return false;
-    case SourceKind::Multiple:
-        MessageBoxW(dialog,
-            L"批量添加尚未实现，本版本一次只能创建一个 HTTP 下载任务。",
-            L"新建下载", MB_OK | MB_ICONINFORMATION);
+    case SourceKind::Multiple: {
+        const int choice = MessageBoxW(dialog,
+            L"检测到多个下载地址。是否切换到“批量添加”？\n\n"
+            L"选择“否”会保留当前文本，不会创建任何任务。",
+            L"新建下载", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION);
+        if (choice == IDYES) {
+            context.result = NewDownloadRequest{};
+            context.result->switchToBatch = true;
+            context.result->batchText = controlUtf8(dialog, IDC_URL);
+            context.result->directory = std::filesystem::path(
+                windowText(GetDlgItem(dialog, IDC_SAVE_DIR)));
+            return true;
+        }
         SetFocus(GetDlgItem(dialog, IDC_URL));
         return false;
+    }
     case SourceKind::Unsupported:
         MessageBoxW(dialog,
             L"不支持的地址类型。本版本仅支持 HTTP 下载（HTTPS 由传输库支持，尚未验收）；FTP、BT、磁力与 ed2k 将在后续版本提供。",
@@ -153,9 +164,16 @@ INT_PTR CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
         if (!context->initialDirectory.empty())
             SetDlgItemTextW(dialog, IDC_SAVE_DIR, context->initialDirectory.c_str());
         CheckDlgButton(dialog, IDC_AUTO_START, BST_CHECKED);
-        SetDlgItemTextW(dialog, IDC_URL_HINT, L"已识别: —。");
+        if (!context->initialUrl.empty()) {
+            try {
+                SetDlgItemTextW(dialog, IDC_URL, utf16FromUtf8(context->initialUrl).c_str());
+            } catch (const std::exception&) {
+            }
+        }
+        updateHint(dialog);
         centerOnOwner(dialog, GetParent(dialog));
         SetFocus(GetDlgItem(dialog, IDC_URL));
+        SendDlgItemMessageW(dialog, IDC_URL, EM_SETSEL, 0, -1);
         return FALSE;
     }
     case WM_COMMAND: {
@@ -190,10 +208,11 @@ INT_PTR CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
 } // namespace
 
 std::optional<NewDownloadRequest> showNewDownloadDialog(HWND owner,
-    const std::filesystem::path& initialDirectory)
+    const std::filesystem::path& initialDirectory, std::string_view initialUrl)
 {
     DialogContext context;
     context.initialDirectory = initialDirectory;
+    context.initialUrl = std::string(initialUrl);
     const INT_PTR result = DialogBoxParamW(GetModuleHandleW(nullptr),
         MAKEINTRESOURCEW(IDD_NEW_DOWNLOAD), owner, dialogProc,
         reinterpret_cast<LPARAM>(&context));

@@ -1,10 +1,14 @@
 #include "task_list_model.h"
 
+#include "task_view.h"
+#include "text_utf8.h"
 #include "ui_text.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <set>
+#include <system_error>
 #include <utility>
 
 namespace litefetch::ui {
@@ -38,9 +42,15 @@ void TaskListModel::update(std::vector<TaskSnapshot> tasks, const std::vector<st
         row.destination = snapshot.destination;
         row.name = fileNameFromPath(snapshot.destination);
         if (row.name.empty()) row.name = snapshot.source;
+        row.protocol = protocolLabel(snapshot.source);
+        row.address = redactAddress(snapshot.source);
+        row.savePath = snapshot.destination;
+        row.error = snapshot.error;
         row.state = snapshot.state;
         row.received = snapshot.received;
         row.total = snapshot.total;
+        row.createdAt = snapshot.createdAt;
+        row.completedAt = snapshot.state == TaskState::Completed ? snapshot.updatedAt : 0;
         row.updatedAt = snapshot.updatedAt;
         row.active = active.contains(snapshot.id);
         row.interrupted = snapshot.state == TaskState::Running && !row.active;
@@ -68,12 +78,14 @@ void TaskListModel::update(std::vector<TaskSnapshot> tasks, const std::vector<st
             }
             samples.emplace(snapshot.id, sample);
             row.speedBytesPerSecond = sample.speed;
+            row.speedKnown = true;
             row.speed = formatSpeed(sample.speed);
             if (snapshot.total >= 0 && sample.speed > 0.0) {
                 const auto remainingBytes = snapshot.total - snapshot.received;
-                row.remaining = formatRemaining(remainingBytes > 0
-                        ? static_cast<double>(remainingBytes) / sample.speed
-                        : 0.0);
+                row.remainingSeconds = remainingBytes > 0
+                    ? static_cast<double>(remainingBytes) / sample.speed : 0.0;
+                row.remainingKnown = true;
+                row.remaining = formatRemaining(row.remainingSeconds);
             } else {
                 row.remaining = std::string(unknownValue);
             }
@@ -98,14 +110,46 @@ std::size_t TaskListModel::indexOf(std::string_view id) const
 
 ActionState TaskListModel::actionsFor(std::string_view selectedId) const
 {
+    if (selectedId.empty()) return ActionState{};
+    return actionsForSelection({std::string(selectedId)});
+}
+
+ActionState TaskListModel::actionsForSelection(const std::vector<std::string>& selectedIds) const
+{
     ActionState actions;
-    const auto index = indexOf(selectedId);
-    if (index >= rows_.size()) return actions;
-    const auto& row = rows_[index];
-    actions.start = row.state == TaskState::Queued || row.state == TaskState::Failed;
-    actions.stop = row.state == TaskState::Queued || row.state == TaskState::Running;
-    actions.openFolder = !row.destination.empty();
-    actions.copyLink = !row.source.empty();
+    actions.selectedCount = selectedIds.size();
+    const bool single = selectedIds.size() == 1;
+    for (const auto& id : selectedIds) {
+        const auto index = indexOf(id);
+        if (index >= rows_.size()) continue;
+        const auto& row = rows_[index];
+        if (row.state == TaskState::Queued || row.state == TaskState::Failed) ++actions.startCount;
+        if (row.state == TaskState::Queued || row.state == TaskState::Running) ++actions.stopCount;
+        ++actions.deleteCount;
+        if (!row.source.empty()) ++actions.copyLinkCount;
+        if (!row.destination.empty()) ++actions.copyPathCount;
+
+        if (!single || row.destination.empty()) continue;
+        std::filesystem::path destination;
+        try {
+            destination = pathFromUtf8(row.destination);
+        } catch (const std::exception&) {
+            continue;
+        }
+        std::error_code error;
+        const bool fileExists = std::filesystem::is_regular_file(destination, error);
+        if (row.state == TaskState::Completed && fileExists) ++actions.openFileCount;
+        const auto parent = destination.parent_path();
+        if (fileExists || (!parent.empty() && std::filesystem::is_directory(parent, error)))
+            ++actions.openFolderCount;
+    }
+    actions.start = actions.startCount > 0;
+    actions.stop = actions.stopCount > 0;
+    actions.deleteTask = actions.deleteCount > 0;
+    actions.openFile = actions.openFileCount > 0;
+    actions.openFolder = actions.openFolderCount > 0;
+    actions.copyLink = actions.copyLinkCount > 0;
+    actions.copyPath = actions.copyPathCount > 0;
     return actions;
 }
 
@@ -118,12 +162,19 @@ double TaskListModel::totalDownloadSpeed() const
 
 StatusTexts TaskListModel::status() const
 {
+    return status(rows_.size(), false);
+}
+
+StatusTexts TaskListModel::status(std::size_t visibleCount, bool filtered) const
+{
     StatusTexts texts;
     std::size_t active = 0;
     for (const auto& row : rows_) {
         if (row.active) ++active;
     }
-    texts.tasks = "任务: " + std::to_string(rows_.size());
+    texts.tasks = filtered
+        ? "可见: " + std::to_string(visibleCount) + " / " + std::to_string(rows_.size())
+        : "任务: " + std::to_string(rows_.size());
     texts.active = "活动: " + std::to_string(active);
     texts.download = "\xE2\x86\x93 " + formatSpeed(totalDownloadSpeed());
     // Upload/seeding is not part of this ticket; the field must not invent a

@@ -1,10 +1,12 @@
 #include "main_window.h"
 
+#include "batch_dialog.h"
+#include "column_dialog.h"
 #include "new_download_dialog.h"
 #include "resource.h"
-#include "task_worker.h"
+#include "task_view.h"
 #include "text_utf8.h"
-#include "list_layout.h"
+#include "ui_text.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -12,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cwctype>
+#include <fstream>
 #include <system_error>
 
 namespace litefetch::ui {
@@ -20,6 +24,8 @@ constexpr wchar_t windowClass[] = L"LiteFetchMainWindow";
 constexpr int refreshTimerMillis = 500;
 constexpr int shutdownTimerMillis = 100;
 constexpr wchar_t title[] = L"lite fetch";
+constexpr unsigned int appRefreshColumnsMessage = WM_APP + 2;
+constexpr unsigned int appUpdateActionsMessage = WM_APP + 3;
 
 std::wstring toWide(std::string_view utf8, const wchar_t* fallback = L"")
 {
@@ -46,22 +52,9 @@ const std::array<ToolbarButton, 10> toolbarButtons{{
     {ID_TASK_STOP, L"停止", IDI_STOP, false, 0},
     {ID_TASK_DELETE, L"删除", IDI_DELETE, false, 0},
     {0, L"", 0, true, 0},
-    {ID_TASK_OPEN_FOLDER, L"打开文件夹", IDI_FOLDER, false, 0},
+    {ID_TASK_OPEN_FOLDER, L"打开文件", IDI_FOLDER, false, 0},
     {0, L"", 0, true, 0},
     {ID_TOOLS_OPTIONS, L"选项", IDI_SETTINGS, false, 0},
-}};
-
-struct ColumnSpec {
-    const wchar_t* title;
-};
-
-const std::array<ColumnSpec, 6> columns{{
-    {L"名称"},
-    {L"大小"},
-    {L"进度"},
-    {L"下载速度"},
-    {L"剩余时间"},
-    {L"状态"},
 }};
 
 int scale(int value, int dpi)
@@ -73,12 +66,199 @@ std::wstring statusBarText(const std::string& utf8)
 {
     return toWide(utf8);
 }
+
+std::wstring shellErrorText(INT_PTR code)
+{
+    switch (code) {
+    case 0: return L"系统内存或资源不足（错误 0）";
+    case ERROR_FILE_NOT_FOUND: return L"文件不存在";
+    case ERROR_PATH_NOT_FOUND: return L"路径不存在";
+    case ERROR_ACCESS_DENIED: return L"访问被拒绝（权限不足）";
+    case ERROR_BAD_FORMAT: return L"程序格式无效";
+    case SE_ERR_ASSOCINCOMPLETE: return L"文件关联不完整";
+    case SE_ERR_NOASSOC: return L"没有可打开此文件的程序";
+    case SE_ERR_OOM: return L"系统内存不足";
+    case SE_ERR_SHARE: return L"文件正被其他程序占用";
+    default: return L"错误代码 " + std::to_wstring(code);
+    }
+}
+
+bool isEditFocus()
+{
+    HWND focus = GetFocus();
+    if (!focus) return false;
+    wchar_t name[64]{};
+    if (GetClassNameW(focus, name, static_cast<int>(std::size(name))) == 0) return false;
+    return _wcsicmp(name, L"Edit") == 0;
+}
+
+std::wstring readClipboardText(HWND owner)
+{
+    if (!OpenClipboard(owner)) return {};
+    std::wstring result;
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* text = static_cast<const wchar_t*>(GlobalLock(data))) {
+            result = text;
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return result;
+}
+
+void centerDialog(HWND dialog, HWND owner)
+{
+    if (!owner) return;
+    RECT ownerRect{};
+    RECT dialogRect{};
+    if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(dialog, &dialogRect)) return;
+    const int width = dialogRect.right - dialogRect.left;
+    const int height = dialogRect.bottom - dialogRect.top;
+    SetWindowPos(dialog, nullptr,
+        ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2,
+        ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2,
+        0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+struct BatchResultRow {
+    int line = 0;
+    std::string address;
+    std::string result;
+};
+
+struct BatchResultContext {
+    std::vector<BatchResultRow> rows;
+};
+
+INT_PTR CALLBACK batchResultDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message) {
+    case WM_INITDIALOG: {
+        auto* context = reinterpret_cast<BatchResultContext*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!context) return FALSE;
+        HWND list = GetDlgItem(dialog, IDC_BATCH_RESULT_LIST);
+        ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        LVCOLUMNW column{};
+        column.mask = LVCF_TEXT | LVCF_WIDTH;
+        column.pszText = const_cast<LPWSTR>(L"行");
+        column.cx = 40;
+        ListView_InsertColumn(list, 0, &column);
+        column.pszText = const_cast<LPWSTR>(L"地址");
+        column.cx = 230;
+        ListView_InsertColumn(list, 1, &column);
+        column.pszText = const_cast<LPWSTR>(L"结果");
+        column.cx = 150;
+        ListView_InsertColumn(list, 2, &column);
+        for (std::size_t index = 0; index < context->rows.size(); ++index) {
+            const auto& row = context->rows[index];
+            const auto line = std::to_wstring(row.line);
+            const auto address = toWide(row.address);
+            const auto result = toWide(row.result);
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(index);
+            item.pszText = const_cast<LPWSTR>(line.c_str());
+            ListView_InsertItem(list, &item);
+            ListView_SetItemText(list, static_cast<int>(index), 1, const_cast<LPWSTR>(address.c_str()));
+            ListView_SetItemText(list, static_cast<int>(index), 2, const_cast<LPWSTR>(result.c_str()));
+        }
+        centerDialog(dialog, GetParent(dialog));
+        SetFocus(GetDlgItem(dialog, IDOK));
+        return FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dialog, IDOK);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+void showBatchResultDialog(HWND owner, const std::vector<BatchResultRow>& rows)
+{
+    BatchResultContext context;
+    context.rows = rows;
+    DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_BATCH_RESULT), owner,
+        batchResultDialogProc, reinterpret_cast<LPARAM>(&context));
+}
+
+bool readTextFile(const std::filesystem::path& path, std::string& text)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xff
+        && static_cast<unsigned char>(bytes[1]) == 0xfe) {
+        try {
+            const auto* wide = reinterpret_cast<const wchar_t*>(bytes.data() + 2);
+            const auto count = (bytes.size() - 2) / sizeof(wchar_t);
+            text = utf8FromUtf16(std::wstring_view(wide, count));
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+    if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xef
+        && static_cast<unsigned char>(bytes[1]) == 0xbb
+        && static_cast<unsigned char>(bytes[2]) == 0xbf)
+        bytes.erase(0, 3);
+    text = std::move(bytes);
+    return true;
+}
 } // namespace
 
-MainWindow::MainWindow(AppOptions options) : options_(std::move(options)) {}
+INT_PTR CALLBACK MainWindow::deleteDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* self = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        self = reinterpret_cast<MainWindow*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!self) return FALSE;
+        const auto text = L"确定从列表中删除所选的 "
+            + std::to_wstring(self->pendingDeleteSelection_.size()) + L" 个任务？";
+        SetDlgItemTextW(dialog, IDC_DELETE_MESSAGE, text.c_str());
+        centerDialog(dialog, GetParent(dialog));
+        SetFocus(GetDlgItem(dialog, IDCANCEL));
+        return FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            if (self) self->finishDeleteDialog(true);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL) {
+            if (self) self->finishDeleteDialog(false);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        if (self) self->finishDeleteDialog(false);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+MainWindow::MainWindow(AppOptions options)
+    : options_(std::move(options)), columnSettings_(defaultColumnSettings())
+{
+}
 
 MainWindow::~MainWindow()
 {
+    if (deleteDialog_) {
+        HWND dialog = deleteDialog_;
+        deleteDialog_ = nullptr;
+        DestroyWindow(dialog);
+    }
     if (worker_) worker_->shutdown();
     if (rowImages_) ImageList_Destroy(rowImages_);
     if (toolbarImages_) ImageList_Destroy(toolbarImages_);
@@ -133,7 +313,43 @@ LRESULT CALLBACK MainWindow::windowProcStatic(HWND window, UINT message, WPARAM 
         return DefWindowProcW(window, message, wParam, lParam);
     }
     if (!self) return DefWindowProcW(window, message, wParam, lParam);
-    return self->handleMessage(message, wParam, lParam);
+    try {
+        return self->handleMessage(message, wParam, lParam);
+    } catch (const std::exception& error) {
+        self->logUiFailure("window message " + std::to_string(message) + " failed: " + error.what());
+        return 0;
+    } catch (...) {
+        self->logUiFailure("window message " + std::to_string(message) + " failed: unknown exception");
+        return 0;
+    }
+}
+
+void MainWindow::logUiFailure(std::string_view message) const
+{
+    const auto directory = options_.databasePath.parent_path();
+    if (directory.empty()) return;
+    std::error_code ignored;
+    std::filesystem::create_directories(directory, ignored);
+    std::ofstream log(directory / L"ui-error.log", std::ios::binary | std::ios::app);
+    if (!log) return;
+    log << message << '\n';
+}
+
+LRESULT CALLBACK MainWindow::searchSubclassStatic(HWND window, UINT message, WPARAM wParam,
+    LPARAM lParam, UINT_PTR, DWORD_PTR reference)
+{
+    auto* self = reinterpret_cast<MainWindow*>(reference);
+    if (message == WM_KEYDOWN) {
+        if (wParam == VK_ESCAPE) {
+            if (self) self->hideSearch();
+            return 0;
+        }
+        if (wParam == VK_RETURN) {
+            if (self && self->list_) SetFocus(self->list_);
+            return 0;
+        }
+    }
+    return DefSubclassProc(window, message, wParam, lParam);
 }
 
 LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
@@ -144,6 +360,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_SIZE:
         layoutControls();
+        layoutStatusParts();
         return 0;
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
@@ -161,6 +378,10 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         applyFont();
         updateLayoutMetrics();
         layoutControls();
+        lastColumnClientWidth_ = -1;
+        lastColumnDpi_ = 0;
+        applyColumnWidths();
+        layoutStatusParts();
         return 0;
     }
     case WM_TIMER:
@@ -180,27 +401,137 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case workerWakeMessage:
         refreshFromWorker();
         return 0;
+    case appRefreshColumnsMessage:
+        rebuildColumns();
+        syncList();
+        updateStatus();
+        updateActions();
+        return 0;
+    case appUpdateActionsMessage:
+        updateActions();
+        return 0;
+    case WM_DROPFILES:
+        handleDrop(reinterpret_cast<HDROP>(wParam));
+        return 0;
     case WM_NOTIFY: {
         auto* header = reinterpret_cast<NMHDR*>(lParam);
         if (header->hwndFrom == tooltip_ && header->code == TTN_GETDISPINFOW) {
             updateTooltip(*reinterpret_cast<NMTTDISPINFOW*>(lParam));
             return 0;
         }
-        if (header->hwndFrom == list_ && header->code == LVN_ITEMCHANGED) {
-            auto* change = reinterpret_cast<NMLISTVIEW*>(lParam);
-            const bool becameSelected = (change->uNewState & LVIS_SELECTED)
-                && !(change->uOldState & LVIS_SELECTED);
-            if (becameSelected && change->iItem >= 0
-                && static_cast<std::size_t>(change->iItem) < model_.rows().size()) {
-                selectedId_ = model_.rows()[static_cast<std::size_t>(change->iItem)].id;
-                updateActions();
+        if (list_ && header->hwndFrom == ListView_GetHeader(list_)) {
+            if (header->code == HDN_ENDDRAG) {
+                auto* info = reinterpret_cast<NMHEADERW*>(lParam);
+                if (info->iItem >= 0 && info->pitem && info->pitem->iOrder >= 0
+                    && info->iItem < static_cast<int>(visibleColumns_.size())
+                    && info->pitem->iOrder < static_cast<int>(visibleColumns_.size())
+                    && info->iItem != info->pitem->iOrder) {
+                    const auto from = static_cast<std::size_t>(info->iItem);
+                    const auto to = static_cast<std::size_t>(info->pitem->iOrder);
+                    std::vector<std::size_t> slots;
+                    std::vector<ColumnState> states;
+                    for (std::size_t index = 0; index < columnSettings_.columns.size(); ++index) {
+                        if (!columnSettings_.columns[index].visible) continue;
+                        slots.push_back(index);
+                        states.push_back(columnSettings_.columns[index]);
+                    }
+                    if (states.size() == visibleColumns_.size()) {
+                        auto moved = states[from];
+                        states.erase(states.begin() + static_cast<std::ptrdiff_t>(from));
+                        states.insert(states.begin() + static_cast<std::ptrdiff_t>(to), moved);
+                        for (std::size_t index = 0; index < slots.size(); ++index)
+                            columnSettings_.columns[slots[index]] = states[index];
+                        saveColumnSettings();
+                        PostMessageW(hwnd_, appRefreshColumnsMessage, 0, 0);
+                    }
+                }
+                return TRUE; // the order is applied by our rebuild
             }
-            return 0;
+            if (header->code == HDN_ENDTRACK) {
+                auto* info = reinterpret_cast<NMHEADERW*>(lParam);
+                const int tracked = info->iItem;
+                HWND listHeader = ListView_GetHeader(list_);
+                const int count = Header_GetItemCount(listHeader);
+                for (int index = 0; index < count && index < static_cast<int>(visibleColumns_.size());
+                     ++index) {
+                    HDITEMW item{};
+                    item.mask = HDI_WIDTH;
+                    if (!Header_GetItem(listHeader, index, &item) || item.cxy <= 0) continue;
+                    const int width = item.cxy;
+                    const auto id = visibleColumns_[static_cast<std::size_t>(index)];
+                    for (auto& state : columnSettings_.columns) {
+                        if (state.id != id) continue;
+                        if (index == count - 1 && index != tracked) break;
+                        state.width = std::clamp(MulDiv(width, 96, dpi_), 40, 2000);
+                        break;
+                    }
+                }
+                saveColumnSettings();
+                lastColumnClientWidth_ = -1;
+                applyColumnWidths();
+                return 0;
+            }
         }
-        if (header->hwndFrom == list_ && header->code == LVN_KEYDOWN) {
-            const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lParam);
-            if (key->wVKey == VK_RETURN) {
-                startSelected();
+        if (list_ && header->hwndFrom == list_) {
+            if (header->code == LVN_ITEMCHANGED) {
+                // Do not re-enter the ListView while it is delivering this
+                // notification (a cross-thread LVM_SETITEMSTATE would block).
+                if (!suppressSelection_) PostMessageW(hwnd_, appUpdateActionsMessage, 0, 0);
+                return 0;
+            }
+            if (header->code == LVN_KEYDOWN) {
+                const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lParam);
+                if (key->wVKey == VK_DELETE) {
+                    if (GetKeyState(VK_SHIFT) < 0) {
+                        setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除任何内容。");
+                    } else {
+                        deleteSelected();
+                    }
+                    return 0;
+                }
+                if (key->wVKey == VK_RETURN) {
+                    startSelected();
+                    return 0;
+                }
+                if (key->wVKey == VK_ESCAPE && searchVisible_) {
+                    hideSearch();
+                    return 0;
+                }
+                return 0;
+            }
+            if (header->code == LVN_COLUMNCLICK) {
+                const auto* info = reinterpret_cast<NMLISTVIEW*>(lParam);
+                if (info->iSubItem >= 0
+                    && info->iSubItem < static_cast<int>(visibleColumns_.size())) {
+                    const auto column = visibleColumns_[static_cast<std::size_t>(info->iSubItem)];
+                    if (columnSettings_.sortColumn == column) {
+                        columnSettings_.sortAscending = !columnSettings_.sortAscending;
+                    } else {
+                        columnSettings_.sortColumn = column;
+                        columnSettings_.sortAscending = true;
+                    }
+                    saveColumnSettings();
+                    applySortArrow();
+                    syncList();
+                    updateStatus();
+                    updateActions();
+                }
+                return 0;
+            }
+            if (header->code == LVN_GETINFOTIPW) {
+                auto* tip = reinterpret_cast<NMLVGETINFOTIPW*>(lParam);
+                if (tip->iItem >= 0
+                    && static_cast<std::size_t>(tip->iItem) < viewRows_.size()) {
+                    const auto& row = viewRows_[static_cast<std::size_t>(tip->iItem)];
+                    std::wstring text = toWide(row.name) + L"\r\n" + toWide(row.address)
+                        + L"\r\n" + toWide(row.destination);
+                    if (!row.error.empty()) text += L"\r\n" + toWide(row.error);
+                    lstrcpynW(tip->pszText, text.c_str(), tip->cchTextMax);
+                }
+                return 0;
+            }
+            if (header->code == NM_DBLCLK) {
+                setNotice("任务属性将在后续版本提供；当前未修改任何任务。");
                 return 0;
             }
         }
@@ -214,20 +545,70 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         if (isClosing() && id != ID_FILE_EXIT) return 0;
         switch (id) {
         case ID_FILE_NEW: openNewDownload(); return 0;
+        case ID_FILE_BATCH: openBatchAdd(); return 0;
+        case ID_FILE_OPEN_TORRENT: openTorrentBoundary(); return 0;
         case ID_FILE_EXIT: PostMessageW(hwnd_, WM_CLOSE, 0, 0); return 0;
-        case ID_EDIT_COPY_LINK: copyLinkSelected(); return 0;
+        case ID_EDIT_COPY_LINK:
+            if (isEditFocus()) {
+                if (HWND focus = GetFocus()) SendMessageW(focus, WM_COPY, 0, 0);
+            } else {
+                copySelectedLinks();
+            }
+            return 0;
+        case ID_EDIT_COPY_PATH: copySelectedPaths(); return 0;
+        case ID_EDIT_SELECT_ALL: selectAllVisible(); return 0;
+        case ID_EDIT_FIND: showSearch(); return 0;
+        case ID_EDIT_PASTE:
+            if (isEditFocus()) {
+                if (HWND focus = GetFocus()) SendMessageW(focus, WM_PASTE, 0, 0);
+            } else {
+                pasteFromClipboard();
+            }
+            return 0;
         case ID_VIEW_REFRESH:
             if (worker_) worker_->postRefresh();
             return 0;
+        case ID_VIEW_FILTER_ALL: applyFilter(TaskFilter::All); return 0;
+        case ID_VIEW_FILTER_ACTIVE: applyFilter(TaskFilter::Active); return 0;
+        case ID_VIEW_FILTER_COMPLETED: applyFilter(TaskFilter::Completed); return 0;
+        case ID_VIEW_FILTER_FAILED: applyFilter(TaskFilter::Failed); return 0;
+        case ID_VIEW_TOOLBAR: toggleToolbar(); return 0;
+        case ID_VIEW_STATUSBAR: toggleStatusBar(); return 0;
+        case ID_VIEW_COLUMNS: showColumnChooser(); return 0;
         case ID_TASK_START: startSelected(); return 0;
         case ID_TASK_STOP: stopSelected(); return 0;
+        case ID_TASK_DELETE: deleteSelected(); return 0;
+        case ID_TASK_OPEN_FILE: openFileSelected(); return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
         case ID_TASK_PAUSE:
-        case ID_TASK_DELETE:
+            setNotice("#5 将提供可续传的暂停；当前停止只取消传输且不能续传。");
+            return 0;
+        case ID_TASK_REDOWNLOAD:
+            setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
+            return 0;
+        case ID_TASK_DELETE_FILES:
+            setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除文件。");
+            return 0;
+        case ID_TASK_PROPERTIES:
+            setNotice("任务属性将在后续版本提供；当前未修改任何任务。");
+            return 0;
         case ID_TOOLS_OPTIONS:
+            setNotice("选项界面将在后续版本提供。");
             return 0;
         case ID_HELP_CAPABILITIES: showCapabilities(); return 0;
         case ID_HELP_ABOUT: showAbout(); return 0;
+        case IDC_SEARCH:
+            if (HIWORD(wParam) == EN_CHANGE) {
+                updateSearchQuery();
+                return 0;
+            }
+            break;
+        case IDC_SEARCH_CLOSE:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                hideSearch();
+                return 0;
+            }
+            break;
         default:
             break;
         }
@@ -252,19 +633,30 @@ bool MainWindow::createControls()
 {
     dpi_ = GetDpiForWindow(hwnd_);
     if (dpi_ <= 0) dpi_ = 96;
+    {
+        ColumnSettings loaded;
+        std::string error;
+        if (loadColumnSettings(uiStatePath(), loaded, error))
+            columnSettings_ = std::move(loaded);
+        else
+            columnSettings_ = defaultColumnSettings();
+    }
     createFont();
     createToolbar();
     createList();
     createStatusBar();
     createTooltip();
+    createSearchOverlay();
     applyFont();
     updateLayoutMetrics();
     layoutControls();
+    layoutStatusParts();
+    DragAcceptFiles(hwnd_, TRUE);
 
     worker_ = std::make_unique<TaskWorker>(options_.databasePath, hwnd_);
     std::string error;
     if (!worker_->start(error)) {
-        MessageBoxW(hwnd_, toWide("无法打开任务数据库: " + error).c_str(), L"lite fetch",
+        MessageBoxW(hwnd_, toWide("无法打开任务数据库：" + error).c_str(), L"lite fetch",
             MB_OK | MB_ICONERROR);
         return false;
     }
@@ -340,12 +732,11 @@ void MainWindow::createToolbar()
 void MainWindow::createList()
 {
     list_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SINGLESEL
-            | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SHOWSELALWAYS,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
     if (!list_) return;
     ListView_SetExtendedListViewStyle(list_,
-        LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+        LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP);
     ListView_SetBkColor(list_, GetSysColor(COLOR_WINDOW));
     ListView_SetTextBkColor(list_, GetSysColor(COLOR_WINDOW));
     ListView_SetTextColor(list_, GetSysColor(COLOR_WINDOWTEXT));
@@ -377,28 +768,41 @@ void MainWindow::createList()
         rowImages_ = rows;
     }
 
-    const auto initialWidths = listColumnWidths(scale(1000, dpi_), dpi_);
-    for (std::size_t index = 0; index < columns.size(); ++index) {
+    rebuildColumns();
+}
+
+void MainWindow::rebuildColumns()
+{
+    if (!list_) return;
+    HWND header = ListView_GetHeader(list_);
+    const int count = header ? Header_GetItemCount(header) : 0;
+    for (int index = count - 1; index >= 0; --index) ListView_DeleteColumn(list_, index);
+    visibleColumns_ = visibleColumns(columnSettings_);
+    const auto widths = columnWidths(columnSettings_, scale(998, dpi_), dpi_);
+    for (std::size_t index = 0; index < visibleColumns_.size(); ++index) {
+        const auto titleText = toWide(columnTitle(visibleColumns_[index]));
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         column.fmt = LVCFMT_LEFT;
-        column.cx = initialWidths[index];
+        column.cx = index < widths.size() ? widths[index]
+                                          : scale(defaultColumnWidth(visibleColumns_[index]), dpi_);
         column.iSubItem = static_cast<int>(index);
-        column.pszText = const_cast<LPWSTR>(columns[index].title);
+        column.pszText = const_cast<LPWSTR>(titleText.c_str());
         ListView_InsertColumn(list_, static_cast<int>(index), &column);
     }
+    columnsDirty_ = true;
+    displayedIds_.clear();
+    lastColumnClientWidth_ = -1;
+    applySortArrow();
 }
 
 void MainWindow::createStatusBar()
 {
     status_ = CreateWindowExW(0, STATUSCLASSNAMEW, L"",
-        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP | SBT_TOOLTIPS, 0, 0, 0, 0, hwnd_, nullptr,
+        instance_, nullptr);
     if (!status_) return;
-    const int first = scale(280, dpi_);
-    const int second = first + scale(190, dpi_);
-    const int third = second + scale(260, dpi_);
-    const int parts[4] = {first, second, third, -1};
-    SendMessageW(status_, SB_SETPARTS, 4, reinterpret_cast<LPARAM>(parts));
+    layoutStatusParts();
     updateStatus();
 }
 
@@ -418,6 +822,22 @@ void MainWindow::createTooltip()
     SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, scale(360, dpi_));
 }
 
+void MainWindow::createSearchOverlay()
+{
+    searchEdit_ = CreateWindowExW(0, L"EDIT", L"",
+        WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP, 0, 0, 0, 0, hwnd_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_SEARCH)), instance_, nullptr);
+    searchClose_ = CreateWindowExW(0, L"BUTTON", L"×",
+        WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 0, 0, hwnd_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_SEARCH_CLOSE)), instance_, nullptr);
+    if (!searchEdit_ || !searchClose_) return;
+    SendMessageW(searchEdit_, EM_SETCUEBANNER, TRUE,
+        reinterpret_cast<LPARAM>(L"查找（名称/地址/路径）"));
+    SetWindowSubclass(searchEdit_, searchSubclassStatic, 1, reinterpret_cast<DWORD_PTR>(this));
+    ShowWindow(searchEdit_, SW_HIDE);
+    ShowWindow(searchClose_, SW_HIDE);
+}
+
 void MainWindow::applyFont()
 {
     if (!font_) return;
@@ -427,15 +847,21 @@ void MainWindow::applyFont()
         HWND header = ListView_GetHeader(list_);
         if (header) SendMessageW(header, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
+    if (toolbar_) SendMessageW(toolbar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    if (status_) SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    if (searchEdit_) SendMessageW(searchEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    if (searchClose_) SendMessageW(searchClose_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
 }
 
 void MainWindow::updateLayoutMetrics()
 {
-    if (toolbar_) {
+    if (toolbar_ && showToolbar_) {
         SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
         RECT rect{};
         GetWindowRect(toolbar_, &rect);
         toolbarHeight_ = rect.bottom - rect.top;
+    } else {
+        toolbarHeight_ = 0;
     }
 }
 
@@ -446,19 +872,59 @@ void MainWindow::layoutControls()
     GetClientRect(hwnd_, &client);
     updateLayoutMetrics();
     int statusHeight = 0;
-    if (status_) {
+    if (status_ && showStatusBar_) {
         SendMessageW(status_, WM_SIZE, 0, 0);
         RECT rect{};
         GetWindowRect(status_, &rect);
         statusHeight = rect.bottom - rect.top;
     }
-    if (toolbar_) MoveWindow(toolbar_, 0, 0, client.right, toolbarHeight_, TRUE);
+    if (toolbar_ && showToolbar_)
+        MoveWindow(toolbar_, 0, 0, client.right, toolbarHeight_, TRUE);
+    else if (toolbar_)
+        MoveWindow(toolbar_, 0, 0, 0, 0, TRUE);
     if (list_) {
-        const int top = toolbarHeight_;
+        const int top = showToolbar_ ? toolbarHeight_ : 0;
         const int height = std::max(0, static_cast<int>(client.bottom) - top - statusHeight);
         MoveWindow(list_, 0, top, client.right, height, TRUE);
         applyColumnWidths();
     }
+    if (searchVisible_ && searchEdit_ && searchClose_ && list_) {
+        RECT listRect{};
+        GetWindowRect(list_, &listRect);
+        MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&listRect), 2);
+        int headerHeight = scale(25, dpi_);
+        if (HWND header = ListView_GetHeader(list_)) {
+            RECT headerRect{};
+            if (GetWindowRect(header, &headerRect))
+                headerHeight = headerRect.bottom - headerRect.top;
+        }
+        const int editHeight = scale(24, dpi_);
+        const int closeWidth = editHeight;
+        const int listWidth = listRect.right - listRect.left;
+        const int width = std::min(scale(300, dpi_),
+            std::max(scale(120, dpi_), listWidth - closeWidth - scale(12, dpi_)));
+        const int left = listRect.right - width - closeWidth - scale(4, dpi_);
+        const int top = listRect.top + headerHeight + scale(4, dpi_);
+        MoveWindow(searchEdit_, left, top, width, editHeight, TRUE);
+        MoveWindow(searchClose_, left + width, top, closeWidth, editHeight, TRUE);
+        SetWindowPos(searchEdit_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(searchClose_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+void MainWindow::layoutStatusParts()
+{
+    if (!status_ || !showStatusBar_) return;
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const int width = client.right;
+    if (width <= 0) return;
+    int first = std::max(scale(140, dpi_), MulDiv(width, 28, 100));
+    int second = first + std::max(scale(90, dpi_), MulDiv(width, 19, 100));
+    int third = second + std::max(scale(120, dpi_), MulDiv(width, 26, 100));
+    if (third > width - scale(60, dpi_)) third = std::max(first, width - scale(60, dpi_));
+    const int parts[4] = {first, second, third, -1};
+    SendMessageW(status_, SB_SETPARTS, 4, reinterpret_cast<LPARAM>(parts));
 }
 
 void MainWindow::applyColumnWidths()
@@ -470,10 +936,35 @@ void MainWindow::applyColumnWidths()
     if (width <= 0) return;
     if (width == lastColumnClientWidth_ && dpi_ == lastColumnDpi_) return;
     if (ListView_GetHeader(list_) == nullptr) return;
-    const auto widths = listColumnWidths(width, dpi_);
-    for (int index = 0; index < 6; ++index) ListView_SetColumnWidth(list_, index, widths[index]);
+    const auto widths = columnWidths(columnSettings_, width, dpi_);
+    for (std::size_t index = 0; index < widths.size(); ++index)
+        ListView_SetColumnWidth(list_, static_cast<int>(index), widths[index]);
     lastColumnClientWidth_ = width;
     lastColumnDpi_ = dpi_;
+}
+
+void MainWindow::applySortArrow()
+{
+    if (!list_) return;
+    HWND header = ListView_GetHeader(list_);
+    if (!header) return;
+    for (int index = 0; index < Header_GetItemCount(header); ++index) {
+        HDITEMW item{};
+        item.mask = HDI_FORMAT;
+        if (!Header_GetItem(header, index, &item)) continue;
+        item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (index < static_cast<int>(visibleColumns_.size())
+            && columnSettings_.sortColumn == visibleColumns_[static_cast<std::size_t>(index)])
+            item.fmt |= columnSettings_.sortAscending ? HDF_SORTUP : HDF_SORTDOWN;
+        Header_SetItem(header, index, &item);
+    }
+}
+
+void MainWindow::setNotice(std::string text)
+{
+    noticeText_ = toWide(text);
+    noticeAt_ = std::chrono::steady_clock::now();
+    updateStatus();
 }
 
 void MainWindow::refreshFromWorker()
@@ -489,6 +980,9 @@ void MainWindow::refreshFromWorker()
         lastErrorAt_ = std::chrono::steady_clock::now();
     }
     syncList();
+    handleAddResults(snapshot);
+    handleOutcomes(snapshot);
+    syncList();
     updateStatus();
     updateActions();
 }
@@ -496,138 +990,176 @@ void MainWindow::refreshFromWorker()
 void MainWindow::syncList()
 {
     if (!list_) return;
-    const auto& rows = model_.rows();
-    bool rebuild = displayedIds_.size() != rows.size();
+    std::vector<TaskRow> rows;
+    rows.reserve(model_.rows().size());
+    for (const auto& row : model_.rows()) {
+        if (rowMatches(row, filter_, query_)) rows.push_back(row);
+    }
+    if (columnSettings_.sortColumn != ColumnId::Count) {
+        sortRows(rows, columnSettings_.sortColumn,
+            columnSettings_.sortAscending ? SortDirection::Ascending : SortDirection::Descending);
+    }
+    viewRows_ = std::move(rows);
+
+    std::vector<std::string> ids;
+    ids.reserve(viewRows_.size());
+    for (const auto& row : viewRows_) ids.push_back(row.id);
+
+    bool rebuild = columnsDirty_ || ids.size() != displayedIds_.size();
     if (!rebuild) {
-        for (std::size_t index = 0; index < rows.size(); ++index) {
-            if (displayedIds_[index] != rows[index].id) {
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            if (ids[index] != displayedIds_[index]) {
                 rebuild = true;
                 break;
             }
         }
     }
+
     if (rebuild) {
-        SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
-        ListView_DeleteAllItems(list_);
-        for (std::size_t index = 0; index < rows.size(); ++index) {
-            const auto& row = rows[index];
-            const auto name = toWide(row.name);
-            LVITEMW item{};
-            item.mask = LVIF_TEXT;
-            item.iItem = static_cast<int>(index);
-            item.iSubItem = 0;
-            item.pszText = const_cast<LPWSTR>(name.c_str());
-            ListView_InsertItem(list_, &item);
-            const std::array<std::wstring, 5> texts{toWide(row.size), toWide(row.progress),
-                toWide(row.speed), toWide(row.remaining), toWide(row.status)};
-            for (std::size_t column = 0; column < texts.size(); ++column) {
-                ListView_SetItemText(list_, static_cast<int>(index), static_cast<int>(column) + 1,
-                    const_cast<LPWSTR>(texts[column].c_str()));
+        const auto oldSelected = selectedIds();
+        const std::set<std::string, std::less<>> selectedSet(oldSelected.begin(), oldSelected.end());
+        const auto oldFocus = focusedId();
+        int oldFocusIndex = -1;
+        for (std::size_t index = 0; index < displayedIds_.size(); ++index) {
+            if (displayedIds_[index] == oldFocus) {
+                oldFocusIndex = static_cast<int>(index);
+                break;
             }
         }
-        displayedIds_.clear();
-        displayedIds_.reserve(rows.size());
-        for (const auto& row : rows) displayedIds_.push_back(row.id);
+        const int top = ListView_GetTopIndex(list_);
+        std::string anchor;
+        if (top >= 0 && static_cast<std::size_t>(top) < displayedIds_.size())
+            anchor = displayedIds_[static_cast<std::size_t>(top)];
+        const int perPage = std::max(1, ListView_GetCountPerPage(list_));
+        const bool focusWasVisible = oldFocusIndex >= top && oldFocusIndex < top + perPage;
+
+        suppressSelection_ = true;
+        SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
+        ListView_DeleteAllItems(list_);
+        for (std::size_t rowIndex = 0; rowIndex < viewRows_.size(); ++rowIndex) {
+            const auto& row = viewRows_[rowIndex];
+            std::wstring first = toWide(columnText(row, visibleColumns_.empty()
+                    ? ColumnId::Name : visibleColumns_.front()));
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(rowIndex);
+            item.iSubItem = 0;
+            item.pszText = const_cast<LPWSTR>(first.c_str());
+            ListView_InsertItem(list_, &item);
+            for (std::size_t column = 1; column < visibleColumns_.size(); ++column) {
+                const auto text = toWide(columnText(row, visibleColumns_[column]));
+                ListView_SetItemText(list_, static_cast<int>(rowIndex), static_cast<int>(column),
+                    const_cast<LPWSTR>(text.c_str()));
+            }
+        }
+
+        bool selectedAny = false;
+        for (std::size_t index = 0; index < viewRows_.size(); ++index) {
+            if (!selectedSet.contains(viewRows_[index].id)) continue;
+            ListView_SetItemState(list_, static_cast<int>(index), LVIS_SELECTED, LVIS_SELECTED);
+            selectedAny = true;
+        }
+        int focusIndex = viewIndexOf(oldFocus);
+        if (focusIndex >= 0) {
+            ListView_SetItemState(list_, focusIndex,
+                LVIS_FOCUSED | LVIS_SELECTED, LVIS_FOCUSED | LVIS_SELECTED);
+            selectedAny = true;
+        } else if (selectedAny) {
+            for (int index = 0; index < static_cast<int>(viewRows_.size()); ++index) {
+                if (ListView_GetItemState(list_, index, LVIS_SELECTED)) {
+                    ListView_SetItemState(list_, index, LVIS_FOCUSED, LVIS_FOCUSED);
+                    break;
+                }
+            }
+        }
+        if (!pendingSelectTaskId_.empty()) {
+            const int pending = viewIndexOf(pendingSelectTaskId_);
+            if (pending >= 0) {
+                ListView_SetItemState(list_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                ListView_SetItemState(list_, pending,
+                    LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                pendingSelectTaskId_.clear();
+                selectedAny = true;
+                focusIndex = pending;
+                ListView_EnsureVisible(list_, pending, FALSE);
+            }
+        }
+        if (!selectedAny && !initialSelectionDone_ && !viewRows_.empty()) {
+            ListView_SetItemState(list_, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                LVIS_SELECTED | LVIS_FOCUSED);
+            initialSelectionDone_ = true;
+        }
+
+        if (!viewRows_.empty()) initialSelectionDone_ = true;
+        const int anchorIndex = viewIndexOf(anchor);
+        if (anchorIndex >= 0) ListView_EnsureVisible(list_, anchorIndex, FALSE);
+        if (focusWasVisible && focusIndex >= 0) ListView_EnsureVisible(list_, focusIndex, FALSE);
+        if (!pendingSelectTaskId_.empty()) {
+            const int pending = viewIndexOf(pendingSelectTaskId_);
+            if (pending >= 0) ListView_EnsureVisible(list_, pending, FALSE);
+        }
+
+        displayedIds_ = std::move(ids);
+        columnsDirty_ = false;
         SendMessageW(list_, WM_SETREDRAW, TRUE, 0);
         InvalidateRect(list_, nullptr, TRUE);
-
-        const auto selected = model_.indexOf(selectedId_);
-        if (selected >= rows.size()) selectedId_.clear();
-        ensureSelection();
+        suppressSelection_ = false;
     } else {
-        for (std::size_t index = 0; index < rows.size(); ++index) {
-            const auto& row = rows[index];
-            const std::array<std::string, 6> texts{row.name, row.size, row.progress, row.speed,
-                row.remaining, row.status};
-            for (std::size_t column = 0; column < texts.size(); ++column) {
+        for (std::size_t rowIndex = 0; rowIndex < viewRows_.size(); ++rowIndex) {
+            const auto& row = viewRows_[rowIndex];
+            for (std::size_t column = 0; column < visibleColumns_.size(); ++column) {
+                const auto wanted = toWide(columnText(row, visibleColumns_[column]));
                 wchar_t existing[512]{};
-                ListView_GetItemText(list_, static_cast<int>(index), static_cast<int>(column),
+                ListView_GetItemText(list_, static_cast<int>(rowIndex), static_cast<int>(column),
                     existing, static_cast<int>(std::size(existing)));
-                const auto wanted = toWide(texts[column]);
-                if (wanted != existing) {
-                    if (column == 0) {
-                        LVITEMW item{};
-                        item.mask = LVIF_TEXT;
-                        item.iItem = static_cast<int>(index);
-                        item.iSubItem = 0;
-                        item.pszText = const_cast<LPWSTR>(wanted.c_str());
-                        ListView_SetItem(list_, &item);
-                    } else {
-                        ListView_SetItemText(list_, static_cast<int>(index),
-                            static_cast<int>(column), const_cast<LPWSTR>(wanted.c_str()));
-                    }
+                if (wanted == existing) continue;
+                if (column == 0) {
+                    LVITEMW item{};
+                    item.mask = LVIF_TEXT;
+                    item.iItem = static_cast<int>(rowIndex);
+                    item.iSubItem = 0;
+                    item.pszText = const_cast<LPWSTR>(wanted.c_str());
+                    ListView_SetItem(list_, &item);
+                } else {
+                    ListView_SetItemText(list_, static_cast<int>(rowIndex),
+                        static_cast<int>(column), const_cast<LPWSTR>(wanted.c_str()));
                 }
             }
         }
     }
-    // The vertical scrollbar can appear/disappear as rows change, which changes
-    // the ListView client width; keep the flexible last column at the edge.
     applyColumnWidths();
-}
-
-void MainWindow::ensureSelection()
-{
-    const auto& rows = model_.rows();
-    if (rows.empty()) {
-        selectedId_.clear();
-        return;
-    }
-    auto index = model_.indexOf(selectedId_);
-    if (index >= rows.size()) index = 0;
-    selectRow(index);
-}
-
-void MainWindow::selectRow(std::size_t index)
-{
-    const auto& rows = model_.rows();
-    if (!list_ || index >= rows.size()) return;
-    selectedId_ = rows[index].id;
-    ListView_SetItemState(list_, static_cast<int>(index),
-        LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_EnsureVisible(list_, static_cast<int>(index), FALSE);
-    updateActions();
-}
-
-int MainWindow::selectedIndex() const
-{
-    if (selectedId_.empty()) return -1;
-    const auto index = model_.indexOf(selectedId_);
-    return index < model_.rows().size() ? static_cast<int>(index) : -1;
-}
-
-const TaskRow* MainWindow::selectedRow() const
-{
-    const auto index = selectedIndex();
-    if (index < 0) return nullptr;
-    return &model_.rows()[static_cast<std::size_t>(index)];
 }
 
 void MainWindow::updateStatus()
 {
     if (!status_) return;
-    const auto texts = model_.status();
+    const auto texts = model_.status(viewRows_.size(), filter_ != TaskFilter::All || !query_.empty());
     std::array<std::wstring, 4> parts{statusBarText(texts.tasks), statusBarText(texts.active),
         statusBarText(texts.download), statusBarText(texts.upload)};
-    const bool errorVisible = !lastErrorText_.empty()
-        && std::chrono::steady_clock::now() - lastErrorAt_ < std::chrono::seconds(10);
+    const auto now = std::chrono::steady_clock::now();
+    const bool errorVisible = !lastErrorText_.empty() && now - lastErrorAt_ < std::chrono::seconds(10);
+    const bool noticeVisible = !noticeText_.empty() && now - noticeAt_ < std::chrono::seconds(10);
     if (errorVisible) parts[3] = statusBarText(lastErrorText_);
+    else if (noticeVisible) parts[3] = noticeText_;
     if (isClosing()) parts[3] = L"正在停止任务…";
     for (int index = 0; index < 4; ++index) {
         SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(index),
             reinterpret_cast<LPARAM>(parts[static_cast<std::size_t>(index)].c_str()));
     }
-}
-
-void MainWindow::setShutdownStatus()
-{
-    if (status_) SendMessageW(status_, SB_SETTEXTW, 3, reinterpret_cast<LPARAM>(L"正在停止任务…"));
+    statusTips_[0] = L"可见任务数 / 全部任务数（启用筛选或查找时）；分段 2-4 始终为全部任务合计。";
+    statusTips_[1] = L"全部任务中的活动传输数。";
+    statusTips_[2] = L"全部任务合计下载速度。";
+    statusTips_[3] = L"全部任务合计上传速度；本版本引擎尚不上报上传。";
+    for (int index = 0; index < 4; ++index) {
+        SendMessageW(status_, SB_SETTIPTEXTW, static_cast<WPARAM>(index),
+            reinterpret_cast<LPARAM>(statusTips_[static_cast<std::size_t>(index)].c_str()));
+    }
 }
 
 void MainWindow::updateActions()
 {
-    // While the window is closing, no task command may look available; the
-    // worker is cancelling and commands are already ignored in WM_COMMAND.
-    const auto actions = model_.actionsFor(isClosing() ? std::string_view{} : selectedId_);
+    const auto actions = model_.actionsForSelection(isClosing() ? std::vector<std::string>{}
+                                                               : selectedIds());
     const bool interactive = !isClosing();
     auto enableMenu = [this](UINT id, bool enabled) {
         if (menu_) EnableMenuItem(menu_, id, MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
@@ -636,24 +1168,54 @@ void MainWindow::updateActions()
         if (toolbar_) SendMessageW(toolbar_, TB_ENABLEBUTTON, id, MAKELONG(enabled ? TRUE : FALSE, 0));
     };
     enableMenu(ID_FILE_NEW, interactive);
+    enableMenu(ID_FILE_BATCH, interactive);
+    enableMenu(ID_FILE_OPEN_TORRENT, false);
+    enableMenu(ID_EDIT_SELECT_ALL, interactive);
+    enableMenu(ID_EDIT_FIND, interactive);
+    enableMenu(ID_EDIT_PASTE, interactive);
     enableMenu(ID_EDIT_COPY_LINK, interactive && actions.copyLink);
+    enableMenu(ID_EDIT_COPY_PATH, interactive && actions.copyPath);
     enableMenu(ID_VIEW_REFRESH, interactive);
+    enableMenu(ID_VIEW_FILTER_ALL, interactive);
+    enableMenu(ID_VIEW_FILTER_ACTIVE, interactive);
+    enableMenu(ID_VIEW_FILTER_COMPLETED, interactive);
+    enableMenu(ID_VIEW_FILTER_FAILED, interactive);
+    enableMenu(ID_VIEW_TOOLBAR, interactive);
+    enableMenu(ID_VIEW_STATUSBAR, interactive);
+    enableMenu(ID_VIEW_COLUMNS, interactive);
     enableMenu(ID_TASK_START, interactive && actions.start);
-    enableMenu(ID_TASK_PAUSE, actions.pause);
+    enableMenu(ID_TASK_PAUSE, false);
     enableMenu(ID_TASK_STOP, interactive && actions.stop);
-    enableMenu(ID_TASK_DELETE, actions.deleteTask);
+    enableMenu(ID_TASK_REDOWNLOAD, false);
+    enableMenu(ID_TASK_DELETE, interactive && actions.deleteTask);
+    enableMenu(ID_TASK_DELETE_FILES, false);
+    enableMenu(ID_TASK_OPEN_FILE, interactive && actions.openFile);
     enableMenu(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
-    enableMenu(ID_TOOLS_OPTIONS, actions.options);
+    enableMenu(ID_TASK_PROPERTIES, false);
+    enableMenu(ID_TOOLS_OPTIONS, false);
     enableButton(ID_FILE_NEW, interactive);
     enableButton(ID_TASK_START, interactive && actions.start);
-    enableButton(ID_TASK_PAUSE, actions.pause);
+    enableButton(ID_TASK_PAUSE, false);
     enableButton(ID_TASK_STOP, interactive && actions.stop);
-    enableButton(ID_TASK_DELETE, actions.deleteTask);
+    enableButton(ID_TASK_DELETE, interactive && actions.deleteTask);
     enableButton(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
-    enableButton(ID_TOOLS_OPTIONS, actions.options);
+    enableButton(ID_TOOLS_OPTIONS, false);
     if (toolbar_ && startImageEnabled_ >= 0) {
         SendMessageW(toolbar_, TB_CHANGEBITMAP, ID_TASK_START,
             MAKELPARAM(actions.start ? startImageEnabled_ : startImageDisabled_, 0));
+    }
+    if (menu_) {
+        UINT filterId = ID_VIEW_FILTER_ALL;
+        switch (filter_) {
+        case TaskFilter::All: filterId = ID_VIEW_FILTER_ALL; break;
+        case TaskFilter::Active: filterId = ID_VIEW_FILTER_ACTIVE; break;
+        case TaskFilter::Completed: filterId = ID_VIEW_FILTER_COMPLETED; break;
+        case TaskFilter::Failed: filterId = ID_VIEW_FILTER_FAILED; break;
+        }
+        CheckMenuRadioItem(menu_, ID_VIEW_FILTER_ALL, ID_VIEW_FILTER_FAILED, filterId, MF_BYCOMMAND);
+        CheckMenuItem(menu_, ID_VIEW_TOOLBAR, MF_BYCOMMAND | (showToolbar_ ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(menu_, ID_VIEW_STATUSBAR,
+            MF_BYCOMMAND | (showStatusBar_ ? MF_CHECKED : MF_UNCHECKED));
     }
 }
 
@@ -671,25 +1233,205 @@ void MainWindow::updateTooltip(NMTTDISPINFOW& info)
                 reinterpret_cast<LPARAM>(&button)))
             command = button.idCommand;
     }
+    const auto actions = model_.actionsForSelection(selectedIds());
     switch (command) {
     case ID_FILE_NEW: tooltipText_ = L"新建下载 (Ctrl+N)"; break;
     case ID_TASK_START:
-        tooltipText_ = L"开始/继续 — 仅等待中或失败的任务可开始；断点续传尚未实现";
+        tooltipText_ = actions.start
+            ? L"开始/继续（" + std::to_wstring(actions.startCount) + L" 个可用任务）"
+            : L"开始/继续 — 当前选择没有可开始的任务";
         break;
     case ID_TASK_PAUSE:
-        tooltipText_ = L"暂停 — 尚未实现：需要断点续传支持（后续版本）";
+        tooltipText_ = L"暂停 — 尚未实现：需要断点续传支持（后续版本 #5）";
         break;
-    case ID_TASK_STOP: tooltipText_ = L"停止 — 停止选中的等待中或下载中任务"; break;
+    case ID_TASK_STOP:
+        tooltipText_ = actions.stop
+            ? L"停止（" + std::to_wstring(actions.stopCount)
+                + L" 个可用任务）— 取消传输并保留已下载数据；不是可续传暂停"
+            : L"停止 — 当前选择没有可停止的任务";
+        break;
     case ID_TASK_DELETE:
-        tooltipText_ = L"删除 — 尚未实现：将在列表与批量操作中提供";
+        tooltipText_ = actions.deleteTask
+            ? L"删除任务记录（" + std::to_wstring(actions.deleteCount) + L" 个）— 文件保留"
+            : L"删除 — 请选择任务记录";
         break;
-    case ID_TASK_OPEN_FOLDER: tooltipText_ = L"打开文件夹 — 打开选中任务的保存位置"; break;
+    case ID_TASK_OPEN_FOLDER:
+        tooltipText_ = actions.openFolder
+            ? L"打开所在文件夹"
+            : L"打开文件夹 — 需选择一个保存位置存在的任务";
+        break;
     case ID_TOOLS_OPTIONS:
         tooltipText_ = L"选项 — 尚未实现：设置界面将在后续版本提供";
         break;
-    default: tooltipText_ = L""; break;
+    default: tooltipText_.clear(); break;
     }
     info.lpszText = tooltipText_.empty() ? const_cast<LPWSTR>(L"") : tooltipText_.data();
+}
+
+std::vector<std::string> MainWindow::selectedIds() const
+{
+    std::vector<std::string> result;
+    if (!list_) return result;
+    int index = -1;
+    while ((index = ListView_GetNextItem(list_, index, LVNI_SELECTED)) != -1) {
+        if (static_cast<std::size_t>(index) < viewRows_.size())
+            result.push_back(viewRows_[static_cast<std::size_t>(index)].id);
+    }
+    return result;
+}
+
+std::string MainWindow::focusedId() const
+{
+    if (!list_) return {};
+    const int index = ListView_GetNextItem(list_, -1, LVNI_FOCUSED);
+    if (index < 0 || static_cast<std::size_t>(index) >= viewRows_.size()) return {};
+    return viewRows_[static_cast<std::size_t>(index)].id;
+}
+
+int MainWindow::viewIndexOf(const std::string& taskId) const
+{
+    if (taskId.empty()) return -1;
+    for (std::size_t index = 0; index < viewRows_.size(); ++index) {
+        if (viewRows_[index].id == taskId) return static_cast<int>(index);
+    }
+    return -1;
+}
+
+const TaskRow* MainWindow::rowForId(const std::string& taskId) const
+{
+    const int index = viewIndexOf(taskId);
+    if (index < 0) return nullptr;
+    return &viewRows_[static_cast<std::size_t>(index)];
+}
+
+std::filesystem::path MainWindow::uiStatePath() const
+{
+    return uiStatePathFor(options_.databasePath);
+}
+
+void MainWindow::saveColumnSettings()
+{
+    std::string error;
+    if (!litefetch::ui::saveColumnSettings(uiStatePath(), columnSettings_, error))
+        setNotice("无法保存列设置：" + error);
+}
+
+void MainWindow::showSearch()
+{
+    if (!searchEdit_ || !searchClose_) return;
+    searchVisible_ = true;
+    layoutControls();
+    ShowWindow(searchEdit_, SW_SHOW);
+    ShowWindow(searchClose_, SW_SHOW);
+    SetFocus(searchEdit_);
+    SendMessageW(searchEdit_, EM_SETSEL, 0, -1);
+}
+
+void MainWindow::hideSearch()
+{
+    if (!searchEdit_) return;
+    const auto previousFocus = focusedId();
+    searchVisible_ = false;
+    pendingSelectTaskId_ = previousFocus;
+    query_.clear();
+    SendMessageW(searchEdit_, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L""));
+    ShowWindow(searchEdit_, SW_HIDE);
+    ShowWindow(searchClose_, SW_HIDE);
+    syncList();
+    if (list_) SetFocus(list_);
+    const int index = viewIndexOf(previousFocus);
+    if (index >= 0) {
+        ListView_SetItemState(list_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(list_, index,
+            LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(list_, index, FALSE);
+    }
+    updateActions();
+    updateStatus();
+}
+
+void MainWindow::updateSearchQuery()
+{
+    if (!searchEdit_) return;
+    const int length = GetWindowTextLengthW(searchEdit_);
+    std::wstring text(static_cast<std::size_t>(std::max(0, length)) + 1, L'\0');
+    if (length > 0) GetWindowTextW(searchEdit_, text.data(), static_cast<int>(text.size()));
+    text.resize(static_cast<std::size_t>(std::max(0, length)));
+    try {
+        query_ = utf8FromUtf16(text);
+    } catch (const std::exception&) {
+        query_.clear();
+    }
+    syncList();
+    updateStatus();
+    updateActions();
+}
+
+void MainWindow::applyFilter(TaskFilter filter)
+{
+    filter_ = filter;
+    syncList();
+    updateStatus();
+    updateActions();
+}
+
+void MainWindow::showColumnChooser()
+{
+    ColumnSettings edited = columnSettings_;
+    if (!showColumnDialog(hwnd_, edited)) return;
+    columnSettings_ = sanitizeColumnSettings(std::move(edited));
+    saveColumnSettings();
+    rebuildColumns();
+    syncList();
+    updateStatus();
+    updateActions();
+}
+
+void MainWindow::toggleToolbar()
+{
+    showToolbar_ = !showToolbar_;
+    if (toolbar_) ShowWindow(toolbar_, showToolbar_ ? SW_SHOW : SW_HIDE);
+    layoutControls();
+    updateActions();
+}
+
+void MainWindow::toggleStatusBar()
+{
+    showStatusBar_ = !showStatusBar_;
+    if (status_) ShowWindow(status_, showStatusBar_ ? SW_SHOW : SW_HIDE);
+    layoutControls();
+    if (showStatusBar_) layoutStatusParts();
+    updateActions();
+}
+
+void MainWindow::selectTaskById(const std::string& taskId, bool clearFilters)
+{
+    if (taskId.empty()) return;
+    if (clearFilters) {
+        filter_ = TaskFilter::All;
+        if (!query_.empty() || (searchEdit_ && GetWindowTextLengthW(searchEdit_) > 0)) {
+            query_.clear();
+            if (searchEdit_) {
+                SendMessageW(searchEdit_, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L""));
+                ShowWindow(searchEdit_, SW_HIDE);
+                ShowWindow(searchClose_, SW_HIDE);
+                searchVisible_ = false;
+            }
+        }
+    }
+    pendingSelectTaskId_ = taskId;
+    syncList();
+    const int index = viewIndexOf(taskId);
+    if (index >= 0) {
+        suppressSelection_ = true;
+        ListView_SetItemState(list_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(list_, index,
+            LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(list_, index, FALSE);
+        suppressSelection_ = false;
+    }
+    updateActions();
+    updateStatus();
 }
 
 void MainWindow::openNewDownload()
@@ -697,6 +1439,12 @@ void MainWindow::openNewDownload()
     if (!worker_ || isClosing()) return;
     const auto request = showNewDownloadDialog(hwnd_, options_.downloadDirectory);
     if (!request) return;
+    if (request->switchToBatch) {
+        openBatchAdd(request->batchText);
+        return;
+    }
+    options_.downloadDirectory = request->directory;
+
     std::filesystem::path destination;
     try {
         destination = request->directory / pathFromUtf8(request->suggestedFileName);
@@ -704,37 +1452,348 @@ void MainWindow::openNewDownload()
         MessageBoxW(hwnd_, L"无法从下载地址推导文件名。", L"新建下载", MB_OK | MB_ICONERROR);
         return;
     }
+
+    const TaskRow* existing = nullptr;
+    for (const auto& row : model_.rows()) {
+        if (row.source == request->source) {
+            existing = &row;
+            break;
+        }
+    }
+
+    bool allowDuplicate = false;
+    if (existing) {
+        const int choice = MessageBoxW(hwnd_,
+            (L"已存在相同下载地址的任务：\r\n" + toWide(existing->name)
+                + L"\r\n\r\n“是”：定位现有任务\r\n“否”：另建一份（自动使用新文件名）\r\n"
+                  L"“取消”：不添加").c_str(),
+            L"已存在相同任务", MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1);
+        if (choice == IDCANCEL) return;
+        if (choice == IDYES) {
+            selectTaskById(existing->id, true);
+            setNotice("已定位现有任务：" + existing->name);
+            return;
+        }
+        allowDuplicate = true;
+        const auto stem = destination.stem().wstring();
+        const auto extension = destination.extension().wstring();
+        for (int counter = 2; counter < 10000; ++counter) {
+            const auto candidate = destination.parent_path()
+                / (stem + L" (" + std::to_wstring(counter) + L")" + extension);
+            std::error_code error;
+            if (std::filesystem::exists(candidate, error)) continue;
+            bool usedByTask = false;
+            for (const auto& row : model_.rows()) {
+                try {
+                    if (_wcsicmp(pathFromUtf8(row.destination).wstring().c_str(),
+                            candidate.wstring().c_str()) == 0) {
+                        usedByTask = true;
+                        break;
+                    }
+                } catch (const std::exception&) {
+                }
+            }
+            if (usedByTask) continue;
+            destination = candidate;
+            break;
+        }
+    }
+
+    BatchLine line;
+    line.line = 1;
+    line.text = request->source;
+    line.protocol = protocolLabel(line.text);
+    line.valid = true;
+    line.verdict = "有效";
+    try {
+        line.suggestedFileName = pathToUtf8(destination.filename());
+    } catch (const std::exception&) {
+        MessageBoxW(hwnd_, L"无法从下载地址推导文件名。", L"新建下载", MB_OK | MB_ICONERROR);
+        return;
+    }
+    BatchAddRequest batch;
+    batch.lines.push_back(std::move(line));
+    batch.directory = request->directory;
+    batch.autoStart = request->autoStart;
+    batch.onlyValid = false;
+    batch.allowDuplicate = allowDuplicate;
+    submitBatch(batch, false);
+}
+
+void MainWindow::openBatchAdd(std::string initialText)
+{
+    if (!worker_ || isClosing()) return;
+    const auto request = showBatchAddDialog(hwnd_, options_.downloadDirectory, initialText);
+    if (!request) return;
     options_.downloadDirectory = request->directory;
-    worker_->postAdd(request->source, pathToUtf8(destination), request->autoStart);
+    submitBatch(*request, true);
+}
+
+void MainWindow::submitBatch(const BatchAddRequest& request, bool showDialog)
+{
+    if (!worker_) return;
+    PendingBatch batch;
+    batch.id = nextBatchId_++;
+    batch.showDialog = showDialog;
+    for (const auto& line : request.lines) {
+        PendingLine pending;
+        pending.line = line;
+        pending.submitted = line.valid;
+        if (pending.submitted) {
+            try {
+                const auto destination = request.directory / pathFromUtf8(line.suggestedFileName);
+                pending.destination = pathToUtf8(destination);
+                ++batch.submittedCount;
+            } catch (const std::exception& error) {
+                pending.submitted = false;
+                pending.error = "无法推导保存路径: " + std::string(error.what());
+            }
+        }
+        batch.lines.push_back(std::move(pending));
+    }
+    if (batch.submittedCount == 0) return;
+    const auto batchId = batch.id;
+    pendingBatches_[batchId] = std::move(batch);
+    const auto& stored = pendingBatches_[batchId];
+    for (const auto& line : stored.lines) {
+        if (!line.submitted) continue;
+        worker_->postAdd(line.line.text, line.destination, request.autoStart, batchId,
+            line.line.line, request.allowDuplicate);
+    }
+}
+
+void MainWindow::handleAddResults(const WorkerSnapshot& snapshot)
+{
+    for (const auto& result : snapshot.addResults) {
+        if (result.sequence <= lastAddSequence_) continue;
+        const auto found = pendingBatches_.find(result.batchId);
+        if (found == pendingBatches_.end()) continue;
+        auto& batch = found->second;
+        PendingLine* pendingLine = nullptr;
+        for (auto& line : batch.lines) {
+            if (line.line.line == result.line) {
+                pendingLine = &line;
+                break;
+            }
+        }
+        if (!pendingLine) continue;
+        pendingLine->done = true;
+        pendingLine->ok = result.ok;
+        pendingLine->existing = result.existing;
+        pendingLine->taskId = result.taskId;
+        pendingLine->error = result.error;
+        ++batch.completedCount;
+
+        if (!batch.showDialog) {
+            if (result.ok) {
+                pendingSelectTaskId_ = result.taskId;
+                if (result.existing)
+                    setNotice("已定位现有任务：" + pendingLine->line.text);
+                else
+                    setNotice("已添加任务：" + pendingLine->line.text);
+                if (!result.taskId.empty()) selectTaskById(result.taskId, true);
+            } else {
+                lastErrorText_ = "添加失败: " + result.error;
+                lastErrorAt_ = std::chrono::steady_clock::now();
+                MessageBoxW(hwnd_, toWide("添加失败: " + result.error).c_str(), L"添加任务",
+                    MB_OK | MB_ICONERROR);
+            }
+            pendingBatches_.erase(found);
+            continue;
+        }
+        if (batch.completedCount >= batch.submittedCount) {
+            finalizeBatch(batch);
+            pendingBatches_.erase(found);
+            continue;
+        }
+    }
+    lastAddSequence_ = snapshot.addResultSequence;
+}
+
+void MainWindow::finalizeBatch(PendingBatch& batch)
+{
+    std::vector<BatchResultRow> rows;
+    rows.reserve(batch.lines.size());
+    for (const auto& line : batch.lines) {
+        BatchResultRow row;
+        row.line = line.line.line;
+        row.address = redactAddress(line.line.text);
+        if (!line.submitted) {
+            row.result = "未提交：" + (line.error.empty() ? line.line.verdict : line.error);
+        } else if (line.ok) {
+            row.result = line.existing ? "已定位现有任务" : "已添加";
+        } else {
+            row.result = "提交失败：" + (line.error.empty() ? "unknown error" : line.error);
+        }
+        rows.push_back(std::move(row));
+    }
+    showBatchResultDialog(hwnd_, rows);
+}
+
+void MainWindow::handleOutcomes(const WorkerSnapshot& snapshot)
+{
+    for (const auto& outcome : snapshot.outcomes) {
+        if (outcome.sequence <= lastOutcomeSequence_) continue;
+        if (outcome.action != "delete") continue;
+        if (pendingDeleteIds_.erase(outcome.taskId) == 0) continue;
+        if (!outcome.ok)
+            pendingDeleteFailures_.push_back(outcome.taskId + ": " + outcome.error);
+        if (pendingDeleteIds_.empty()) {
+            if (pendingDeleteFailures_.empty()) {
+                setNotice("已删除 " + std::to_string(pendingDeleteTotal_)
+                    + " 个任务记录（文件保留）。");
+            } else {
+                std::wstring text = L"以下任务记录未能删除：\r\n";
+                for (const auto& failure : pendingDeleteFailures_)
+                    text += toWide(failure) + L"\r\n";
+                MessageBoxW(hwnd_, text.c_str(), L"删除任务记录失败", MB_OK | MB_ICONERROR);
+                setNotice("部分任务记录删除失败；文件未删除。");
+            }
+            pendingDeleteFailures_.clear();
+            pendingDeleteTotal_ = 0;
+        }
+    }
+    lastOutcomeSequence_ = snapshot.outcomeSequence;
 }
 
 void MainWindow::startSelected()
 {
-    const auto* row = selectedRow();
-    if (!row || !worker_) return;
-    const auto actions = model_.actionsFor(row->id);
-    if (!actions.start) return;
-    worker_->postStart(row->id);
+    if (!worker_ || isClosing()) return;
+    const auto ids = selectedIds();
+    std::size_t count = 0;
+    for (const auto& id : ids) {
+        const auto actions = model_.actionsFor(id);
+        if (!actions.start) continue;
+        worker_->postStart(id);
+        ++count;
+    }
+    if (count > 0)
+        setNotice("已请求开始 " + std::to_string(count) + " 个任务");
 }
 
 void MainWindow::stopSelected()
 {
-    const auto* row = selectedRow();
-    if (!row || !worker_) return;
-    const auto actions = model_.actionsFor(row->id);
-    if (!actions.stop) return;
-    worker_->postCancel(row->id);
+    if (!worker_ || isClosing()) return;
+    const auto ids = selectedIds();
+    std::size_t count = 0;
+    for (const auto& id : ids) {
+        const auto actions = model_.actionsFor(id);
+        if (!actions.stop) continue;
+        worker_->postCancel(id);
+        ++count;
+    }
+    if (count > 0)
+        setNotice("已请求停止 " + std::to_string(count)
+            + " 个任务；停止会取消传输，不能续传（#5 提供暂停/续传）。");
+}
+
+void MainWindow::deleteSelected()
+{
+    if (!worker_ || isClosing()) return;
+    if (deleteDialog_) {
+        SetForegroundWindow(deleteDialog_);
+        return;
+    }
+    const auto ids = selectedIds();
+    if (ids.empty()) return;
+    const auto actions = model_.actionsForSelection(ids);
+    if (actions.deleteCount == 0) return;
+    pendingDeleteSelection_ = ids;
+    deleteDialog_ = CreateDialogParamW(GetModuleHandleW(nullptr),
+        MAKEINTRESOURCEW(IDD_DELETE_TASK), hwnd_, deleteDialogProc,
+        reinterpret_cast<LPARAM>(this));
+    if (!deleteDialog_) {
+        pendingDeleteSelection_.clear();
+        return;
+    }
+    EnableWindow(hwnd_, FALSE);
+    ShowWindow(deleteDialog_, SW_SHOW);
+}
+
+void MainWindow::finishDeleteDialog(bool confirmed)
+{
+    HWND dialog = deleteDialog_;
+    deleteDialog_ = nullptr;
+    if (dialog) DestroyWindow(dialog);
+    if (!isClosing()) {
+        EnableWindow(hwnd_, TRUE);
+        if (list_) SetFocus(list_);
+    }
+    if (!confirmed) {
+        pendingDeleteSelection_.clear();
+        return;
+    }
+    const auto ids = std::move(pendingDeleteSelection_);
+    pendingDeleteSelection_.clear();
+    pendingDeleteIds_.clear();
+    pendingDeleteFailures_.clear();
+    pendingDeleteTotal_ = ids.size();
+    for (const auto& id : ids) pendingDeleteIds_.insert(id);
+    for (const auto& id : ids) worker_->postDelete(id);
+    setNotice("正在停止并删除 " + std::to_string(ids.size())
+        + " 个任务记录（文件保留）。");
+}
+
+void MainWindow::openFileSelected()
+{
+    const auto ids = selectedIds();
+    if (ids.size() != 1) {
+        MessageBoxW(hwnd_, L"请选择一个已完成的任务以打开文件。", L"打开文件",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const auto* row = rowForId(ids.front());
+    if (!row || row->state != TaskState::Completed) {
+        MessageBoxW(hwnd_, L"只有已完成的任务才能打开文件；未完成或失败的任务不会执行。",
+            L"打开文件", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::filesystem::path path;
+    try {
+        path = pathFromUtf8(row->destination);
+    } catch (const std::exception&) {
+        MessageBoxW(hwnd_, L"任务保存路径无效。", L"打开文件", MB_OK | MB_ICONERROR);
+        return;
+    }
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) {
+        MessageBoxW(hwnd_, (L"文件不存在或无法访问：\r\n" + path.wstring()).c_str(),
+            L"打开文件", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    SHELLEXECUTEINFOW info{};
+    info.cbSize = sizeof(info);
+    info.fMask = SEE_MASK_FLAG_NO_UI;
+    info.hwnd = hwnd_;
+    info.lpVerb = L"open";
+    info.lpFile = path.c_str();
+    info.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&info)) {
+        const DWORD code = GetLastError();
+        std::wstring reason = shellErrorText(static_cast<INT_PTR>(code));
+        MessageBoxW(hwnd_, (L"无法打开文件：\r\n" + path.wstring() + L"\r\n\r\n" + reason).c_str(),
+            L"打开文件", MB_OK | MB_ICONERROR);
+    }
 }
 
 void MainWindow::openFolderSelected()
 {
-    const auto* row = selectedRow();
-    if (!row) return;
+    const auto ids = selectedIds();
+    if (ids.size() != 1) {
+        MessageBoxW(hwnd_, L"请选择一个任务以打开所在文件夹。", L"打开文件",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const auto* row = rowForId(ids.front());
+    if (!row || row->destination.empty()) {
+        MessageBoxW(hwnd_, L"所选任务没有保存位置。", L"打开文件", MB_OK | MB_ICONWARNING);
+        return;
+    }
     std::filesystem::path destination;
     try {
         destination = pathFromUtf8(row->destination);
     } catch (const std::exception&) {
-        MessageBoxW(hwnd_, L"任务保存路径无效。", L"打开文件夹", MB_OK | MB_ICONERROR);
+        MessageBoxW(hwnd_, L"任务保存路径无效。", L"打开文件", MB_OK | MB_ICONERROR);
         return;
     }
     std::error_code error;
@@ -744,23 +1803,31 @@ void MainWindow::openFolderSelected()
     } else {
         const auto parent = destination.parent_path();
         if (!std::filesystem::is_directory(parent, error)) {
-            MessageBoxW(hwnd_, L"文件夹不存在或无法访问。", L"打开文件夹", MB_OK | MB_ICONWARNING);
+            MessageBoxW(hwnd_, (L"文件夹不存在或无法访问：\r\n" + parent.wstring()).c_str(),
+                L"打开文件", MB_OK | MB_ICONWARNING);
             return;
         }
         commandLine = L"\"" + parent.wstring() + L"\"";
     }
     const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", L"explorer.exe",
         commandLine.c_str(), nullptr, SW_SHOWNORMAL));
-    if (result <= 32)
-        MessageBoxW(hwnd_, L"无法启动资源管理器。", L"打开文件夹", MB_OK | MB_ICONERROR);
+    if (result <= 32) {
+        MessageBoxW(hwnd_, (L"无法启动资源管理器。\r\n" + shellErrorText(result)).c_str(),
+            L"打开文件", MB_OK | MB_ICONERROR);
+    }
 }
 
-void MainWindow::copyLinkSelected()
+void MainWindow::copyText(const std::wstring& text, std::string notice)
 {
-    const auto* row = selectedRow();
-    if (!row || row->source.empty()) return;
-    const auto text = toWide(row->source);
-    if (!OpenClipboard(hwnd_)) return;
+    bool opened = false;
+    for (int attempt = 0; attempt < 10 && !opened; ++attempt) {
+        opened = OpenClipboard(hwnd_) != FALSE;
+        if (!opened) Sleep(20);
+    }
+    if (!opened) {
+        setNotice("无法访问剪贴板，请重试。");
+        return;
+    }
     EmptyClipboard();
     const std::size_t bytes = (text.size() + 1) * sizeof(wchar_t);
     if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
@@ -773,22 +1840,140 @@ void MainWindow::copyLinkSelected()
         }
     }
     CloseClipboard();
+    setNotice(std::move(notice));
+}
+
+void MainWindow::copySelectedLinks()
+{
+    const auto ids = selectedIds();
+    const auto actions = model_.actionsForSelection(ids);
+    if (actions.copyLinkCount == 0) return;
+    std::wstring text;
+    for (const auto& id : ids) {
+        const auto* row = rowForId(id);
+        if (!row || row->source.empty()) continue;
+        const auto redacted = redactAddress(row->source);
+        if (!text.empty()) text += L"\r\n";
+        text += toWide(redacted);
+    }
+    copyText(text, "已复制 " + std::to_string(actions.copyLinkCount)
+        + " 个下载地址（凭据已隐藏）。");
+}
+
+void MainWindow::copySelectedPaths()
+{
+    const auto ids = selectedIds();
+    const auto actions = model_.actionsForSelection(ids);
+    if (actions.copyPathCount == 0) return;
+    std::wstring text;
+    for (const auto& id : ids) {
+        const auto* row = rowForId(id);
+        if (!row || row->destination.empty()) continue;
+        if (!text.empty()) text += L"\r\n";
+        text += toWide(row->destination);
+    }
+    copyText(text, "已复制 " + std::to_string(actions.copyPathCount) + " 个文件路径。");
+}
+
+void MainWindow::selectAllVisible()
+{
+    if (isEditFocus()) {
+        if (HWND focus = GetFocus()) SendMessageW(focus, EM_SETSEL, 0, -1);
+        return;
+    }
+    if (!list_) return;
+    suppressSelection_ = true;
+    ListView_SetItemState(list_, -1, LVIS_SELECTED, LVIS_SELECTED);
+    if (!viewRows_.empty())
+        ListView_SetItemState(list_, 0, LVIS_FOCUSED, LVIS_FOCUSED);
+    suppressSelection_ = false;
+    updateActions();
+}
+
+void MainWindow::pasteFromClipboard()
+{
+    const auto text = readClipboardText(hwnd_);
+    if (text.empty()) return;
+    try {
+        const auto utf8 = utf8FromUtf16(text);
+        if (analyzeBatchInput(utf8).lines.empty()) return;
+        openBatchAdd(utf8);
+    } catch (const std::exception&) {
+    }
+}
+
+void MainWindow::handleDrop(HDROP drop)
+{
+    if (!drop) return;
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    std::vector<std::filesystem::path> paths;
+    for (UINT index = 0; index < count; ++index) {
+        const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+        std::wstring buffer(static_cast<std::size_t>(length) + 1, L'\0');
+        if (DragQueryFileW(drop, index, buffer.data(), static_cast<UINT>(buffer.size())) > 0) {
+            buffer.resize(length);
+            paths.emplace_back(buffer);
+        }
+    }
+    DragFinish(drop);
+
+    bool torrent = false;
+    bool otherFile = false;
+    std::string text;
+    for (const auto& path : paths) {
+        auto extension = path.extension().wstring();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+        if (extension == L".torrent") {
+            torrent = true;
+        } else if (extension == L".txt") {
+            std::string fileText;
+            if (readTextFile(path, fileText)) {
+                if (!text.empty()) text += "\n";
+                text += fileText;
+            } else {
+                otherFile = true;
+            }
+        } else {
+            otherFile = true;
+        }
+    }
+    if (!text.empty()) openBatchAdd(text);
+    if (torrent) {
+        MessageBoxW(hwnd_,
+            L"BT/磁力与种子文件将在后续版本接入（#9）。本次未创建或传输任何 BT 任务。",
+            L"打开种子", MB_OK | MB_ICONINFORMATION);
+    }
+    if (otherFile) {
+        MessageBoxW(hwnd_,
+            L"拖放的本地文件不会创建下载任务。\r\n请拖入 .txt 地址列表，或使用“批量添加”。",
+            L"拖放", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+void MainWindow::openTorrentBoundary()
+{
+    MessageBoxW(hwnd_,
+        L"BT/磁力与种子文件将在后续版本接入（#9）。本版本不会创建或传输 BT 任务。",
+        L"打开种子", MB_OK | MB_ICONINFORMATION);
 }
 
 void MainWindow::showCapabilities()
 {
     MessageBoxW(hwnd_,
         L"本版本已实现：\n"
-        L"• 新建 HTTP 下载（真实传输、真实文件；HTTPS 由传输库支持，但未在本版本验收）\n"
-        L"• 开始等待中或失败的任务\n"
-        L"• 停止等待中或下载中的任务\n"
-        L"• 打开任务保存文件夹、复制下载地址、刷新列表\n"
+        L"• 新建 HTTP 下载（真实传输、真实文件；HTTPS 由传输库支持，但尚未验收 #6）\n"
+        L"• 批量添加（每行一个地址，逐行验证/报告；当前仅提交 HTTP/HTTPS）\n"
+        L"• 多选、临时查找（Ctrl+F）、状态筛选、数值/时间排序\n"
+        L"• 列顺序/宽度/显示与排序持久化，至少保留“名称”列\n"
+        L"• 开始等待中/失败任务、停止等待中/下载中任务\n"
+        L"• 删除任务记录（先取消并等待，文件保留）、打开文件/所在文件夹、复制链接/路径\n"
+        L"• 相同来源默认定位现有任务，可明确另建一份；显示/复制会隐藏 URL 凭据\n"
         L"\n"
         L"尚未实现，因此按钮保持禁用：\n"
-        L"• 暂停 — 需要断点续传支持（后续版本）\n"
-        L"• 删除 — 将随列表与批量操作提供\n"
-        L"• 选项 — 设置界面将在后续版本提供\n"
-        L"• 批量添加、续传、任务属性 — 后续版本\n",
+        L"• 暂停/续传（#5）：当前的“停止”不是可续传暂停\n"
+        L"• FTP（#8）、BT/磁力/种子（#9）、ed2k（#12）：引擎接入前不会假报支持\n"
+        L"• 删除任务及文件、重新下载、任务属性、选项 — 后续版本\n",
         L"本版本能力说明", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -797,13 +1982,14 @@ void MainWindow::showAbout()
     MessageBoxW(hwnd_,
         L"LiteFetch 0.1\n\n"
         L"原生 Win32 下载管理器（开发版本）\n"
-        L"HTTP 下载（HTTPS 由传输库支持，本票未验收）、真实任务列表与状态；无 Qt 依赖。",
+        L"HTTP 下载（HTTPS 由传输库支持，本票未验收）、真实任务列表、批量/查找/多选与列设置；无 Qt 依赖。",
         L"关于 LiteFetch", MB_OK | MB_ICONINFORMATION);
 }
 
 void MainWindow::beginClose()
 {
     if (closing_) return;
+    if (deleteDialog_) finishDeleteDialog(false);
     closing_ = true;
     KillTimer(hwnd_, IDT_REFRESH);
     updateActions();
@@ -825,6 +2011,11 @@ void MainWindow::finishClose()
         closingWorkerReleased_ = true;
     }
     DestroyWindow(hwnd_);
+}
+
+void MainWindow::setShutdownStatus()
+{
+    if (status_) SendMessageW(status_, SB_SETTEXTW, 3, reinterpret_cast<LPARAM>(L"正在停止任务…"));
 }
 
 } // namespace litefetch::ui

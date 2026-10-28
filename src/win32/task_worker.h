@@ -21,11 +21,33 @@ class TaskService;
 // Message posted to the window when worker state changed. WM_APP is 0x8000.
 inline constexpr unsigned int workerWakeMessage = 0x8000u + 1;
 
+struct AddResult {
+    std::uint64_t sequence = 0;
+    std::uint64_t batchId = 0;
+    int line = 0; // 1-based source line, 0 for a single add
+    bool ok = false;
+    bool existing = false;
+    std::string taskId;
+    std::string error;
+};
+
+struct ActionOutcome {
+    std::uint64_t sequence = 0;
+    std::string taskId;
+    std::string action;
+    bool ok = false;
+    std::string error;
+};
+
 struct WorkerSnapshot {
     std::vector<TaskSnapshot> tasks;
     std::vector<std::string> active;
+    std::vector<AddResult> addResults;
+    std::vector<ActionOutcome> outcomes;
     std::string lastError;
     std::uint64_t lastErrorSequence = 0;
+    std::uint64_t addResultSequence = 0;
+    std::uint64_t outcomeSequence = 0;
     bool shuttingDown = false;
     bool stopped = false;
 };
@@ -46,9 +68,11 @@ public:
     TaskWorker& operator=(const TaskWorker&) = delete;
 
     bool start(std::string& error);
-    void postAdd(std::string source, std::string destination, bool autoStart);
+    void postAdd(std::string source, std::string destination, bool autoStart,
+        std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false);
     void postStart(std::string taskId);
     void postCancel(std::string taskId);
+    void postDelete(std::string taskId);
     void postRefresh();
 
     // Non-blocking shutdown request; the control thread cancels live tasks and
@@ -65,13 +89,16 @@ public:
     WorkerSnapshot snapshot();
 
 private:
-    enum class CommandType { Add, Start, Cancel, Refresh };
+    enum class CommandType { Add, Start, Cancel, Delete, Refresh };
     struct Command {
         CommandType type = CommandType::Refresh;
         std::string source;
         std::string destination;
         std::string taskId;
         bool autoStart = false;
+        bool allowDuplicate = false;
+        std::uint64_t batchId = 0;
+        int line = 0;
     };
     struct StartJob {
         std::string taskId;
@@ -87,6 +114,8 @@ private:
     void cancelAll();
     void wakeUi();
     void publishError(std::string message);
+    void appendAddResult(const AddResult& result);
+    void appendOutcome(const ActionOutcome& outcome);
     void updateProgress(const std::string& taskId, std::int64_t received, std::int64_t total);
     bool anyJobFinished() const;
 
@@ -105,8 +134,12 @@ private:
     std::vector<StartJob> jobs_; // control thread only
     std::vector<TaskSnapshot> tasks_;
     std::vector<std::string> active_;
+    std::vector<AddResult> addResults_;
+    std::vector<ActionOutcome> outcomes_;
     std::string lastError_;
     std::uint64_t lastErrorSequence_ = 0;
+    std::uint64_t addResultSequence_ = 0;
+    std::uint64_t outcomeSequence_ = 0;
 };
 
 } // namespace litefetch

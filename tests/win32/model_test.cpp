@@ -8,7 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -164,17 +167,30 @@ void sourceParsing()
 
 void modelProgressAndActions()
 {
+    const auto root = std::filesystem::temp_directory_path()
+        / ("litefetch-model-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    const auto queuedDestination = (root / "queued.bin").string();
+    const auto runningDestination = (root / "running.bin").string();
+    const auto completedDestination = (root / "completed.bin").string();
+    {
+        std::ofstream completedFile(completedDestination, std::ios::binary);
+        completedFile << "done";
+    }
+
     TaskListModel model;
-    const auto queued = task("queued", TaskState::Queued, 0, 1000);
+    const auto queued = task("queued", TaskState::Queued, 0, 1000, queuedDestination);
     const auto running = task("running", TaskState::Running, 0, 4 * 1024 * 1024,
-        utf8(u8"D:/下载/工具包.zip"));
-    const auto completed = task("completed", TaskState::Completed, 1000, 1000);
+        runningDestination);
+    const auto completed = task("completed", TaskState::Completed, 1000, 1000,
+        completedDestination);
     model.update({queued, running, completed}, {"running"}, 1000);
 
     check(model.rows().size() == 3, "row count");
     check(model.rows()[0].status == utf8(u8"等待中"), "queued status text");
     check(model.rows()[1].status == utf8(u8"正在连接"), "running without bytes is connecting");
-    check(model.rows()[1].name == utf8(u8"工具包.zip"), "row name uses the file name");
+    check(model.rows()[1].name == "running.bin", "row name uses the file name");
     check(model.rows()[1].size == "4.00 MB", "row size");
     check(model.rows()[1].progress == "0.0%", "row progress");
     check(model.rows()[2].status == utf8(u8"已完成"), "completed status text");
@@ -186,11 +202,28 @@ void modelProgressAndActions()
     check(!model.actionsFor("completed").start, "completed task cannot start");
     check(!model.actionsFor("completed").stop, "completed task cannot stop");
     check(!model.actionsFor("running").pause, "pause stays disabled until resume exists");
-    check(!model.actionsFor("running").deleteTask, "delete stays disabled until the list ticket");
+    check(model.actionsFor("running").deleteTask, "delete record is available in the list ticket");
     check(!model.actionsFor("running").options, "options stays disabled until implemented");
-    check(model.actionsFor("running").openFolder, "open folder needs a selection");
+    check(model.actionsFor("running").openFolder,
+        "open folder is eligible when the parent exists");
+    check(!model.actionsFor("running").openFile,
+        "an incomplete task cannot open a file");
+    check(model.actionsFor("completed").openFile,
+        "a completed task with a real file can open it");
+    check(model.actionsFor("completed").openFolder,
+        "a completed task can open its folder");
     check(model.actionsFor("running").copyLink, "copy link needs a selection");
     check(!model.actionsFor("").openFolder, "no selection has no folder action");
+
+    const auto multiple = model.actionsForSelection({"queued", "running", "completed"});
+    check(multiple.selectedCount == 3, "selection count");
+    check(multiple.startCount == 1 && multiple.stopCount == 2,
+        "mixed selection counts only eligible tasks");
+    check(multiple.deleteCount == 3, "all selected records are deletable");
+    check(multiple.openFileCount == 0 && multiple.openFolderCount == 0,
+        "open actions require exactly one selected task");
+    check(multiple.copyLinkCount == 3 && multiple.copyPathCount == 3,
+        "mixed copy reports eligible counts");
 
     TaskListModel failedModel;
     failedModel.update({task("failed", TaskState::Failed, 10, 100)}, {}, 1000);
@@ -201,7 +234,7 @@ void modelProgressAndActions()
     // One second later the same task has transferred 1 MiB: the row must show a
     // measured speed and the remaining time implied by it.
     model.update({queued, task("running", TaskState::Running, 1024 * 1024, 4 * 1024 * 1024,
-                     utf8(u8"D:/下载/工具包.zip")),
+                     runningDestination),
                      completed},
         {"running"}, 2000);
     const auto& row = model.rows()[1];
@@ -222,6 +255,13 @@ void modelProgressAndActions()
     check(model.rows()[0].status == utf8(u8"已中断"), "stale running row is shown as interrupted");
     check(model.rows()[0].speed == unknownValue, "interrupted row has no speed");
     check(model.status().download == utf8(u8"↓ —"), "no active transfer shows unknown aggregate speed");
+
+    const auto filtered = model.status(1, true);
+    check(filtered.tasks == utf8(u8"可见: 1 / 1"), "filtered status shows visible / total");
+    check(filtered.active == utf8(u8"活动: 0"), "filtered status keeps whole-queue active count");
+
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
 }
 } // namespace
 

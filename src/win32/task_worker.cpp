@@ -11,6 +11,8 @@
 
 #include <chrono>
 #include <exception>
+#include <fstream>
+#include <set>
 #include <utility>
 
 namespace litefetch {
@@ -46,13 +48,17 @@ bool TaskWorker::start(std::string& error)
     return true;
 }
 
-void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart)
+void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart,
+    std::uint64_t batchId, int line, bool allowDuplicate)
 {
     Command command;
     command.type = CommandType::Add;
     command.source = std::move(source);
     command.destination = std::move(destination);
     command.autoStart = autoStart;
+    command.batchId = batchId;
+    command.line = line;
+    command.allowDuplicate = allowDuplicate;
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -87,6 +93,19 @@ void TaskWorker::postCancel(std::string taskId)
     condition_.notify_all();
 }
 
+void TaskWorker::postDelete(std::string taskId)
+{
+    Command command;
+    command.type = CommandType::Delete;
+    command.taskId = std::move(taskId);
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
 void TaskWorker::postRefresh()
 {
     Command command;
@@ -105,6 +124,9 @@ void TaskWorker::beginShutdown()
         std::lock_guard lock(mutex_);
         if (stopping_) return;
         stopping_ = true;
+        // Commands that have not started must not write to the store after the
+        // window decided to close. Active transfers are cancelled by cancelAll.
+        queue_.clear();
     }
     condition_.notify_all();
     wakeUi();
@@ -140,8 +162,12 @@ WorkerSnapshot TaskWorker::snapshot()
     WorkerSnapshot result;
     result.tasks = tasks_;
     result.active = active_;
+    result.addResults = addResults_;
+    result.outcomes = outcomes_;
     result.lastError = lastError_;
     result.lastErrorSequence = lastErrorSequence_;
+    result.addResultSequence = addResultSequence_;
+    result.outcomeSequence = outcomeSequence_;
     result.shuttingDown = stopping_;
     result.stopped = shutdownFinished_.load();
     return result;
@@ -150,6 +176,10 @@ WorkerSnapshot TaskWorker::snapshot()
 void TaskWorker::controlLoop()
 {
     SetThreadDescription(GetCurrentThread(), L"litefetch-task-worker");
+    // Existing rows must be visible on startup, before any command wakes the
+    // control loop (the window refreshes its snapshot immediately after start).
+    reload();
+    wakeUi();
     for (;;) {
         Command command;
         bool hasCommand = false;
@@ -186,13 +216,21 @@ void TaskWorker::controlLoop()
 
     // Closing the window cancels queued and running work, then waits for the
     // blocking Start calls to persist their real outcome before returning.
-    cancelAll();
-    for (auto& job : jobs_) {
-        if (job.thread.joinable()) job.thread.join();
+    try {
+        cancelAll();
+        for (auto& job : jobs_) {
+            if (job.thread.joinable()) job.thread.join();
+        }
+        jobs_.clear();
+        reload();
+        wakeUi();
+    } catch (const std::exception& error) {
+        std::ofstream debug("D:/Projects/litefetch/tmp/shutdown-error.log", std::ios::app);
+        debug << "controlLoop shutdown exception: " << error.what() << "\n";
+    } catch (...) {
+        std::ofstream debug("D:/Projects/litefetch/tmp/shutdown-error.log", std::ios::app);
+        debug << "controlLoop shutdown unknown exception\n";
     }
-    jobs_.clear();
-    reload();
-    wakeUi();
     shutdownFinished_.store(true);
     condition_.notify_all();
 }
@@ -203,7 +241,16 @@ void TaskWorker::execute(const Command& command)
     try {
         switch (command.type) {
         case CommandType::Add: {
-            const auto result = service_->execute(AddTaskCommand{command.source, command.destination});
+            const auto result = service_->execute(AddTaskCommand{
+                command.source, command.destination, command.allowDuplicate});
+            AddResult addResult;
+            addResult.batchId = command.batchId;
+            addResult.line = command.line;
+            addResult.ok = result.ok;
+            addResult.existing = result.existing;
+            addResult.taskId = result.task.id;
+            addResult.error = result.error;
+            appendAddResult(addResult);
             if (!result.ok) {
                 publishError("添加失败: " + (result.error.empty() ? "unknown error" : result.error));
                 break;
@@ -218,6 +265,30 @@ void TaskWorker::execute(const Command& command)
             const auto result = service_->execute(CancelTaskCommand{command.taskId});
             if (!result.ok)
                 publishError("停止失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
+        case CommandType::Delete: {
+            const auto before = service_->snapshot(command.taskId);
+            if (!before) {
+                appendOutcome(ActionOutcome{0, command.taskId, "delete", false, "unknown task"});
+                publishError("删除失败: unknown task");
+                break;
+            }
+            if (before->state == TaskState::Queued || before->state == TaskState::Running) {
+                const auto cancelled = service_->execute(CancelTaskCommand{command.taskId});
+                if (!cancelled.ok) {
+                    const auto message = cancelled.error.empty() ? std::string("unknown error")
+                                                                : cancelled.error;
+                    appendOutcome(ActionOutcome{0, command.taskId, "delete", false,
+                        "停止失败: " + message});
+                    publishError("删除失败: 停止失败: " + message);
+                    break;
+                }
+            }
+            const auto result = service_->execute(DeleteTaskCommand{command.taskId});
+            appendOutcome(ActionOutcome{0, command.taskId, "delete", result.ok, result.error});
+            if (!result.ok)
+                publishError("删除失败: " + (result.error.empty() ? "unknown error" : result.error));
             break;
         }
         case CommandType::Refresh:
@@ -309,11 +380,18 @@ void TaskWorker::reload()
 void TaskWorker::cancelAll()
 {
     if (!service_) return;
+    // Only work with a live writer is cancelled. A queued record has no writer
+    // and stays queued for the next explicit start; a persisted running row
+    // without a local job is already an interrupted task and is left for the
+    // recovery ticket rather than silently rewritten on close.
+    std::set<std::string, std::less<>> activeJobs;
+    for (const auto& job : jobs_) {
+        if (!job.finished->load()) activeJobs.insert(job.taskId);
+    }
     std::vector<std::string> cancellable;
     try {
         for (const auto& task : service_->snapshots()) {
-            if (task.state == TaskState::Queued || task.state == TaskState::Running)
-                cancellable.push_back(task.id);
+            if (activeJobs.contains(task.id)) cancellable.push_back(task.id);
         }
     } catch (const std::exception& error) {
         publishError(std::string("读取任务失败: ") + error.what());
@@ -340,6 +418,28 @@ void TaskWorker::publishError(std::string message)
         std::lock_guard lock(mutex_);
         lastError_ = std::move(message);
         ++lastErrorSequence_;
+    }
+    wakeUi();
+}
+
+void TaskWorker::appendAddResult(const AddResult& result)
+{
+    {
+        std::lock_guard lock(mutex_);
+        AddResult stored = result;
+        stored.sequence = ++addResultSequence_;
+        addResults_.push_back(std::move(stored));
+    }
+    wakeUi();
+}
+
+void TaskWorker::appendOutcome(const ActionOutcome& outcome)
+{
+    {
+        std::lock_guard lock(mutex_);
+        ActionOutcome stored = outcome;
+        stored.sequence = ++outcomeSequence_;
+        outcomes_.push_back(std::move(stored));
     }
     wakeUi();
 }

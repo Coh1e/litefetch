@@ -223,6 +223,74 @@ void cancellation(const std::filesystem::path& root)
     checkNoStaging(root, "cancel.bin");
 }
 
+void duplicateIdentityAndDeleteRecord(const std::filesystem::path& root)
+{
+    const auto body = payload(2 * 1024 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 16 * 1024, std::chrono::milliseconds(20)});
+    const auto database = root / "duplicate-delete.db";
+    const auto originalDestination = root / "original.bin";
+    const auto copyDestination = root / "original (2).bin";
+    TaskRepository repository(database);
+    TaskService service(repository);
+
+    const auto original = service.execute(AddTaskCommand{server.url(), originalDestination.string()});
+    require(original.ok, "original add failed: " + original.error);
+    require(!original.existing, "a first add is not an existing task");
+
+    const auto located = service.execute(AddTaskCommand{server.url(), originalDestination.string()});
+    require(located.ok && located.existing, "same source+destination locates the existing task");
+    checkEqual(located.task.id, original.task.id, "located task keeps the same identity");
+    checkEqual(static_cast<long long>(service.snapshots().size()), 1, "locate did not insert a row");
+
+    const auto conflicting = service.execute(AddTaskCommand{
+        server.url(), copyDestination.string()});
+    require(!conflicting.ok, "same source with another destination needs an explicit copy choice");
+
+    const auto copy = service.execute(AddTaskCommand{
+        server.url(), copyDestination.string(), true});
+    require(copy.ok, "explicit duplicate failed: " + copy.error);
+    require(!copy.existing, "explicit duplicate creates a new record");
+    require(copy.task.id != original.task.id, "explicit duplicate has a distinct identity");
+    checkEqual(static_cast<long long>(service.snapshots().size()), 2, "explicit duplicate added one row");
+    const auto persistedCopy = service.snapshot(copy.task.id);
+    require(persistedCopy.has_value(), "duplicate identity is persisted and restart-stable");
+
+    const auto sameTarget = service.execute(AddTaskCommand{
+        server.url(), originalDestination.string(), true});
+    require(!sameTarget.ok, "explicit duplicate refuses to reuse the same file target");
+
+    // A record delete never removes the owned file.
+    writeFile(originalDestination, {1, 2, 3, 4});
+    const auto deleted = service.execute(DeleteTaskCommand{original.task.id});
+    require(deleted.ok, "record delete failed: " + deleted.error);
+    check(!service.snapshot(original.task.id).has_value(), "deleted record is gone from storage");
+    check(readFile(originalDestination) == std::vector<unsigned char>{1, 2, 3, 4},
+        "record delete kept the downloaded file bytes");
+    require(service.snapshot(copy.task.id).has_value(), "other records are unaffected");
+
+    // Running work must be stopped (and committed) before the record is removed.
+    std::promise<CommandResult> finished;
+    auto result = finished.get_future();
+    std::jthread worker([&] { finished.set_value(service.execute(StartTaskCommand{copy.task.id})); });
+    require(waitFor([&] {
+        const auto snapshot = service.snapshot(copy.task.id);
+        return snapshot && snapshot->state == TaskState::Running && snapshot->received > 0;
+    }, std::chrono::seconds(10)), "duplicate copy did not reach running state");
+    const auto rejected = service.execute(DeleteTaskCommand{copy.task.id});
+    require(!rejected.ok && rejected.error.find("running") != std::string::npos,
+        "delete must reject a task with an active writer");
+    const auto cancelled = service.execute(CancelTaskCommand{copy.task.id});
+    require(cancelled.ok, "cancel before delete failed: " + cancelled.error);
+    const auto started = result.get();
+    worker.join();
+    require(started.ok && started.task.state == TaskState::Cancelled,
+        "cancelled copy did not commit its outcome");
+    const auto deletedCopy = service.execute(DeleteTaskCommand{copy.task.id});
+    require(deletedCopy.ok, "delete after cancel failed: " + deletedCopy.error);
+    check(service.snapshots().empty(), "all records deleted");
+    check(!std::filesystem::exists(copyDestination), "cancelled copy did not publish a file");
+}
+
 int body()
 {
     TempDir root;
@@ -231,6 +299,7 @@ int body()
     sameDestinationRace(root.path());
     cancelThenStart(root.path());
     cancellation(root.path());
+    duplicateIdentityAndDeleteRecord(root.path());
     return 0;
 }
 } // namespace

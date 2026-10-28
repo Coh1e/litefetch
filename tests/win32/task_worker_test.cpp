@@ -3,12 +3,14 @@
 // the caller, that cancellation and window-close shutdown join every worker
 // thread, and that a cancelled transfer never publishes a file.
 #include "http_fixture.h"
+#include "task_service.h"
 #include "task_store.h"
 #include "task_worker.h"
 #include "test_support.h"
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <thread>
@@ -160,6 +162,77 @@ void shutdownDuringDownload(const std::filesystem::path& root)
         "shutdown did not persist the cancelled outcome");
 }
 
+void existingTasksVisibleOnStart(const std::filesystem::path& root)
+{
+    const auto database = root / "worker-existing.db";
+    const auto destination = root / "existing.bin";
+    std::string id;
+    {
+        TaskRepository repository(database);
+        TaskService service(repository);
+        const auto added = service.execute(AddTaskCommand{
+            "http://127.0.0.1:1/existing.bin", destination.string()});
+        check(added.ok, ("seed add failed: " + added.error).c_str());
+        id = added.task.id;
+    }
+    TaskWorker worker(database);
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    check(waitFor([&] { return worker.snapshot().tasks.size() == 1; }, std::chrono::seconds(5)),
+        "existing rows are loaded before the first command");
+    check(worker.snapshot().tasks.front().id == id, "startup snapshot keeps the seeded task id");
+    worker.shutdown();
+}
+
+void batchResultsAndRecordDelete(const std::filesystem::path& root)
+{
+    TaskWorker worker(root / "worker-batch.db");
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+
+    const auto first = root / "batch-first.bin";
+    const auto second = root / "batch-second.bin";
+    worker.postAdd("http://127.0.0.1:1/first.bin", first.string(), false, 42, 1);
+    worker.postAdd("http://127.0.0.1:1/second.bin", second.string(), false, 42, 2);
+    worker.postAdd("ftp://example.org/unsupported.bin", (root / "unsupported.bin").string(),
+        false, 43, 1);
+    check(waitFor([&] { return worker.snapshot().addResults.size() >= 3; },
+              std::chrono::seconds(5)), "batch results did not reach the UI snapshot");
+    const auto snapshot = worker.snapshot();
+    check(snapshot.tasks.size() == 2, "two supported lines created two records");
+    check(snapshot.addResults[0].batchId == 42 && snapshot.addResults[0].line == 1
+            && snapshot.addResults[0].ok, "first line result keeps batch/line identity");
+    check(snapshot.addResults[1].batchId == 42 && snapshot.addResults[1].line == 2
+            && snapshot.addResults[1].ok, "second line result keeps original order");
+    check(snapshot.addResults[2].batchId == 43 && !snapshot.addResults[2].ok,
+        "unsupported line is reported as a failed add, not silently dropped");
+
+    std::string firstId;
+    std::string secondId;
+    for (const auto& task : snapshot.tasks) {
+        if (task.destination == first.string()) firstId = task.id;
+        if (task.destination == second.string()) secondId = task.id;
+    }
+    check(!firstId.empty() && !secondId.empty(), "both record ids are available");
+
+    { std::ofstream file(first, std::ios::binary); file << "kept"; }
+    worker.postDelete(firstId);
+    check(waitFor([&] { return !worker.snapshot().outcomes.empty(); }, std::chrono::seconds(5)),
+        "delete outcome did not reach the UI snapshot");
+    const auto afterDelete = worker.snapshot();
+    check(afterDelete.outcomes.back().action == "delete" && afterDelete.outcomes.back().ok,
+        "record delete succeeded");
+    check(afterDelete.tasks.size() == 1, "only the deleted record is gone");
+    check(std::filesystem::exists(first), "record deletion kept the file");
+    check(afterDelete.tasks.front().id == secondId, "the other record remains");
+
+    worker.postDelete(secondId);
+    check(waitFor([&] { return worker.snapshot().tasks.empty(); }, std::chrono::seconds(5)),
+        "queued record delete did not complete");
+    check(!std::filesystem::exists(second), "record delete never creates the file");
+    worker.shutdown();
+}
+
 void invalidAddReportsError(const std::filesystem::path& root)
 {
     TaskWorker worker(root / "worker-error.db");
@@ -177,9 +250,11 @@ void invalidAddReportsError(const std::filesystem::path& root)
 int body()
 {
     TempDir root;
+    existingTasksVisibleOnStart(root.path());
     completedDownload(root.path());
     cancelledDownload(root.path());
     shutdownDuringDownload(root.path());
+    batchResultsAndRecordDelete(root.path());
     invalidAddReportsError(root.path());
     return 0;
 }

@@ -32,6 +32,9 @@ add_library(litefetch-ui-model STATIC
     src/win32/ui_text.cpp src/win32/ui_text.h
     src/win32/url_filename.cpp src/win32/url_filename.h
     src/win32/list_layout.cpp src/win32/list_layout.h
+    src/win32/columns.cpp src/win32/columns.h
+    src/win32/task_view.cpp src/win32/task_view.h
+    src/win32/batch_input.cpp src/win32/batch_input.h
     src/win32/task_list_model.cpp src/win32/task_list_model.h)
 target_include_directories(litefetch-ui-model PUBLIC src/win32)
 target_link_libraries(litefetch-ui-model PUBLIC litefetch-core)
@@ -78,6 +81,21 @@ if(BUILD_TESTING)
     target_link_libraries(ui-model-tests PRIVATE litefetch-ui-model)
     add_test(NAME ui-model COMMAND ui-model-tests)
     set_tests_properties(ui-model PROPERTIES TIMEOUT 20)
+    add_executable(ui-columns-tests tests/win32/columns_test.cpp)
+    target_include_directories(ui-columns-tests PRIVATE tests/core)
+    target_link_libraries(ui-columns-tests PRIVATE litefetch-ui-model)
+    add_test(NAME ui-columns COMMAND ui-columns-tests)
+    set_tests_properties(ui-columns PROPERTIES TIMEOUT 20)
+    add_executable(ui-view-tests tests/win32/view_test.cpp)
+    target_include_directories(ui-view-tests PRIVATE tests/core)
+    target_link_libraries(ui-view-tests PRIVATE litefetch-ui-model)
+    add_test(NAME ui-view COMMAND ui-view-tests)
+    set_tests_properties(ui-view PROPERTIES TIMEOUT 20)
+    add_executable(ui-batch-tests tests/win32/batch_test.cpp)
+    target_include_directories(ui-batch-tests PRIVATE tests/core)
+    target_link_libraries(ui-batch-tests PRIVATE litefetch-ui-model)
+    add_test(NAME ui-batch COMMAND ui-batch-tests)
+    set_tests_properties(ui-batch PROPERTIES TIMEOUT 20)
     add_executable(ui-worker-tests tests/win32/task_worker_test.cpp)
     target_include_directories(ui-worker-tests PRIVATE tests/core)
     target_link_libraries(ui-worker-tests PRIVATE litefetch-win32-runtime ws2_32)
@@ -85,12 +103,13 @@ if(BUILD_TESTING)
     set_tests_properties(ui-worker PROPERTIES TIMEOUT 90)
     set(core_test_temp "${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
     set(core_test_targets core-identity core-store core-service core-storage-failure core-unicode-path
-        ui-model ui-worker)
+        ui-model ui-columns ui-view ui-batch ui-worker)
     set_tests_properties(${core_test_targets} PROPERTIES
         ENVIRONMENT "LITEFETCH_TEST_TEMP=${core_test_temp};TEMP=${core_test_temp};TMP=${core_test_temp}")
     if(MSVC)
         foreach(core_test core-identity-tests core-store-tests core-service-tests
-                core-storage-failure-tests core-unicode-path-tests ui-model-tests ui-worker-tests)
+                core-storage-failure-tests core-unicode-path-tests ui-model-tests
+                ui-columns-tests ui-view-tests ui-batch-tests ui-worker-tests)
             target_compile_options(${core_test} PRIVATE /W4 /permissive- /utf-8)
         endforeach()
     endif()
@@ -104,6 +123,8 @@ if(WIN32)
         src/win32/main.cpp
         src/win32/main_window.cpp src/win32/main_window.h
         src/win32/new_download_dialog.cpp src/win32/new_download_dialog.h
+        src/win32/column_dialog.cpp src/win32/column_dialog.h
+        src/win32/batch_dialog.cpp src/win32/batch_dialog.h
         src/win32/app.manifest
         src/win32/win32.rc)
     target_compile_definitions(litefetch-win32 PRIVATE UNICODE _UNICODE)

@@ -23,12 +23,27 @@ struct TaskRow {
     std::string speed;
     std::string remaining;
     std::string status;
+    std::string error; // persisted task error for the native infotip
+    // Optional-column values. Only real task/engine data is filled here;
+    // upload/connection/source counts stay empty until an engine reports them.
+    std::string protocol;
+    std::string address;   // redacted source for display, copy and search
+    std::string savePath;
+    std::string uploadSpeed;
+    std::string connections;
+    std::string sources;
+    std::string uploaded;
     TaskState state = TaskState::Queued;
     bool active = false;
     bool interrupted = false;
     std::int64_t received = 0;
     std::int64_t total = -1;
     double speedBytesPerSecond = 0.0;
+    bool speedKnown = false;
+    bool remainingKnown = false;
+    double remainingSeconds = 0.0;
+    std::int64_t createdAt = 0;
+    std::int64_t completedAt = 0; // 0 means unknown (not completed)
     std::int64_t updatedAt = 0;
 };
 
@@ -41,10 +56,22 @@ struct ActionState {
     bool pause = false;
     bool stop = false;
     bool deleteTask = false;
+    bool openFile = false;
     bool openFolder = false;
     bool options = false;
     bool copyLink = false;
+    bool copyPath = false;
     bool refresh = true;
+    // Counts over the visible selected TaskIds. Commands act on the eligible
+    // subset only and the UI reports these counts.
+    std::size_t selectedCount = 0;
+    std::size_t startCount = 0;
+    std::size_t stopCount = 0;
+    std::size_t deleteCount = 0;
+    std::size_t openFileCount = 0;
+    std::size_t openFolderCount = 0;
+    std::size_t copyLinkCount = 0;
+    std::size_t copyPathCount = 0;
 };
 
 struct StatusTexts {
@@ -65,7 +92,11 @@ public:
     const std::vector<TaskRow>& rows() const { return rows_; }
     std::size_t indexOf(std::string_view id) const;
     ActionState actionsFor(std::string_view selectedId) const;
+    ActionState actionsForSelection(const std::vector<std::string>& selectedIds) const;
     StatusTexts status() const;
+    // First part shows 可见: visible / total when a filter/query is active.
+    // Parts 2-4 stay whole-queue totals, never a sum of filtered rows.
+    StatusTexts status(std::size_t visibleCount, bool filtered) const;
     double totalDownloadSpeed() const;
 
 private:

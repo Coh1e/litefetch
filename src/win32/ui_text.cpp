@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <limits>
 
 namespace litefetch::ui {
@@ -79,6 +80,22 @@ std::string fileNameFromPath(std::string_view utf8Path)
     const auto separator = utf8Path.find_last_of("/\\");
     if (separator == std::string_view::npos) return std::string(utf8Path);
     return std::string(utf8Path.substr(separator + 1));
+}
+
+std::string formatDateTime(std::int64_t epochMillis)
+{
+    if (epochMillis <= 0) return std::string(unknownValue);
+    const std::time_t seconds = static_cast<std::time_t>(epochMillis / 1000);
+    std::tm local{};
+#if defined(_MSC_VER)
+    if (localtime_s(&local, &seconds) != 0) return std::string(unknownValue);
+#else
+    if (!localtime_r(&seconds, &local)) return std::string(unknownValue);
+#endif
+    char buffer[32];
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &local) == 0)
+        return std::string(unknownValue);
+    return buffer;
 }
 
 } // namespace litefetch::ui
