@@ -19,6 +19,8 @@ public:
     // Binds the port and starts the accept loop.
     bool start(std::string& error);
     std::uint16_t port() const { return port_; }
+    // Bytes actually handed to peers, for upload accounting.
+    std::int64_t uploadedBytes() const { return uploaded_.load(); }
     void stop();
 
 private:
@@ -30,6 +32,7 @@ private:
     std::uint16_t port_ = 0;
     std::uintptr_t listener_ = 0;
     std::atomic_bool stopping_{false};
+    std::atomic<std::int64_t> uploaded_{0};
     struct Thread;
     Thread* thread_ = nullptr;
 };

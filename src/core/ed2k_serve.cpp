@@ -184,6 +184,7 @@ void Ed2kPeerServer::handleClient(std::uintptr_t clientValue)
         appendUint64(packet, partStart);
         appendUint64(packet, partEnd);
         std::uint64_t offset = partStart;
+        std::int64_t fileBytes = 0;
         std::vector<char> block(10240);
         while (offset <= partEnd) {
             const auto chunk = (std::min)(static_cast<std::uint64_t>(block.size()),
@@ -197,8 +198,10 @@ void Ed2kPeerServer::handleClient(std::uintptr_t clientValue)
                 reinterpret_cast<const unsigned char*>(block.data()),
                 reinterpret_cast<const unsigned char*>(block.data()) + chunk);
             offset += chunk;
+            fileBytes += static_cast<std::int64_t>(chunk);
         }
         if (!sendAll(client, packet)) return;
+        uploaded_ += fileBytes;
         partStart = partEnd + 1;
     }
 }

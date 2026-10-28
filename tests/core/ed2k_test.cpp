@@ -453,6 +453,27 @@ void twoLiteFetchPeers(const std::filesystem::path& root)
     server.stop();
     check(result.ok, ("download from our own seeder failed: " + result.error).c_str());
     check(readFile(root / "downloaded.bin") == payload, "the bytes match the seeded file");
+    checkEqual(server.uploadedBytes(), static_cast<long long>(payload.size()),
+        "the seeder counted exactly the bytes it uploaded");
+    // A request for a different file must be refused and upload nothing.
+    Ed2kPeerRequest foreign;
+    foreign.host = "127.0.0.1";
+    foreign.port = server.port();
+    foreign.fileHash = "ffffffffffffffffffffffffffffffff";
+    foreign.fileSize = static_cast<std::int64_t>(payload.size());
+    foreign.partPath = (root / "foreign.bin.part").string();
+    foreign.timeoutMillis = 3000;
+    const std::atomic_bool stopped{false};
+    const auto refused = downloadFromEd2kPeer(foreign, stopped);
+    check(!refused.ok, "the seeder does not serve a file it was not given");
+    checkEqual(server.uploadedBytes(), static_cast<long long>(payload.size()),
+        "a refused request uploads nothing");
+    // Stopping the share closes the port: nothing is served afterwards.
+    server.stop();
+    Ed2kPeerRequest afterStop = foreign;
+    afterStop.timeoutMillis = 2000;
+    const auto gone = downloadFromEd2kPeer(afterStop, stopped);
+    check(!gone.ok, "a stopped seeder refuses connections");
 }
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
