@@ -348,6 +348,10 @@ struct TorrentDetailsState {
     std::wstring peers;
     std::wstring protocol;
     std::wstring seeds;
+    std::wstring uploaded;
+    int seedMode = 0;
+    int seedRatioMilli = 1000;
+    int seedMinutes = 30;
     std::vector<TorrentFileInfo> files;
     std::vector<int> priorities;
     std::vector<std::string> trackers;
@@ -382,7 +386,9 @@ struct TabPage {
 
 const TabPage torrentTabPages[] = {
     {0, {IDC_TD_NAME, IDC_TD_HASH, IDC_TD_STATE, IDC_TD_SIZE, IDC_TD_PATH, IDC_TD_PRIVATE}},
-    {1, {IDC_TD_DONE, IDC_TD_PROGRESS, IDC_TD_RATE, IDC_TD_UP, IDC_TD_LEFT}},
+    {1, {IDC_TD_DONE, IDC_TD_PROGRESS, IDC_TD_RATE, IDC_TD_UP, IDC_TD_LEFT, IDC_TD_UPLOADED,
+        IDC_TD_SEED_STOP, IDC_TD_SEED_RATIO, IDC_TD_RATIO_EDIT, IDC_TD_SEED_TIME,
+        IDC_TD_MINUTES_EDIT}},
     {2, {IDC_TD_PEERS, IDC_TD_PROTO, IDC_TD_SEEDS, IDC_TD_NOTE}},
     {3, {IDC_TD_FILES, IDC_TD_SKIP, IDC_TD_NORMAL, IDC_TD_HIGH}},
     {4, {IDC_TD_TRACKERS, IDC_TD_TRACKER, IDC_TD_ADD, IDC_TD_REMOVE}},
@@ -424,6 +430,12 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
         SetDlgItemTextW(dialog, IDC_TD_PEERS, state->peers.c_str());
         SetDlgItemTextW(dialog, IDC_TD_PROTO, state->protocol.c_str());
         SetDlgItemTextW(dialog, IDC_TD_SEEDS, state->seeds.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_UPLOADED, state->uploaded.c_str());
+        CheckRadioButton(dialog, IDC_TD_SEED_STOP, IDC_TD_SEED_TIME,
+            state->seedMode == 1 ? IDC_TD_SEED_RATIO
+                                 : (state->seedMode == 2 ? IDC_TD_SEED_TIME : IDC_TD_SEED_STOP));
+        SetDlgItemInt(dialog, IDC_TD_RATIO_EDIT, static_cast<UINT>(state->seedRatioMilli), FALSE);
+        SetDlgItemInt(dialog, IDC_TD_MINUTES_EDIT, static_cast<UINT>(state->seedMinutes), FALSE);
 
         const HWND tabs = GetDlgItem(dialog, IDC_TD_TABS);
         const wchar_t* captions[torrentTabCount] = {L"常规", L"传输", L"连接", L"文件", L"追踪器"};
@@ -545,6 +557,13 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
             return TRUE;
         }
         if (id == IDC_TD_APPLY) {
+            BOOL translated = FALSE;
+            state->seedMode = IsDlgButtonChecked(dialog, IDC_TD_SEED_RATIO) ? 1
+                : (IsDlgButtonChecked(dialog, IDC_TD_SEED_TIME) ? 2 : 0);
+            const UINT ratio = GetDlgItemInt(dialog, IDC_TD_RATIO_EDIT, &translated, FALSE);
+            if (translated) state->seedRatioMilli = static_cast<int>(ratio);
+            const UINT minutes = GetDlgItemInt(dialog, IDC_TD_MINUTES_EDIT, &translated, FALSE);
+            if (translated) state->seedMinutes = static_cast<int>(minutes);
             if (state->apply) state->apply(*state);
             state->dirty = false;
             EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), FALSE);
@@ -2185,6 +2204,10 @@ void MainWindow::showProperties()
         state.peers = row->connections.empty() ? L"——" : toWide(row->connections);
         state.protocol = toWide(row->protocol);
         state.seeds = L"——";
+        state.uploaded = toWide(formatSize(row->uploadedBytes));
+        state.seedMode = row->seedMode;
+        state.seedRatioMilli = row->seedRatioMilli;
+        state.seedMinutes = row->seedMinutes;
         state.files = row->torrentFiles;
         state.priorities = row->filePriorities;
         state.priorities.resize(state.files.size(), 1);
@@ -2200,7 +2223,8 @@ void MainWindow::showProperties()
                 files.push_back(static_cast<int>(index));
                 priorities.push_back(priority);
             }
-            worker_->postUpdateTorrent(taskId, files, priorities, edited.trackers);
+            worker_->postUpdateTorrent(taskId, files, priorities, edited.trackers,
+                edited.seedMode, edited.seedRatioMilli, edited.seedMinutes);
             setNotice("已应用种子设置：" + std::to_string(files.size()) + " 个文件");
         };
         DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_TORRENT_DETAILS), hwnd_,

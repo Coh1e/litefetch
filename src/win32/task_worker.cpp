@@ -110,7 +110,8 @@ void TaskWorker::postPause(std::string taskId)
 }
 
 void TaskWorker::postUpdateTorrent(std::string taskId, std::vector<int> files,
-    std::vector<int> priorities, std::vector<std::string> trackers)
+    std::vector<int> priorities, std::vector<std::string> trackers, int seedMode,
+    int seedRatioMilli, int seedMinutes)
 {
     Command command;
     command.type = CommandType::UpdateTorrent;
@@ -118,6 +119,9 @@ void TaskWorker::postUpdateTorrent(std::string taskId, std::vector<int> files,
     command.files = std::move(files);
     command.priorities = std::move(priorities);
     command.trackers = std::move(trackers);
+    command.seedMode = seedMode;
+    command.seedRatioMilli = seedRatioMilli;
+    command.seedMinutes = seedMinutes;
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -337,6 +341,9 @@ void TaskWorker::execute(const Command& command)
             update.files = command.files;
             update.filePriorities = command.priorities;
             update.trackers = command.trackers;
+            update.seedMode = command.seedMode;
+            update.seedRatioMilli = command.seedRatioMilli;
+            update.seedMinutes = command.seedMinutes;
             const auto result = service_->execute(update);
             if (!result.ok)
                 publishError("属性应用失败: " + (result.error.empty() ? "unknown error" : result.error));

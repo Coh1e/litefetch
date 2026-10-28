@@ -43,6 +43,10 @@ struct TaskRow {
     std::vector<int> filePriorities;
     std::vector<std::string> trackers;
     bool torrentPrivate = false;
+    std::int64_t uploadedBytes = 0;
+    int seedMode = 0;
+    int seedRatioMilli = 1000;
+    int seedMinutes = 30;
     std::int64_t received = 0;
     std::int64_t total = -1;
     double speedBytesPerSecond = 0.0;

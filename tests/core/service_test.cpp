@@ -464,6 +464,53 @@ void torrentSelectionPersists(const std::filesystem::path& root)
     }
 }
 
+void torrentPauseUsesSharedStop(const std::filesystem::path& root)
+{
+    const auto database = root / "torrent-pause.db";
+    const auto savePath = root / "torrent-pause-data";
+    std::filesystem::create_directories(savePath);
+    TaskRepository repository(database);
+
+    // A stub engine that blocks like a real transfer until it is cancelled, so
+    // the shared pause path can be observed without a swarm.
+    std::atomic_bool entered{false};
+    auto stub = [&](const BtDownloadRequest&, const std::atomic_bool& cancelled,
+                    const std::function<void(const BtProgressInfo&)>&) {
+        entered.store(true);
+        for (int step = 0; step < 500 && !cancelled.load(); ++step)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        BtDownloadResult result;
+        result.cancelled = cancelled.load();
+        result.ok = !result.cancelled;
+        result.received = 1024;
+        return result;
+    };
+    TaskService service(repository, transferHttp, {}, stub);
+
+    AddTaskCommand add;
+    add.source = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98";
+    add.destination = savePath.string();
+    const auto added = service.execute(add);
+    require(added.ok, "torrent add failed: " + added.error);
+
+    std::promise<CommandResult> first;
+    auto firstResult = first.get_future();
+    std::jthread worker([&] { first.set_value(service.execute(StartTaskCommand{added.task.id})); });
+    require(waitFor([&] { return entered.load(); }, std::chrono::seconds(10)),
+        "the torrent engine was never entered");
+
+    const auto paused = service.execute(PauseTaskCommand{added.task.id});
+    require(paused.ok, "torrent pause request failed: " + paused.error);
+    const auto firstRun = firstResult.get();
+    worker.join();
+    require(firstRun.ok, "paused torrent state was not committed: " + firstRun.error);
+    require(firstRun.task.state == TaskState::Paused, "torrent pause did not produce paused state");
+
+    // The same stop path covers the second run: without a cancel it completes.
+    const auto resumed = service.execute(StartTaskCommand{added.task.id});
+    require(resumed.ok, "torrent resume failed: " + resumed.error);
+    require(resumed.task.state == TaskState::Completed, "torrent resume did not complete");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -773,6 +820,7 @@ int body()
     ftpTransfers(root.path());
     ftpResumeAndRestart(root.path());
     torrentSelectionPersists(root.path());
+    torrentPauseUsesSharedStop(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

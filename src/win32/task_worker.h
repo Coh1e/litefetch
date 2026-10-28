@@ -80,7 +80,8 @@ public:
         std::string username = {}, std::string password = {}, bool forceVerify = false);
     void postPause(std::string taskId);
     void postUpdateTorrent(std::string taskId, std::vector<int> files, std::vector<int> priorities,
-        std::vector<std::string> trackers);
+        std::vector<std::string> trackers, int seedMode = 0, int seedRatioMilli = 1000,
+        int seedMinutes = 30);
     void postCancel(std::string taskId);
     void postDelete(std::string taskId);
     void postRefresh();
@@ -119,6 +120,9 @@ private:
         std::vector<int> priorities;
         std::vector<std::string> trackers;
         bool torrentPrivate = false;
+        int seedMode = 0;
+        int seedRatioMilli = 1000;
+        int seedMinutes = 30;
     };
     struct StartJob {
         std::string taskId;
