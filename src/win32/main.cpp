@@ -6,12 +6,17 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
+
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
 
 namespace {
 std::filesystem::path failureLogPath;
@@ -104,6 +109,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     const auto options = parseArguments(arguments);
     failureLogPath = options.window.databasePath.parent_path() / L"ui-error.log";
     std::set_terminate(logAndAbort);
+#ifdef _DEBUG
+    // Route CRT assertions and heap diagnostics into the same file: an abort
+    // without a C++ exception has no other visible reason in a GUI process.
+    if (FILE* report = _wfopen(failureLogPath.c_str(), L"a")) {
+        for (const int mode : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+            _CrtSetReportMode(mode, _CRTDBG_MODE_FILE);
+            _CrtSetReportFile(mode, report);
+        }
+    }
+    _CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) | _CRTDBG_ALLOC_MEM_DF | _CRTDBG_DELAY_FREE_MEM_DF);
+#endif
     if (!options.error.empty()) {
         MessageBoxW(nullptr, litefetch::utf16FromUtf8(options.error).c_str(), L"lite fetch",
             MB_OK | MB_ICONERROR);

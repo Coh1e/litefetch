@@ -117,21 +117,46 @@ endif()
 
 # Win32 product window. It uses only Win32/Comctl32 resources (menu, toolbar,
 # ListView, status bar) and the Qt-free core; system chrome is drawn by Windows.
+#
+# The window lives in a library so an in-process test can create the real
+# window and drive it without launching a second process: cross-process message
+# scripts race against dialogs and timers, while a same-thread harness calls the
+# same handlers synchronously.
 if(WIN32)
     enable_language(RC)
-    add_executable(litefetch-win32 WIN32
-        src/win32/main.cpp
+    add_library(litefetch-win32-ui STATIC
         src/win32/main_window.cpp src/win32/main_window.h
         src/win32/new_download_dialog.cpp src/win32/new_download_dialog.h
         src/win32/column_dialog.cpp src/win32/column_dialog.h
-        src/win32/batch_dialog.cpp src/win32/batch_dialog.h
+        src/win32/batch_dialog.cpp src/win32/batch_dialog.h)
+    target_compile_definitions(litefetch-win32-ui PUBLIC UNICODE _UNICODE)
+    target_link_libraries(litefetch-win32-ui PUBLIC litefetch-ui-model litefetch-win32-runtime
+        PRIVATE comctl32 shell32 ole32 shlwapi)
+    if(MSVC)
+        target_compile_options(litefetch-win32-ui PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_executable(litefetch-win32 WIN32
+        src/win32/main.cpp
         src/win32/app.manifest
         src/win32/win32.rc)
-    target_compile_definitions(litefetch-win32 PRIVATE UNICODE _UNICODE)
-    target_link_libraries(litefetch-win32 PRIVATE litefetch-ui-model litefetch-win32-runtime
+    target_link_libraries(litefetch-win32 PRIVATE litefetch-win32-ui
         comctl32 shell32 ole32 shlwapi)
     if(MSVC)
         target_compile_options(litefetch-win32 PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    if(BUILD_TESTING)
+        # In-process window harness: creates the real main window on the test
+        # thread and sends the same WM_COMMANDs a user would, so checks do not
+        # race a second process, its dialogs or its timers.
+        add_executable(ui-window-tests tests/win32/window_test.cpp src/win32/win32.rc)
+        target_include_directories(ui-window-tests PRIVATE tests/core)
+        target_link_libraries(ui-window-tests PRIVATE litefetch-win32-ui)
+        add_test(NAME ui-window COMMAND ui-window-tests)
+        set_tests_properties(ui-window PROPERTIES TIMEOUT 90
+            ENVIRONMENT "LITEFETCH_TEST_TEMP=${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
+        if(MSVC)
+            target_compile_options(ui-window-tests PRIVATE /W4 /permissive- /utf-8)
+        endif()
     endif()
 endif()
 
