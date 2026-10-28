@@ -79,7 +79,7 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
 }
 
 void TaskWorker::postStart(std::string taskId, bool restartFromZero, std::string username,
-    std::string password)
+    std::string password, bool forceVerify)
 {
     Command command;
     command.type = CommandType::Start;
@@ -87,6 +87,7 @@ void TaskWorker::postStart(std::string taskId, bool restartFromZero, std::string
     command.restartFromZero = restartFromZero;
     command.username = std::move(username);
     command.password = std::move(password);
+    command.forceVerify = forceVerify;
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -376,7 +377,7 @@ void TaskWorker::execute(const Command& command)
 }
 
 void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
-    std::string username, std::string password)
+    std::string username, std::string password, bool forceVerify)
 {
     if (!service_) return;
     for (const auto& job : jobs_) {
@@ -387,11 +388,16 @@ void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
     job.taskId = taskId;
     job.finished = finished;
     try {
-        job.thread = std::thread([this, taskId, restartFromZero, username, password, finished] {
+        job.thread = std::thread([this, taskId, restartFromZero, username, password, forceVerify, finished] {
             SetThreadDescription(GetCurrentThread(), L"litefetch-transfer");
             try {
-                const auto result = service_->execute(StartTaskCommand{taskId, restartFromZero,
-                    username, password});
+                StartTaskCommand start;
+                start.taskId = taskId;
+                start.restartFromZero = restartFromZero;
+                start.username = username;
+                start.password = password;
+                start.forceVerify = forceVerify;
+                const auto result = service_->execute(start);
                 if (!result.ok && !result.error.empty()) publishError("任务失败: " + result.error);
             } catch (const std::exception& error) {
                 publishError(std::string("任务失败: ") + error.what());

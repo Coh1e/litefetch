@@ -77,7 +77,7 @@ public:
         std::vector<int> files = {}, std::string identity = {},
         std::vector<TorrentFileInfo> torrentFiles = {}, bool torrentPrivate = false);
     void postStart(std::string taskId, bool restartFromZero = false,
-        std::string username = {}, std::string password = {});
+        std::string username = {}, std::string password = {}, bool forceVerify = false);
     void postPause(std::string taskId);
     void postUpdateTorrent(std::string taskId, std::vector<int> files, std::vector<int> priorities,
         std::vector<std::string> trackers);
@@ -112,6 +112,7 @@ private:
         std::string password;
         std::uint64_t batchId = 0;
         int line = 0;
+        bool forceVerify = false;
         std::vector<int> files;
         std::string identity;
         std::vector<TorrentFileInfo> torrentFiles;
@@ -128,7 +129,7 @@ private:
     void controlLoop();
     void execute(const Command& command);
     void launchStart(const std::string& taskId, bool restartFromZero = false,
-        std::string username = {}, std::string password = {});
+        std::string username = {}, std::string password = {}, bool forceVerify = false);
     void reapFinished();
     void reload();
     void cancelAll();

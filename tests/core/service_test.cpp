@@ -429,11 +429,17 @@ void torrentSelectionPersists(const std::filesystem::path& root)
         update.files = {0, 1};
         update.filePriorities = {2, 0};
         update.trackers = {"udp://tracker.example:80"};
+        update.seedMode = 1;
+        update.seedRatioMilli = 1500;
+        update.seedMinutes = 45;
         const auto edited = service.execute(update);
         require(edited.ok, "torrent option update failed: " + edited.error);
         require(edited.task.files == std::vector<int>({0, 1}), "files were not replaced");
         require(edited.task.filePriorities == std::vector<int>({2, 0}), "priorities were not replaced");
         require(edited.task.trackers.size() == 1, "tracker was not stored");
+        require(edited.task.seedMode == 1 && edited.task.seedRatioMilli == 1500
+                && edited.task.seedMinutes == 45,
+            "seed policy was not stored");
 
         // Without a BitTorrent engine the start is refused with a clear reason
         // instead of pretending to download.
@@ -451,6 +457,9 @@ void torrentSelectionPersists(const std::filesystem::path& root)
         require(loaded->filePriorities == std::vector<int>({2, 0}),
             "priorities did not survive reopen");
         require(loaded->trackers.size() == 1, "trackers did not survive reopen");
+        require(loaded->seedMode == 1 && loaded->seedRatioMilli == 1500
+                && loaded->seedMinutes == 45,
+            "seed policy did not survive reopen");
         require(loaded->destination == savePath.string(), "save path did not survive reopen");
     }
 }

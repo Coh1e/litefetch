@@ -128,6 +128,7 @@ private:
     void handleTorrentMetadata(BtMetadataResult metadata, const std::string& source);
 
     void startSelected();
+    void verifySelected();
     void pauseSelected();
     void stopSelected();
     void deleteSelected();

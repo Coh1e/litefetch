@@ -986,14 +986,14 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_TASK_DELETE: deleteSelected(); return 0;
         case ID_TASK_OPEN_FILE: openFileSelected(); return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
+        case ID_TASK_VERIFY: verifySelected(); return 0;
         case ID_TASK_REDOWNLOAD:
             setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
             return 0;
         case ID_TASK_DELETE_FILES:
             setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除文件。");
             return 0;
-        case ID_TASK_PROPERTIES:
-            showProperties();
+        case ID_TASK_PROPERTIES:            showProperties();
             return 0;
         case ID_TOOLS_OPTIONS:
             setNotice("选项界面将在后续版本提供。");
@@ -1593,7 +1593,7 @@ void MainWindow::updateActions()
     };
     enableMenu(ID_FILE_NEW, interactive);
     enableMenu(ID_FILE_BATCH, interactive);
-    enableMenu(ID_FILE_OPEN_TORRENT, false);
+    enableMenu(ID_FILE_OPEN_TORRENT, interactive);
     enableMenu(ID_EDIT_SELECT_ALL, interactive);
     enableMenu(ID_EDIT_FIND, interactive);
     enableMenu(ID_EDIT_PASTE, interactive);
@@ -1616,6 +1616,11 @@ void MainWindow::updateActions()
     enableMenu(ID_TASK_OPEN_FILE, interactive && actions.openFile);
     enableMenu(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
     enableMenu(ID_TASK_PROPERTIES, interactive && actions.selectedCount == 1);
+    {
+        const auto row = rowForId(focusedId());
+        enableMenu(ID_TASK_VERIFY,
+            interactive && actions.selectedCount == 1 && row && !row->torrentFiles.empty());
+    }
     enableMenu(ID_TOOLS_OPTIONS, false);
     enableButton(ID_FILE_NEW, interactive);
     enableButton(ID_TASK_START, interactive && actions.start);
@@ -2085,6 +2090,20 @@ void MainWindow::handleOutcomes(const WorkerSnapshot& snapshot)
         }
     }
     lastOutcomeSequence_ = snapshot.outcomeSequence;
+}
+
+void MainWindow::verifySelected()
+{
+    if (!worker_ || isClosing()) return;
+    const auto row = rowForId(focusedId());
+    if (!row || row->torrentFiles.empty()) {
+        setNotice("重新校验只适用于种子任务");
+        return;
+    }
+    // A full recheck reads every piece from disk and fetches again what does not
+    // match, so damaged files are repaired instead of reported as complete.
+    worker_->postStart(row->id, false, {}, {}, true);
+    setNotice("已开始重新校验：" + row->name);
 }
 
 void MainWindow::startSelected()

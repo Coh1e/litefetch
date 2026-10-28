@@ -42,6 +42,12 @@ struct TaskSnapshot {
     // BitTorrent only: the file list and privacy flag from the metadata.
     std::vector<TorrentFileInfo> torrentFiles;
     bool torrentPrivate = false;
+    // BitTorrent only: bytes uploaded to peers, summed across runs, and the
+    // seed budget (mode 0 stop, 1 ratio in thousandths, 2 minutes).
+    std::int64_t uploaded = 0;
+    int seedMode = 0;
+    int seedRatioMilli = 1000;
+    int seedMinutes = 30;
     // Live peer count reported by the engine; never persisted.
     int peers = 0;
     std::int64_t createdAt = 0;
@@ -77,6 +83,9 @@ struct StartTaskCommand {
     // the "remember" feature is a later ticket.
     std::string username;
     std::string password;
+    // Recheck every piece instead of trusting what is on disk (the manual
+    // "verify" action).
+    bool forceVerify = false;
 };
 // Stops a running transfer but keeps the partial data and marks the task
 // paused; Start resumes from the stored offset.
@@ -99,6 +108,9 @@ struct UpdateTorrentOptionsCommand {
     std::vector<std::string> trackers;
     std::vector<TorrentFileInfo> torrentFiles;
     bool torrentPrivate = false;
+    int seedMode = 0;
+    int seedRatioMilli = 1000;
+    int seedMinutes = 30;
 };
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,

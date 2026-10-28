@@ -252,6 +252,9 @@ CommandResult TaskService::start(const StartTaskCommand& command)
                 request.choices.push_back(BtFileChoice{task.files[position], priority});
             }
             request.trackers = task.trackers;
+            request.forceVerify = command.forceVerify;
+            request.seedPolicy = BtSeedPolicy{task.seedMode,
+                task.seedRatioMilli / 1000.0, task.seedMinutes};
             // Fast resume: the engine keeps its piece map next to the data so a
             // restart continues instead of rechecking every piece.
             request.resumePath = (std::filesystem::path(task.destination)
@@ -266,6 +269,9 @@ CommandResult TaskService::start(const StartTaskCommand& command)
                         progress(TransferProgressInfo{update.received, update.total, update.peers});
                     });
                 transferResult.received = result.received;
+                // Uploaded bytes accumulate across runs so the properties page
+                // can report a total that survives restarts.
+                task.uploaded += result.uploaded;
                 transferResult.total = -1;
                 if (result.ok) {
                     transferResult.status = TransferStatus::Completed;
@@ -452,6 +458,9 @@ CommandResult TaskService::updateTorrent(const UpdateTorrentOptionsCommand& comm
     updated.files = command.files;
     updated.filePriorities = command.filePriorities;
     updated.trackers = command.trackers;
+    updated.seedMode = command.seedMode;
+    updated.seedRatioMilli = command.seedRatioMilli;
+    updated.seedMinutes = command.seedMinutes;
     updated.updatedAt = nowMillis();
     try {
         repository_.update(updated);
