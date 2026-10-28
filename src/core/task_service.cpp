@@ -55,9 +55,11 @@ CommandResult storageFailure(const StorageError& error)
 } // namespace
 
 TaskService::TaskService(TaskRepository& repository, TransferFunction transfer,
-    ProgressObserver observer, BtTransfer btTransfer, Ed2kTransfer ed2kTransfer)
+    ProgressObserver observer, BtTransfer btTransfer, Ed2kTransfer ed2kTransfer,
+    FreeSpaceFn freeSpace)
     : repository_(repository), transfer_(std::move(transfer)), btTransfer_(std::move(btTransfer)),
-      ed2kTransfer_(std::move(ed2kTransfer)), observer_(std::move(observer))
+      ed2kTransfer_(std::move(ed2kTransfer)), freeSpace_(std::move(freeSpace)),
+      observer_(std::move(observer))
 {
     if (!transfer_) transfer_ = transferHttp;
 }
@@ -243,9 +245,28 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     };
 
     TransferResult transferResult;
-    const bool ed2k = task.source.rfind("ed2k://", 0) == 0;
-    const bool torrent = torrentSource(task.source);
-    if (ed2k) {
+    // A known size is checked against the volume before any bytes move; an
+    // unknown size (no successful probe yet) cannot be checked and is allowed.
+    bool outOfSpace = false;
+    if (freeSpace_ && task.total > 0) {
+        const auto needed = task.total - task.received;
+        if (needed > 0) {
+            const auto parent = std::filesystem::path(pathFromUtf8(task.destination)).parent_path();
+            const auto available = freeSpace_(parent);
+            if (available >= 0 && available < needed) {
+                outOfSpace = true;
+                transferResult.status = TransferStatus::Failed;
+                transferResult.error = TransferError::Internal;
+                transferResult.message = "not enough free space: need " + std::to_string(needed)
+                    + " bytes, " + std::to_string(available) + " available";
+            }
+        }
+    }
+    const bool ed2k = !outOfSpace && task.source.rfind("ed2k://", 0) == 0;
+    const bool torrent = !outOfSpace && torrentSource(task.source);
+    if (outOfSpace) {
+        // The failure was recorded above; nothing is transferred.
+    } else if (ed2k) {
         if (!ed2kTransfer_) {
             transferResult.status = TransferStatus::Failed;
             transferResult.error = TransferError::Internal;

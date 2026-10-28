@@ -41,7 +41,13 @@ bool TaskWorker::start(std::string& error)
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total, progress.peers);
             },
-            btTransfer_, ed2kTransfer_);
+            btTransfer_, ed2kTransfer_,
+            [](const std::filesystem::path& path) -> std::int64_t {
+                // Free bytes on the volume that holds the destination.
+                ULARGE_INTEGER available{};
+                if (!GetDiskFreeSpaceExW(path.c_str(), &available, nullptr, nullptr)) return -1;
+                return static_cast<std::int64_t>(available.QuadPart);
+            });
         // A running row can only come from a previous process that died; a
         // restart shows it as paused instead of resuming silently.
         service_->pauseInterrupted();

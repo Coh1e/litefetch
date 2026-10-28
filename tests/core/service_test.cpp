@@ -654,6 +654,31 @@ void deleteTaskWithFiles(const std::filesystem::path& root)
     }
     std::filesystem::remove(blockedDestination);
 }
+void refusesWhenTheVolumeIsFull(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "space.db");
+    // Report almost no space on the volume.
+    TaskService service(repository, transferHttp, {}, {}, {},
+        [](const std::filesystem::path&) { return std::int64_t{16}; });
+
+    const auto destination = root / "space.bin";
+    const auto added = service.execute(AddTaskCommand{"http://127.0.0.1:1/space.bin",
+        destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    // Pretend the size is known: a task that knows it needs more than the volume
+    // has must refuse before any transfer.
+    auto task = repository.find(added.task.id);
+    require(task.has_value(), "the task is stored");
+    task->total = 1024 * 1024;
+    repository.update(*task);
+
+    const auto started = service.execute(StartTaskCommand{added.task.id});
+    require(started.ok, "start was not committed: " + started.error);
+    require(started.task.state == TaskState::Failed, "a full volume does not start a transfer");
+    require(started.task.error.find("free space") != std::string::npos,
+        "the refusal explains the space problem: " + started.task.error);
+    require(!std::filesystem::exists(destination), "nothing was written");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -967,6 +992,7 @@ int body()
     ed2kTaskRuns(root.path());
     ed2kPauseUsesSharedStop(root.path());
     deleteTaskWithFiles(root.path());
+    refusesWhenTheVolumeIsFull(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

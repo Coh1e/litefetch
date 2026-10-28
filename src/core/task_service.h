@@ -36,9 +36,12 @@ public:
     using Ed2kTransfer = std::function<Ed2kTaskResult(const Ed2kTaskRequest&,
         const std::atomic_bool&, const std::function<void(std::int64_t, std::int64_t)>&)>;
 
+    // Free space on the volume that holds a path, or -1 when it cannot be read.
+    using FreeSpaceFn = std::function<std::int64_t(const std::filesystem::path&)>;
+
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
         ProgressObserver observer = {}, BtTransfer btTransfer = {},
-        Ed2kTransfer ed2kTransfer = {});
+        Ed2kTransfer ed2kTransfer = {}, FreeSpaceFn freeSpace = {});
 
     // Storage/read failures during a command are returned as ok=false. Query
     // methods are not commands and throw StorageError if the read fails.
@@ -73,6 +76,7 @@ private:
     TransferFunction transfer_;
     BtTransfer btTransfer_;
     Ed2kTransfer ed2kTransfer_;
+    FreeSpaceFn freeSpace_;
     ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<ActiveTransfer>, std::less<>> active_;
