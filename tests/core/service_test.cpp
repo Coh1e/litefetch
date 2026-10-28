@@ -530,6 +530,42 @@ void torrentPauseUsesSharedStop(const std::filesystem::path& root)
     require(stopped.ok, "stopped torrent state was not committed: " + stopped.error);
     require(stopped.task.state == TaskState::Cancelled, "torrent stop did not produce the cancelled state");
 }
+void ed2kTaskRuns(const std::filesystem::path& root)
+{
+    const auto destination = root / "ed2k-out.bin";
+    TaskRepository repository(root / "ed2k.db");
+    std::atomic_bool entered{false};
+    std::string seenLink;
+    auto stub = [&](const Ed2kTaskRequest& request, const std::atomic_bool& cancelled,
+                    const std::function<void(std::int64_t, std::int64_t)>& progress) {
+        seenLink = request.link;
+        entered.store(true);
+        if (progress) progress(1024, 1024);
+        Ed2kTaskResult result;
+        result.ok = !cancelled.load();
+        result.received = 1024;
+        return result;
+    };
+    TaskService service(repository, transferHttp, {}, {}, stub);
+
+    AddTaskCommand add;
+    add.source = "ed2k://|file|ed2k.bin|1024|0123456789abcdef0123456789abcdef|/";
+    add.destination = destination.string();
+    const auto added = service.execute(add);
+    require(added.ok, "ed2k add failed: " + added.error);
+
+    const auto started = service.execute(StartTaskCommand{added.task.id});
+    require(started.ok, "ed2k start failed: " + started.error);
+    require(started.task.state == TaskState::Completed, "ed2k task did not complete");
+    checkEqual(seenLink, add.source, "the engine saw the link");
+    require(!std::filesystem::exists(destination), "the stub wrote nothing, so no file is expected");
+
+    AddTaskCommand bad;
+    bad.source = "ed2k://|server|1.2.3.4|4661|/";
+    bad.destination = (root / "bad.bin").string();
+    const auto refused = service.execute(bad);
+    require(!refused.ok, "a server link must not become a task");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -840,6 +876,7 @@ int body()
     ftpResumeAndRestart(root.path());
     torrentSelectionPersists(root.path());
     torrentPauseUsesSharedStop(root.path());
+    ed2kTaskRuns(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

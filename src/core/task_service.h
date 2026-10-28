@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bt_engine.h"
+#include "ed2k_task.h"
 #include "http_engine.h"
 #include "task.h"
 #include "task_store.h"
@@ -31,8 +32,13 @@ public:
     using BtTransfer = std::function<BtDownloadResult(const BtDownloadRequest&, const std::atomic_bool&,
         const std::function<void(const BtProgressInfo&)>&)>;
 
+    // ed2k transfers go through their own engine for the same reason as BT.
+    using Ed2kTransfer = std::function<Ed2kTaskResult(const Ed2kTaskRequest&,
+        const std::atomic_bool&, const std::function<void(std::int64_t, std::int64_t)>&)>;
+
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
-        ProgressObserver observer = {}, BtTransfer btTransfer = {});
+        ProgressObserver observer = {}, BtTransfer btTransfer = {},
+        Ed2kTransfer ed2kTransfer = {});
 
     // Storage/read failures during a command are returned as ok=false. Query
     // methods are not commands and throw StorageError if the read fails.
@@ -65,6 +71,7 @@ private:
     TaskRepository& repository_;
     TransferFunction transfer_;
     BtTransfer btTransfer_;
+    Ed2kTransfer ed2kTransfer_;
     ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<ActiveTransfer>, std::less<>> active_;

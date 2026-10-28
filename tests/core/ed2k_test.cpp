@@ -7,6 +7,7 @@
 #include <ws2tcpip.h>
 
 #include "ed2k_client.h"
+#include "ed2k_task.h"
 #include "ed2k_transfer.h"
 #include "ed2k_link.h"
 #include "test_support.h"
@@ -292,6 +293,60 @@ void peerResume(const std::filesystem::path& root)
         checkEqual(static_cast<long long>(again.missingParts), 0, "nothing is missing after resume");
     }
 }
+void taskPipeline(const std::filesystem::path& root)
+{
+    const auto payload = litefetch::test::payload(20000);
+    const auto expectedPath = root / "task-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto hash = ed2kFileHash(expectedPath.string());
+    check(!hash.empty(), "task fixture hash");
+
+    // The link names the file; the peer is explicit because the scripted server
+    // cannot hand out a reachable address.
+    const std::string link = "ed2k://|file|task.bin|" + std::to_string(payload.size())
+        + "|" + hash + "|/";
+
+    {
+        FakeEd2kPeer peer(payload);
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = (root / "task-out.bin").string();
+        request.peer = {"127.0.0.1", peer.port()};
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(result.ok, ("ed2k task failed: " + result.error).c_str());
+        checkEqual(result.received, static_cast<long long>(payload.size()), "task byte count");
+        check(readFile(root / "task-out.bin") == payload, "the task file matches the payload");
+        check(!std::filesystem::exists(root / "task-out.bin.part"), "the part file was renamed");
+    }
+    {
+        // A server that answers without sources is reported as "no sources",
+        // which is not the same as a server failure.
+        FakeEd2kServer server(ServerBehaviour::zeroSources);
+        Ed2kTaskRequest request;
+        request.link = link;
+        request.destination = (root / "task-none.bin").string();
+        request.servers = {{"127.0.0.1", server.port()}};
+        request.timeoutMillis = 5000;
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(!result.ok, "a file without sources is not a success");
+        check(result.noSources, "zero sources is distinguished from a server failure");
+        check(result.error.find("no sources") != std::string::npos,
+            ("the reason is not explained: " + result.error).c_str());
+    }
+    {
+        Ed2kTaskRequest request;
+        request.link = "ed2k://|file|bad.bin|0|zzz|/";
+        request.destination = (root / "task-bad.bin").string();
+        const std::atomic_bool cancelled{false};
+        const auto result = downloadEd2kTask(request, cancelled);
+        check(!result.ok, "an invalid link is rejected before any network use");
+        check(result.error.find("link") != std::string::npos,
+            ("the link error is not explained: " + result.error).c_str());
+    }
+}
 void peerTransfer(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(30000);
@@ -413,6 +468,7 @@ int main()
         md4Vectors();
         peerTransfer(root.path());
         peerResume(root.path());
+        taskPipeline(root.path());
         sourceQuery();
         return 0;
     });

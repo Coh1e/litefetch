@@ -55,9 +55,9 @@ CommandResult storageFailure(const StorageError& error)
 } // namespace
 
 TaskService::TaskService(TaskRepository& repository, TransferFunction transfer,
-    ProgressObserver observer, BtTransfer btTransfer)
+    ProgressObserver observer, BtTransfer btTransfer, Ed2kTransfer ed2kTransfer)
     : repository_(repository), transfer_(std::move(transfer)), btTransfer_(std::move(btTransfer)),
-      observer_(std::move(observer))
+      ed2kTransfer_(std::move(ed2kTransfer)), observer_(std::move(observer))
 {
     if (!transfer_) transfer_ = transferHttp;
 }
@@ -94,8 +94,13 @@ std::vector<TaskSnapshot> TaskService::snapshots()
 CommandResult TaskService::add(const AddTaskCommand& command)
 {
     const bool torrent = torrentSource(command.source);
-    if (!torrent && !httpSource(command.source))
-        return failure("only HTTP(S), FTP and BitTorrent sources are supported by the core boundary");
+    const bool ed2k = command.source.rfind("ed2k://", 0) == 0;
+    if (ed2k) {
+        const auto link = parseEd2kLink(command.source);
+        if (!link.ok) return failure("ed2k link is not usable: " + link.error);
+    }
+    if (!torrent && !ed2k && !httpSource(command.source))
+        return failure("only HTTP(S), FTP, BitTorrent and ed2k sources are supported by the core boundary");
     if (torrent && command.source.rfind("magnet:", 0) != 0
         && !std::filesystem::is_regular_file(pathFromUtf8(command.source)))
         return failure("torrent file does not exist");
@@ -236,8 +241,40 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     };
 
     TransferResult transferResult;
+    const bool ed2k = task.source.rfind("ed2k://", 0) == 0;
     const bool torrent = torrentSource(task.source);
-    if (torrent) {
+    if (ed2k) {
+        if (!ed2kTransfer_) {
+            transferResult.status = TransferStatus::Failed;
+            transferResult.error = TransferError::Internal;
+            transferResult.message = "the ed2k engine is not available in this build";
+        } else {
+            Ed2kTaskRequest request;
+            request.link = task.source;
+            request.destination = std::filesystem::path(pathFromUtf8(task.destination)).string();
+            try {
+                const auto result = ed2kTransfer_(request, *active->cancelled,
+                    [&](std::int64_t received, std::int64_t total) {
+                        progress(TransferProgressInfo{received, total, 0});
+                    });
+                transferResult.received = result.received;
+                transferResult.total = -1;
+                if (result.ok) {
+                    transferResult.status = TransferStatus::Completed;
+                } else if (result.error == "cancelled") {
+                    transferResult.status = TransferStatus::Cancelled;
+                } else {
+                    transferResult.status = TransferStatus::Failed;
+                    transferResult.error = TransferError::Network;
+                    transferResult.message = result.error;
+                }
+            } catch (const std::exception& error) {
+                transferResult.status = TransferStatus::Failed;
+                transferResult.error = TransferError::Internal;
+                transferResult.message = error.what();
+            }
+        }
+    } else if (torrent) {
         if (!btTransfer_) {
             transferResult.status = TransferStatus::Failed;
             transferResult.error = TransferError::Internal;
