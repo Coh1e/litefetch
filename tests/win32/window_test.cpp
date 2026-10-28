@@ -559,8 +559,52 @@ void runChecks()
 
 } // namespace
 
+namespace {
+// A test that aborts prints nothing, so route the CRT and terminate reports to
+// a file that survives the crash (the per-run temp directory does not).
+std::filesystem::path crashLogPath()
+{
+    const auto root = environmentValue("LITEFETCH_TEST_TEMP");
+    if (root.empty()) return {};
+    return std::filesystem::path(root) / "ui-window-crash.log";
+}
+
+void logCrash(const char* text)
+{
+    const auto path = crashLogPath();
+    if (path.empty()) return;
+    std::ofstream log(path, std::ios::app);
+    log << text << "\n";
+}
+
+void onTerminate()
+{
+    logCrash("terminate: unhandled C++ exception in the test process");
+    std::abort();
+}
+
+void onInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t)
+{
+    logCrash("invalid parameter passed to the CRT");
+    std::abort();
+}
+} // namespace
+
 int main()
 {
+    std::set_terminate(onTerminate);
+    _set_invalid_parameter_handler(onInvalidParameter);
+#ifdef _DEBUG
+    if (const auto path = crashLogPath(); !path.empty()) {
+        if (FILE* report = _wfopen(path.c_str(), L"a")) {
+            for (const int mode : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+                _CrtSetReportMode(mode, _CRTDBG_MODE_FILE);
+                _CrtSetReportFile(mode, report);
+            }
+        }
+    }
+    _CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) | _CRTDBG_ALLOC_MEM_DF | _CRTDBG_DELAY_FREE_MEM_DF);
+#endif
     INITCOMMONCONTROLSEX common{};
     common.dwSize = sizeof(common);
     common.dwICC = ICC_WIN95_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES;
