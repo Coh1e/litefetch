@@ -56,12 +56,13 @@ lt::settings_pack localSettings()
     return pack;
 }
 
-std::vector<char> buildTorrent(const std::filesystem::path& seedDirectory)
+std::vector<char> buildTorrent(const std::filesystem::path& seedDirectory, bool v2Only = false)
 {
     std::vector<lt::create_file_entry> entries;
     entries.push_back(lt::create_file_entry{"data/keep.bin", 64 * 1024});
     entries.push_back(lt::create_file_entry{"data/skip.bin", 32 * 1024});
-    lt::create_torrent creator(std::move(entries), 16 * 1024);
+    lt::create_torrent creator(std::move(entries), 16 * 1024,
+        v2Only ? lt::create_torrent::v2_only : lt::create_torrent::v1_only);
     lt::set_piece_hashes(creator, seedDirectory.string());
     // generate_buf() returns the complete bencoded .torrent document.
     const auto buffer = creator.generate_buf();
