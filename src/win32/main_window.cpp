@@ -335,9 +335,19 @@ INT_PTR CALLBACK torrentFilesDialogProc(HWND dialog, UINT message, WPARAM wParam
 
 struct TorrentDetailsState {
     std::wstring name;
+    std::wstring identity;
     std::wstring state;
     std::wstring size;
+    std::wstring savePath;
+    std::wstring privateText;
+    std::wstring done;
+    std::wstring progress;
+    std::wstring rate;
+    std::wstring uploadRate;
+    std::wstring remaining;
     std::wstring peers;
+    std::wstring protocol;
+    std::wstring seeds;
     std::vector<TorrentFileInfo> files;
     std::vector<int> priorities;
     std::vector<std::string> trackers;
@@ -361,6 +371,35 @@ void refreshTorrentFileList(HWND list, const TorrentDetailsState& state)
     }
 }
 
+constexpr int torrentTabCount = 5;
+
+// Which controls belong to which tab; every page shares the same rectangle and
+// only the active page is visible.
+struct TabPage {
+    int tab;
+    std::initializer_list<int> controls;
+};
+
+const TabPage torrentTabPages[] = {
+    {0, {IDC_TD_NAME, IDC_TD_HASH, IDC_TD_STATE, IDC_TD_SIZE, IDC_TD_PATH, IDC_TD_PRIVATE}},
+    {1, {IDC_TD_DONE, IDC_TD_PROGRESS, IDC_TD_RATE, IDC_TD_UP, IDC_TD_LEFT}},
+    {2, {IDC_TD_PEERS, IDC_TD_PROTO, IDC_TD_SEEDS, IDC_TD_NOTE}},
+    {3, {IDC_TD_FILES, IDC_TD_SKIP, IDC_TD_NORMAL, IDC_TD_HIGH}},
+    {4, {IDC_TD_TRACKERS, IDC_TD_TRACKER, IDC_TD_ADD, IDC_TD_REMOVE}},
+};
+
+// Static labels on each page are numbered per page in the resource file; a
+// page also owns the labels that sit in its rectangle, so they are toggled by
+// position rather than by id.
+void showTorrentPage(HWND dialog, int page)
+{
+    for (int index = 0; index < torrentTabCount; ++index) {
+        const bool visible = index == page;
+        for (const int id : torrentTabPages[index].controls)
+            ShowWindow(GetDlgItem(dialog, id), visible ? SW_SHOW : SW_HIDE);
+    }
+}
+
 // The properties page stages every edit: priority buttons and tracker edits
 // only touch the working copy until 应用 posts the command.
 INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
@@ -372,16 +411,35 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
         SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
         if (!state) return FALSE;
         SetDlgItemTextW(dialog, IDC_TD_NAME, state->name.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_HASH, state->identity.c_str());
         SetDlgItemTextW(dialog, IDC_TD_STATE, state->state.c_str());
         SetDlgItemTextW(dialog, IDC_TD_SIZE, state->size.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_PATH, state->savePath.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_PRIVATE, state->privateText.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_DONE, state->done.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_PROGRESS, state->progress.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_RATE, state->rate.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_UP, state->uploadRate.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_LEFT, state->remaining.c_str());
         SetDlgItemTextW(dialog, IDC_TD_PEERS, state->peers.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_PROTO, state->protocol.c_str());
+        SetDlgItemTextW(dialog, IDC_TD_SEEDS, state->seeds.c_str());
+
+        const HWND tabs = GetDlgItem(dialog, IDC_TD_TABS);
+        const wchar_t* captions[torrentTabCount] = {L"常规", L"传输", L"连接", L"文件", L"追踪器"};
+        for (int index = 0; index < torrentTabCount; ++index) {
+            TCITEMW item{};
+            item.mask = TCIF_TEXT;
+            item.pszText = const_cast<LPWSTR>(captions[index]);
+            TabCtrl_InsertItem(tabs, index, &item);
+        }
 
         const HWND files = GetDlgItem(dialog, IDC_TD_FILES);
         ListView_SetExtendedListViewStyle(files, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH;
         column.pszText = const_cast<LPWSTR>(L"文件");
-        column.cx = 350;
+        column.cx = 330;
         ListView_InsertColumn(files, 0, &column);
         column.pszText = const_cast<LPWSTR>(L"大小");
         column.cx = 80;
@@ -405,7 +463,7 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
         const HWND trackers = GetDlgItem(dialog, IDC_TD_TRACKERS);
         ListView_SetExtendedListViewStyle(trackers, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         column.pszText = const_cast<LPWSTR>(L"追踪器");
-        column.cx = 480;
+        column.cx = 470;
         ListView_InsertColumn(trackers, 0, &column);
         for (std::size_t index = 0; index < state->trackers.size(); ++index) {
             const auto text = toWide(state->trackers[index]);
@@ -424,8 +482,17 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
             SetDlgItemTextW(dialog, IDC_TD_TRACKER, L"私有种子不可修改追踪器");
         }
         EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), FALSE);
+        showTorrentPage(dialog, 0);
         centerDialog(dialog, GetParent(dialog));
         return TRUE;
+    }
+    case WM_NOTIFY: {
+        const auto* header = reinterpret_cast<NMHDR*>(lParam);
+        if (header && header->idFrom == IDC_TD_TABS && header->code == TCN_SELCHANGE) {
+            showTorrentPage(dialog, TabCtrl_GetCurSel(GetDlgItem(dialog, IDC_TD_TABS)));
+            return TRUE;
+        }
+        return FALSE;
     }
     case WM_COMMAND: {
         const auto id = LOWORD(wParam);
@@ -434,7 +501,6 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
         if (id == IDC_TD_SKIP || id == IDC_TD_NORMAL || id == IDC_TD_HIGH) {
             const int priority = id == IDC_TD_SKIP ? 0 : (id == IDC_TD_HIGH ? 2 : 1);
             const int selected = ListView_GetNextItem(files, -1, LVNI_SELECTED);
-            int changed = 0;
             const int first = selected == -1 ? 0 : selected;
             const int last = selected == -1 ? static_cast<int>(state->priorities.size()) - 1
                                             : selected;
@@ -442,13 +508,10 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
                  ++index) {
                 if (index < 0) continue;
                 state->priorities[static_cast<std::size_t>(index)] = priority;
-                ++changed;
             }
-            if (changed > 0) {
-                refreshTorrentFileList(files, *state);
-                state->dirty = true;
-                EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), TRUE);
-            }
+            refreshTorrentFileList(files, *state);
+            state->dirty = true;
+            EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), TRUE);
             return TRUE;
         }
         if (id == IDC_TD_ADD) {
@@ -2090,9 +2153,19 @@ void MainWindow::showProperties()
     if (!row->torrentFiles.empty()) {
         TorrentDetailsState state;
         state.name = toWide(row->name);
-        state.state = toWide(row->status + "  " + row->protocol);
+        state.identity = toWide(row->id.substr(0, 16)) + L"…";
+        state.state = toWide(row->status);
         state.size = toWide(row->size);
+        state.savePath = toWide(row->savePath);
+        state.privateText = row->torrentPrivate ? L"是（不可修改追踪器）" : L"否";
+        state.done = toWide(row->progress);
+        state.progress = toWide(row->progress);
+        state.rate = toWide(row->speed);
+        state.uploadRate = L"——";
+        state.remaining = toWide(row->remaining);
         state.peers = row->connections.empty() ? L"——" : toWide(row->connections);
+        state.protocol = toWide(row->protocol);
+        state.seeds = L"——";
         state.files = row->torrentFiles;
         state.priorities = row->filePriorities;
         state.priorities.resize(state.files.size(), 1);
