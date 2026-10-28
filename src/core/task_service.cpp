@@ -70,6 +70,8 @@ CommandResult TaskService::execute(const TaskCommand& command)
         if (const auto* pauseCommand = std::get_if<PauseTaskCommand>(&command))
             return pause(*pauseCommand);
         if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
+        if (const auto* updateCommand = std::get_if<UpdateTorrentOptionsCommand>(&command))
+            return updateTorrent(*updateCommand);
         return cancel(std::get<CancelTaskCommand>(command));
     } catch (const StorageError& error) {
         // This also covers read failures before a command reaches its write.
@@ -145,6 +147,8 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     task.state = TaskState::Queued;
     task.total = -1;
     task.files = command.files;
+    task.filePriorities = command.filePriorities;
+    task.trackers = command.trackers;
     task.createdAt = nowMillis();
     task.updatedAt = task.createdAt;
     try {
@@ -240,7 +244,12 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             BtDownloadRequest request;
             request.source = task.source;
             request.savePath = std::filesystem::path(pathFromUtf8(task.destination)).string();
-            request.files = task.files;
+            for (std::size_t position = 0; position < task.files.size(); ++position) {
+                const int priority = position < task.filePriorities.size()
+                    ? task.filePriorities[position] : 1;
+                request.choices.push_back(BtFileChoice{task.files[position], priority});
+            }
+            request.trackers = task.trackers;
             try {
                 const auto result = btTransfer_(request, *active->cancelled,
                     [&](const BtProgressInfo& update) {
@@ -418,6 +427,31 @@ int TaskService::pauseInterrupted()
         ++changed;
     }
     return changed;
+}
+
+CommandResult TaskService::updateTorrent(const UpdateTorrentOptionsCommand& command)
+{
+    std::lock_guard lock(activeMutex_);
+    if (active_.contains(command.taskId))
+        return failure("task is running; stop it before changing torrent options");
+    const auto task = repository_.find(command.taskId);
+    if (!task) return failure("unknown task");
+    if (task->state == TaskState::Completed)
+        return failure("a completed task keeps its selection");
+    auto updated = *task;
+    updated.files = command.files;
+    updated.filePriorities = command.filePriorities;
+    updated.trackers = command.trackers;
+    updated.updatedAt = nowMillis();
+    try {
+        repository_.update(updated);
+    } catch (const StorageError& error) {
+        return storageFailure(error);
+    }
+    CommandResult result;
+    result.ok = true;
+    result.task = updated;
+    return result;
 }
 
 CommandResult TaskService::remove(const DeleteTaskCommand& command)

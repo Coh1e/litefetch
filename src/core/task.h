@@ -27,8 +27,12 @@ struct TaskSnapshot {
     // The stored partial data no longer matches the resource: starting again
     // needs the user's confirmation before the bytes are discarded.
     bool restartRequired = false;
-    // BitTorrent only: the file indices the user confirmed for this task.
+    // BitTorrent only: the file indices the user confirmed for this task and
+    // the matching priorities (0 skip, 1 normal, 2 high). Both are parallel.
     std::vector<int> files;
+    std::vector<int> filePriorities;
+    // BitTorrent only: extra trackers the user added for this task.
+    std::vector<std::string> trackers;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };
@@ -42,6 +46,8 @@ struct AddTaskCommand {
     bool allowDuplicate = false;
     // BitTorrent only: the confirmed file indices; empty means every file.
     std::vector<int> files;
+    std::vector<int> filePriorities;
+    std::vector<std::string> trackers;
     // BitTorrent only: the info hash learned from metadata. It identifies the
     // content itself, so a magnet and a .torrent for the same torrent share one
     // task even though their source strings differ.
@@ -68,9 +74,18 @@ struct CancelTaskCommand {
 struct DeleteTaskCommand {
     std::string taskId;
 };
+// Replaces the BitTorrent selection and trackers of an existing task. Only a
+// paused, queued or failed task may be changed; a running transfer keeps its
+// own choices until it stops.
+struct UpdateTorrentOptionsCommand {
+    std::string taskId;
+    std::vector<int> files;
+    std::vector<int> filePriorities;
+    std::vector<std::string> trackers;
+};
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,
-    CancelTaskCommand, DeleteTaskCommand>;
+    CancelTaskCommand, DeleteTaskCommand, UpdateTorrentOptionsCommand>;
 
 struct CommandResult {
     // True only when the requested transition was validated and committed (for

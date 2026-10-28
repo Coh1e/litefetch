@@ -72,6 +72,7 @@ BtMetadata metadataOf(const lt::torrent_info& info)
     metadata.infoHash = infoHashHex(info.info_hashes());
     metadata.totalBytes = info.total_size();
     metadata.files = filesOf(info);
+    metadata.isPrivate = info.priv();
     return metadata;
 }
 
@@ -177,15 +178,27 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
         const int fileCount = info->num_files();
         std::vector<lt::download_priority_t> priorities(static_cast<std::size_t>(fileCount),
             lt::download_priority_t{0});
-        if (request.files.empty()) {
+        if (request.choices.empty()) {
             std::fill(priorities.begin(), priorities.end(), lt::default_priority);
         } else {
-            for (const int index : request.files) {
-                if (index >= 0 && index < fileCount)
-                    priorities[static_cast<std::size_t>(index)] = lt::default_priority;
+            for (const auto& choice : request.choices) {
+                if (choice.index < 0 || choice.index >= fileCount) continue;
+                // 0 skips, 1 downloads normally, 2 downloads ahead of the rest.
+                priorities[static_cast<std::size_t>(choice.index)] = choice.priority >= 2
+                    ? lt::top_priority
+                    : (choice.priority <= 0 ? lt::download_priority_t{0} : lt::default_priority);
             }
         }
         handle.prioritize_files(priorities);
+
+        if (!request.trackers.empty()) {
+            if (info->priv()) {
+                result.error = "a private torrent does not accept additional trackers";
+                return result;
+            }
+            for (const auto& tracker : request.trackers)
+                handle.add_tracker(lt::announce_entry{tracker});
+        }
 
         for (const auto& peer : request.peers) {
             const auto colon = peer.rfind(':');

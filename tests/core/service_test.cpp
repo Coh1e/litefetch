@@ -422,6 +422,19 @@ void torrentSelectionPersists(const std::filesystem::path& root)
         const auto located = service.execute(variant);
         require(located.ok && located.existing, "the same info hash did not locate the task");
 
+        // Options can be edited before the transfer starts, and the edit is
+        // rejected once it is running or completed.
+        UpdateTorrentOptionsCommand update;
+        update.taskId = added.task.id;
+        update.files = {0, 1};
+        update.filePriorities = {2, 0};
+        update.trackers = {"udp://tracker.example:80"};
+        const auto edited = service.execute(update);
+        require(edited.ok, "torrent option update failed: " + edited.error);
+        require(edited.task.files == std::vector<int>({0, 1}), "files were not replaced");
+        require(edited.task.filePriorities == std::vector<int>({2, 0}), "priorities were not replaced");
+        require(edited.task.trackers.size() == 1, "tracker was not stored");
+
         // Without a BitTorrent engine the start is refused with a clear reason
         // instead of pretending to download.
         const auto started = service.execute(StartTaskCommand{id});
@@ -434,7 +447,10 @@ void torrentSelectionPersists(const std::filesystem::path& root)
         TaskRepository reopened(database);
         const auto loaded = reopened.find(id);
         require(loaded.has_value(), "torrent task did not survive reopen");
-        require(loaded->files == std::vector<int>({2, 0}), "selection did not survive reopen");
+        require(loaded->files == std::vector<int>({0, 1}), "selection did not survive reopen");
+        require(loaded->filePriorities == std::vector<int>({2, 0}),
+            "priorities did not survive reopen");
+        require(loaded->trackers.size() == 1, "trackers did not survive reopen");
         require(loaded->destination == savePath.string(), "save path did not survive reopen");
     }
 }

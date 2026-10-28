@@ -65,33 +65,72 @@ void execute(sqlite3* database, const char* sql)
     if (sqlite3_exec(database, sql, nullptr, nullptr, nullptr) != SQLITE_OK) fail(database);
 }
 
-// BitTorrent file selection is stored as a comma separated index list: small,
-// order-preserving and readable in the database without a second table.
-std::vector<int> parseFileList(std::string_view text)
+// BitTorrent file selection is stored as an order-preserving "index:priority"
+// list; a plain "index" entry (the original format) means normal priority.
+void parseFileEntries(std::string_view text, std::vector<int>& files,
+    std::vector<int>& priorities)
 {
-    std::vector<int> files;
+    files.clear();
+    priorities.clear();
     std::size_t start = 0;
     while (start < text.size()) {
-        const auto end = text.find(',', start);
+        const auto end = text.find_first_of(",;", start);
         const auto item = text.substr(start,
             end == std::string_view::npos ? std::string_view::npos : end - start);
         if (!item.empty()) {
-            int value = 0;
-            const auto result = std::from_chars(item.data(), item.data() + item.size(), value);
-            if (result.ec == std::errc{} && value >= 0) files.push_back(value);
+            const auto colon = item.find(':');
+            int index = 0;
+            int priority = 1;
+            const auto indexText = colon == std::string_view::npos ? item : item.substr(0, colon);
+            const auto priorityText = colon == std::string_view::npos
+                ? std::string_view("1") : item.substr(colon + 1);
+            const auto indexResult = std::from_chars(indexText.data(),
+                indexText.data() + indexText.size(), index);
+            const auto priorityResult = std::from_chars(priorityText.data(),
+                priorityText.data() + priorityText.size(), priority);
+            if (indexResult.ec == std::errc{} && index >= 0) {
+                files.push_back(index);
+                priorities.push_back(priorityResult.ec == std::errc{} ? priority : 1);
+            }
         }
         if (end == std::string_view::npos) break;
         start = end + 1;
     }
-    return files;
 }
 
-std::string serializeFileList(const std::vector<int>& files)
+std::string serializeFileList(const std::vector<int>& files, const std::vector<int>& priorities)
 {
     std::string text;
-    for (const int index : files) {
-        if (!text.empty()) text += ',';
-        text += std::to_string(index);
+    for (std::size_t position = 0; position < files.size(); ++position) {
+        if (!text.empty()) text += ';';
+        text += std::to_string(files[position]);
+        text += ':';
+        text += std::to_string(position < priorities.size() ? priorities[position] : 1);
+    }
+    return text;
+}
+
+std::vector<std::string> parseTrackerList(std::string_view text)
+{
+    std::vector<std::string> trackers;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const auto end = text.find('\n', start);
+        const auto item = text.substr(start,
+            end == std::string_view::npos ? std::string_view::npos : end - start);
+        if (!item.empty()) trackers.emplace_back(item);
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return trackers;
+}
+
+std::string serializeTrackerList(const std::vector<std::string>& trackers)
+{
+    std::string text;
+    for (const auto& tracker : trackers) {
+        if (!text.empty()) text += '\n';
+        text += tracker;
     }
     return text;
 }
@@ -109,7 +148,8 @@ TaskSnapshot readTask(Statement& statement)
     task.total = statement.integer(5);
     task.error = statement.text(6);
     task.restartRequired = statement.integer(9) != 0;
-    task.files = parseFileList(statement.text(10));
+    parseFileEntries(statement.text(10), task.files, task.filePriorities);
+    task.trackers = parseTrackerList(statement.text(11));
     task.createdAt = statement.integer(7);
     task.updatedAt = statement.integer(8);
     return task;
@@ -140,7 +180,8 @@ void migrateSchema(sqlite3* database)
             "created_at INTEGER NOT NULL,"
             "updated_at INTEGER NOT NULL,"
             "restart_required INTEGER NOT NULL DEFAULT 0,"
-            "bt_files TEXT NOT NULL DEFAULT '' );"
+            "bt_files TEXT NOT NULL DEFAULT '',"
+            "bt_trackers TEXT NOT NULL DEFAULT '' );"
             "INSERT INTO native_tasks_v2(id,source,destination,state,received,total,error,"
             "created_at,updated_at) SELECT id,source,destination,state,received,total,error,"
             "created_at,updated_at FROM native_tasks;"
@@ -149,13 +190,18 @@ void migrateSchema(sqlite3* database)
     } else if (version == "2") {
         execute(database,
             "ALTER TABLE native_tasks ADD COLUMN restart_required INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';");
+            "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';");
     } else if (version == "3") {
-        execute(database, "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';");
+        execute(database,
+            "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';");
+    } else if (version == "4") {
+        execute(database, "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';");
     } else {
         return;
     }
-    execute(database, "UPDATE native_meta SET value='4' WHERE key='schema_version';");
+    execute(database, "UPDATE native_meta SET value='5' WHERE key='schema_version';");
 }
 
 void verifyVersion(sqlite3* database)
@@ -163,8 +209,9 @@ void verifyVersion(sqlite3* database)
     Statement statement(database, "SELECT value FROM native_meta WHERE key='schema_version'");
     if (!statement.row()) throw StorageError("Database is not a LiteFetch native task database");
     const auto version = statement.text(0);
-    // 1: original states. 2: adds 'paused'. 3: restart flag. 4: torrent files.
-    if (version != "1" && version != "2" && version != "3" && version != "4")
+    // 1: original states. 2: paused. 3: restart flag. 4: torrent files.
+    // 5: user trackers.
+    if (version != "1" && version != "2" && version != "3" && version != "4" && version != "5")
         throw StorageError("Database was created by a newer LiteFetch native version");
 }
 
@@ -246,7 +293,8 @@ void TaskRepository::initialize()
             "created_at INTEGER NOT NULL,"
             "updated_at INTEGER NOT NULL,"
             "restart_required INTEGER NOT NULL DEFAULT 0,"
-            "bt_files TEXT NOT NULL DEFAULT '');");
+            "bt_files TEXT NOT NULL DEFAULT '',"
+            "bt_trackers TEXT NOT NULL DEFAULT '');");
         execute(database_, "INSERT OR IGNORE INTO native_meta(key,value) VALUES('schema_version','1');");
         migrateSchema(database_);
         execute(database_, "COMMIT;");
@@ -262,8 +310,8 @@ void TaskRepository::insert(const TaskSnapshot& task)
     std::lock_guard lock(mutex_);
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
-        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
     statement.text(1, task.id);
     statement.text(2, task.source);
     statement.text(3, task.destination);
@@ -274,7 +322,8 @@ void TaskRepository::insert(const TaskSnapshot& task)
     statement.integer(8, task.createdAt);
     statement.integer(9, task.updatedAt);
     statement.integer(10, task.restartRequired ? 1 : 0);
-    statement.text(11, serializeFileList(task.files));
+    statement.text(11, serializeFileList(task.files, task.filePriorities));
+    statement.text(12, serializeTrackerList(task.trackers));
     statement.done();
 }
 
@@ -284,7 +333,7 @@ void TaskRepository::update(const TaskSnapshot& task)
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
         "UPDATE native_tasks SET source=?,destination=?,state=?,received=?,total=?,error=?,updated_at=?,"
-        "restart_required=?,bt_files=? WHERE id=?");
+        "restart_required=?,bt_files=?,bt_trackers=? WHERE id=?");
     statement.text(1, task.source);
     statement.text(2, task.destination);
     statement.text(3, taskStateName(task.state));
@@ -293,8 +342,9 @@ void TaskRepository::update(const TaskSnapshot& task)
     statement.text(6, task.error);
     statement.integer(7, task.updatedAt);
     statement.integer(8, task.restartRequired ? 1 : 0);
-    statement.text(9, serializeFileList(task.files));
-    statement.text(10, task.id);
+    statement.text(9, serializeFileList(task.files, task.filePriorities));
+    statement.text(10, serializeTrackerList(task.trackers));
+    statement.text(11, task.id);
     statement.done();
     if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not updated");
 }
@@ -312,7 +362,7 @@ void TaskRepository::remove(std::string_view id)
 std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers "
         "FROM native_tasks WHERE id=?");
     statement.text(1, id);
     if (!statement.row()) return std::nullopt;
@@ -322,7 +372,7 @@ std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 std::vector<TaskSnapshot> TaskRepository::all()
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers "
         "FROM native_tasks ORDER BY created_at,id");
     std::vector<TaskSnapshot> tasks;
     while (statement.row()) tasks.push_back(readTask(statement));

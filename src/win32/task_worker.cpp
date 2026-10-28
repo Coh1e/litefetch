@@ -267,9 +267,13 @@ void TaskWorker::execute(const Command& command)
     try {
         switch (command.type) {
         case CommandType::Add: {
-            const auto result = service_->execute(AddTaskCommand{
-                command.source, command.destination, command.allowDuplicate, command.files,
-                command.identity});
+            AddTaskCommand add;
+            add.source = command.source;
+            add.destination = command.destination;
+            add.allowDuplicate = command.allowDuplicate;
+            add.files = command.files;
+            add.identity = command.identity;
+            const auto result = service_->execute(add);
             AddResult addResult;
             addResult.batchId = command.batchId;
             addResult.line = command.line;

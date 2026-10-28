@@ -104,7 +104,7 @@ void bitTorrentRoundTrip()
     BtDownloadRequest request;
     request.source = torrentPath.string();
     request.savePath = downloadDirectory.string();
-    request.files = {0};
+    request.choices = {BtFileChoice{0, 1}};
     request.peers = {"127.0.0.1:" + std::to_string(seedPort)};
     std::int64_t lastReceived = 0;
     const auto result = btDownload(request, cancelled, [&](const BtProgressInfo& progress) {
