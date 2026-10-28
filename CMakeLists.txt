@@ -18,6 +18,8 @@ add_library(litefetch-core STATIC
     src/core/text_utf8.cpp src/core/text_utf8.h
     src/core/http_engine.cpp src/core/http_engine.h
     src/core/segmented_transfer.cpp src/core/segmented_transfer.h
+    src/core/ed2k_link.cpp src/core/ed2k_link.h
+    src/core/ed2k_client.cpp src/core/ed2k_client.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
@@ -107,6 +109,11 @@ if(BUILD_TESTING)
     add_test(NAME ui-batch COMMAND ui-batch-tests)
     set_tests_properties(ui-batch PROPERTIES TIMEOUT 20)
     # BitTorrent boundary test: builds a local swarm and downloads one file.
+    add_executable(core-ed2k-tests tests/core/ed2k_test.cpp)
+    target_include_directories(core-ed2k-tests PRIVATE tests/core)
+    target_link_libraries(core-ed2k-tests PRIVATE litefetch-core ws2_32)
+    add_test(NAME core-ed2k COMMAND core-ed2k-tests)
+    set_tests_properties(core-ed2k PROPERTIES TIMEOUT 120)
     add_executable(core-bt-tests tests/core/bt_test.cpp)
     target_include_directories(core-bt-tests PRIVATE tests/core)
     target_link_libraries(core-bt-tests PRIVATE litefetch-bt ws2_32)
