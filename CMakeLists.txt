@@ -117,7 +117,7 @@ if(BUILD_TESTING)
     target_link_libraries(win32-native-bridge-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME win32-native-bridge COMMAND win32-native-bridge-tests)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
-    add_executable(litefetch-ed2khash tools/ed2khash.cpp)
+    add_executable(litefetch-ed2khash src/tools/ed2khash.cpp)
     target_link_libraries(litefetch-ed2khash PRIVATE litefetch-core bcrypt)
 
     add_executable(core-ed2k-tests tests/core/ed2k_test.cpp)
