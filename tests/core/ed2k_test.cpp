@@ -139,8 +139,9 @@ private:
 // A scripted eDonkey peer that answers hello, file request and part requests.
 class FakeEd2kPeer {
 public:
-    explicit FakeEd2kPeer(std::vector<unsigned char> payload, bool refuseFile = false)
-        : payload_(std::move(payload)), refuseFile_(refuseFile)
+    explicit FakeEd2kPeer(std::vector<unsigned char> payload, bool refuseFile = false,
+        std::size_t stopAfterBytes = 0)
+        : payload_(std::move(payload)), refuseFile_(refuseFile), stopAfter_(stopAfterBytes)
     {
         WSADATA data{};
         WSAStartup(MAKEWORD(2, 2), &data);
@@ -197,27 +198,39 @@ private:
         std::vector<unsigned char> partsRequest(35);
         if (!receiveExact(client, partsRequest.data(), 35)) { closesocket(client); return; }
 
-        // One SENDINGPART covering the whole file, in 10240-byte blocks.
-        const auto size = static_cast<std::uint64_t>(payload_.size());
-        std::vector<unsigned char> packet;
-        packet.push_back(0x46);
-        packet.resize(1 + 16, 0); // file hash, all zero in this scripted peer
-        const std::uint64_t start = 0;
-        const std::uint64_t end = size - 1;
-        for (int shift = 0; shift < 64; shift += 8)
-            packet.push_back(static_cast<unsigned char>((start >> shift) & 0xff));
-        for (int shift = 0; shift < 64; shift += 8)
-            packet.push_back(static_cast<unsigned char>((end >> shift) & 0xff));
-        std::size_t offset = 0;
-        while (offset < payload_.size()) {
-            const auto chunk = (std::min)(static_cast<std::size_t>(10240), payload_.size() - offset);
-            packet.push_back(static_cast<unsigned char>(chunk & 0xff));
-            packet.push_back(static_cast<unsigned char>((chunk >> 8) & 0xff));
-            packet.insert(packet.end(), payload_.begin() + static_cast<std::ptrdiff_t>(offset),
-                payload_.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
-            offset += chunk;
+        // Honour the requested range: start (bytes 19..26) and end (27..34) are
+        // little endian in the request packet.
+        std::uint64_t rangeStart = 0;
+        std::uint64_t rangeEnd = 0;
+        for (int index = 7; index >= 0; --index) rangeStart = (rangeStart << 8) | partsRequest[19 + index];
+        for (int index = 7; index >= 0; --index) rangeEnd = (rangeEnd << 8) | partsRequest[27 + index];
+        if (rangeEnd >= payload_.size()) rangeEnd = payload_.size() - 1;
+        // One SENDINGPART per part in the requested range, 10240-byte blocks.
+        std::uint64_t partStart = rangeStart;
+        while (partStart <= rangeEnd) {
+            const std::uint64_t partEnd = (std::min)(partStart + 9727999ull, rangeEnd);
+            std::vector<unsigned char> packet;
+            packet.push_back(0x46);
+            packet.resize(1 + 16, 0); // file hash, all zero in this scripted peer
+            for (int shift = 0; shift < 64; shift += 8)
+                packet.push_back(static_cast<unsigned char>((partStart >> shift) & 0xff));
+            for (int shift = 0; shift < 64; shift += 8)
+                packet.push_back(static_cast<unsigned char>((partEnd >> shift) & 0xff));
+            std::size_t offset = static_cast<std::size_t>(partStart);
+            while (offset <= static_cast<std::size_t>(partEnd)) {
+                const auto chunk = (std::min)(static_cast<std::size_t>(10240),
+                    static_cast<std::size_t>(partEnd) + 1 - offset);
+                packet.push_back(static_cast<unsigned char>(chunk & 0xff));
+                packet.push_back(static_cast<unsigned char>((chunk >> 8) & 0xff));
+                packet.insert(packet.end(), payload_.begin() + static_cast<std::ptrdiff_t>(offset),
+                    payload_.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
+                offset += chunk;
+                if (stopAfter_ != 0 && offset >= stopAfter_) break;
+            }
+            sendAll(client, packet.data(), static_cast<int>(packet.size()));
+            if (stopAfter_ != 0 && offset >= stopAfter_) break;
+            partStart = partEnd + 1;
         }
-        sendAll(client, packet.data(), static_cast<int>(packet.size()));
         ::shutdown(client, SD_SEND);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         closesocket(client);
@@ -225,6 +238,7 @@ private:
 
     std::vector<unsigned char> payload_;
     bool refuseFile_;
+    std::size_t stopAfter_ = 0;
     SOCKET listener_ = INVALID_SOCKET;
     std::uint16_t port_ = 0;
     std::jthread thread_;
@@ -239,16 +253,59 @@ void md4Vectors()
         std::string("d9130a8164549fe818874806e1c7014b"), "MD4 message digest");
 }
 
+void peerResume(const std::filesystem::path& root)
+{
+    // Two parts, so an interruption leaves exactly one finished part behind.
+    const auto size = static_cast<std::size_t>(ed2kPartSize) + 1000;
+    const auto payload = litefetch::test::payload(size);
+    const auto expectedPath = root / "resume-expected.bin";
+    writeFile(expectedPath, payload);
+    const auto expectedHash = ed2kFileHash(expectedPath.string());
+    check(!expectedHash.empty(), "resume fixture hash");
+
+    Ed2kPeerRequest request;
+    request.host = "127.0.0.1";
+    request.fileHash = expectedHash;
+    request.fileSize = static_cast<std::int64_t>(size);
+    request.partPath = (root / "resume.bin").string();
+    request.timeoutMillis = 10000;
+    const std::atomic_bool cancelled{false};
+
+    {
+        FakeEd2kPeer peer(payload, false, static_cast<std::size_t>(ed2kPartSize));
+        request.port = peer.port();
+        const auto first = downloadFromEd2kPeer(request, cancelled);
+        check(!first.ok, "an interrupted peer is a failure");
+    }
+    const auto state = inspectEd2kParts(request.partPath, request.fileSize, expectedHash);
+    checkEqual(static_cast<long long>(state.verifiedParts), 1, "the first part survived");
+    checkEqual(static_cast<long long>(state.missingParts), 1, "the second part is still missing");
+
+    {
+        FakeEd2kPeer peer(payload);
+        request.port = peer.port();
+        const auto second = downloadFromEd2kPeer(request, cancelled);
+        check(second.ok, ("resume failed: " + second.error).c_str());
+        check(readFile(request.partPath) == payload, "the resumed file matches the peer payload");
+        const auto again = inspectEd2kParts(request.partPath, request.fileSize, expectedHash);
+        checkEqual(static_cast<long long>(again.verifiedParts), 2, "both parts verify after resume");
+        checkEqual(static_cast<long long>(again.missingParts), 0, "nothing is missing after resume");
+    }
+}
 void peerTransfer(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(30000);
+    const auto expectedPath = root / "expected.bin";
+    writeFile(expectedPath, payload);
+    const auto expectedHash = ed2kFileHash(expectedPath.string());
+    check(!expectedHash.empty(), "the expected hash is computable");
     {
         FakeEd2kPeer peer(payload);
         const auto partPath = root / "ed2k-part.bin";
         Ed2kPeerRequest request;
         request.host = "127.0.0.1";
         request.port = peer.port();
-        request.fileHash = "0123456789abcdef0123456789abcdef";
+        request.fileHash = expectedHash;
         request.fileSize = static_cast<std::int64_t>(payload.size());
         request.partPath = partPath.string();
         request.timeoutMillis = 5000;
@@ -355,6 +412,7 @@ int main()
         linkParsing();
         md4Vectors();
         peerTransfer(root.path());
+        peerResume(root.path());
         sourceQuery();
         return 0;
     });

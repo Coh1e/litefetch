@@ -9,6 +9,9 @@
 #include <ws2tcpip.h>
 
 #include <cstring>
+#include <filesystem>
+#include <map>
+#include <utility>
 #include <fstream>
 #include <vector>
 
@@ -188,6 +191,93 @@ std::string ed2kFileHash(const std::string& path)
     return hexOf(root);
 }
 
+namespace {
+std::string sidecarPath(const std::string& partPath)
+{
+    return partPath + ".ed2kmeta";
+}
+
+std::map<int, std::string> loadPartRecords(const std::string& partPath)
+{
+    std::map<int, std::string> records;
+    std::ifstream input(sidecarPath(partPath));
+    std::string line;
+    while (std::getline(input, line)) {
+        const auto colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        const int index = std::atoi(line.substr(0, colon).c_str());
+        const auto hash = line.substr(colon + 1);
+        if (index >= 0 && hash.size() == 32) records[index] = hash;
+    }
+    return records;
+}
+
+void savePartRecord(const std::string& partPath, int index, const std::string& hash)
+{
+    auto records = loadPartRecords(partPath);
+    records[index] = hash;
+    std::ofstream output(sidecarPath(partPath), std::ios::trunc);
+    for (const auto& [key, value] : records) output << key << ':' << value << '\n';
+}
+
+int partCountFor(std::int64_t size)
+{
+    if (size <= 0) return 0;
+    return static_cast<int>((size + ed2kPartSize - 1) / ed2kPartSize);
+}
+
+std::pair<std::int64_t, std::int64_t> partRange(int index, std::int64_t size)
+{
+    const std::int64_t start = static_cast<std::int64_t>(index) * ed2kPartSize;
+    const std::int64_t end = (std::min)(start + ed2kPartSize, size) - 1;
+    return {start, end};
+}
+
+std::string md4HexOfRange(const std::string& path, std::int64_t start, std::int64_t end)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    input.seekg(start);
+    std::vector<char> buffer(static_cast<std::size_t>(end - start + 1));
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    if (static_cast<std::size_t>(input.gcount()) != buffer.size()) return {};
+    return md4Hex(buffer.data(), buffer.size());
+}
+
+// Reads the bytes of one part and compares them with the recorded digest.
+bool verifyPart(const std::string& partPath, int index, std::int64_t size,
+    const std::string& expected)
+{
+    const auto [start, end] = partRange(index, size);
+    std::ifstream input(partPath, std::ios::binary);
+    if (!input) return false;
+    input.seekg(start);
+    std::vector<char> buffer(static_cast<std::size_t>(end - start + 1));
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    if (static_cast<std::size_t>(input.gcount()) != buffer.size()) return false;
+    return md4Hex(buffer.data(), buffer.size()) == expected;
+}
+} // namespace
+
+Ed2kResumeState inspectEd2kParts(const std::string& partPath, std::int64_t fileSize,
+    const std::string& fileHash)
+{
+    (void)fileHash;
+    Ed2kResumeState state;
+    const auto recorded = loadPartRecords(partPath);
+    const int parts = partCountFor(fileSize);
+    for (int index = 0; index < parts; ++index) {
+        const auto found = recorded.find(index);
+        if (found != recorded.end() && verifyPart(partPath, index, fileSize, found->second))
+            ++state.verifiedParts;
+        else {
+            ++state.missingParts;
+            const auto [start, end] = partRange(index, fileSize);
+            state.missingBytes += end - start + 1;
+        }
+    }
+    return state;
+}
 Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
     const std::atomic_bool& cancelled)
 {
@@ -284,29 +374,67 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
         return result;
     }
 
-    // Ask for the whole file in ranges; the peer answers with part blocks.
+    // Which parts are already here and still match their recorded digest? Only
+    // the missing span is requested, so a restart continues instead of starting
+    // over.
+    const int totalParts = partCountFor(request.fileSize);
+    const auto recordedParts = loadPartRecords(request.partPath);
+    int firstMissing = -1;
+    int lastMissing = -1;
+    for (int index = 0; index < totalParts; ++index) {
+        const auto found = recordedParts.find(index);
+        const bool have = found != recordedParts.end()
+            && verifyPart(request.partPath, index, request.fileSize, found->second);
+        if (!have) {
+            if (firstMissing < 0) firstMissing = index;
+            lastMissing = index;
+        }
+    }
+    if (firstMissing < 0) {
+        // Everything is on disk: just confirm the root hash.
+        if (!request.fileHash.empty() && ed2kFileHash(request.partPath) != request.fileHash) {
+            result.error = "the data on disk does not match the ed2k hash";
+            return result;
+        }
+        result.ok = true;
+        result.received = request.fileSize;
+        return result;
+    }
+    const auto missingStart = partRange(firstMissing, request.fileSize).first;
+    const auto missingEnd = partRange(lastMissing, request.fileSize).second;
+    const auto missingBytes = missingEnd - missingStart + 1;
+    const auto alreadyHere = request.fileSize - missingBytes;
+
+    // Ask for the missing range; the peer answers with part blocks.
     std::vector<unsigned char> parts{requestParts};
     parts.insert(parts.end(), hash.begin(), hash.end());
     const unsigned char rangeCount[2] = {1, 0};
     parts.insert(parts.end(), rangeCount, rangeCount + 2);
-    appendUint64(parts, 0);
-    appendUint64(parts, static_cast<std::uint64_t>(request.fileSize - 1));
+    appendUint64(parts, static_cast<std::uint64_t>(missingStart));
+    appendUint64(parts, static_cast<std::uint64_t>(missingEnd));
     if (!peer.sendAll(parts)) {
         result.error = "the peer closed the connection during the part request";
         return result;
     }
 
-    std::ofstream output(request.partPath, std::ios::binary | std::ios::trunc);
+    // Resume must not truncate: the verified parts are already in this file.
+    if (!std::filesystem::exists(request.partPath)) {
+        std::ofstream create(request.partPath, std::ios::binary | std::ios::trunc);
+        if (!create) {
+            result.error = "cannot create the part file";
+            return result;
+        }
+        create.seekp(static_cast<std::streamoff>(request.fileSize) - 1);
+        create.put('\0');
+    }
+    std::fstream output(request.partPath, std::ios::binary | std::ios::in | std::ios::out);
     if (!output) {
         result.error = "cannot open the part file for writing";
         return result;
     }
-    output.seekp(static_cast<std::streamoff>(request.fileSize) - 1);
-    output.put('\0');
-    output.seekp(0);
 
     std::int64_t written = 0;
-    while (written < request.fileSize) {
+    while (written < missingBytes) {
         if (cancelled.load()) {
             result.error = "cancelled";
             return result;
@@ -360,7 +488,16 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
             offset += length;
         }
         written += end - start + 1;
-        result.received = written;
+        result.received = alreadyHere + written;
+        // Record every part the packet completed, so a later run can trust it.
+        // The buffered writes must reach the disk before the digest is read.
+        output.flush();
+        for (int index = firstMissing; index <= lastMissing; ++index) {
+            const auto [partStart, partEnd] = partRange(index, request.fileSize);
+            if (partStart < start || partEnd > end) continue;
+            const auto digest = md4HexOfRange(request.partPath, partStart, partEnd);
+            if (!digest.empty()) savePartRecord(request.partPath, index, digest);
+        }
         if (cancelled.load()) {
             result.error = "cancelled";
             return result;
@@ -370,6 +507,13 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
     if (!output.good()) {
         result.error = "cannot write the part file";
         return result;
+    }
+    if (!request.fileHash.empty()) {
+        const auto actual = ed2kFileHash(request.partPath);
+        if (actual != request.fileHash) {
+            result.error = "the finished file does not match the ed2k hash";
+            return result;
+        }
     }
     result.ok = true;
     return result;

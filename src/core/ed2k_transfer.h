@@ -34,9 +34,21 @@ struct Ed2kPeerResult {
 };
 
 // Downloads one file from one peer over the eDonkey peer protocol on the
-// calling thread, writing into `partPath` at the offsets the peer reports.
-// The caller verifies the finished file; this function only moves bytes.
+// calling thread. Parts that a previous run already finished are kept only if
+// their recorded MD4 still matches the bytes on disk, and only the missing
+// range is requested. When `fileHash` is set, the finished file must reproduce
+// it or the transfer fails.
 Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
     const std::atomic_bool& cancelled);
+
+// What a resumed transfer found on disk, for reporting and tests.
+struct Ed2kResumeState {
+    int verifiedParts = 0;
+    int missingParts = 0;
+    std::int64_t missingBytes = 0;
+};
+
+Ed2kResumeState inspectEd2kParts(const std::string& partPath, std::int64_t fileSize,
+    const std::string& fileHash);
 
 } // namespace litefetch
