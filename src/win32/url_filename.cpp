@@ -115,9 +115,29 @@ SourceInput analyzeSourceInput(std::string_view text)
     } else if (startsWithNoCase(result.source, "http://")) {
         result.kind = SourceKind::Http;
         result.hint = "已识别: HTTP。";
+    } else if (startsWithNoCase(result.source, "ftp://")
+        || startsWithNoCase(result.source, "ftps://")) {
+        result.kind = SourceKind::Ftp;
+        result.hint = "已识别: FTP。需要登录时会在开始时询问账号。";
+    } else if (startsWithNoCase(result.source, "magnet:")) {
+        result.kind = SourceKind::Magnet;
+        result.hint = "已识别: 磁力链接。取到元数据后选择文件。";
+    } else if (startsWithNoCase(result.source, "ed2k://")) {
+        result.kind = SourceKind::Ed2k;
+        result.hint = "已识别: ed2k 链接。需要已配置 ed2k 服务器或链接自带来源。";
+        // The name travels with the link: ed2k://|file|<name>|<size>|<hash>|/
+        const auto firstBar = result.source.find('|');
+        const auto secondBar = firstBar == std::string::npos
+            ? std::string::npos : result.source.find('|', firstBar + 1);
+        const auto thirdBar = secondBar == std::string::npos
+            ? std::string::npos : result.source.find('|', secondBar + 1);
+        if (thirdBar != std::string::npos && thirdBar > secondBar + 1) {
+            const auto name = result.source.substr(secondBar + 1, thirdBar - secondBar - 1);
+            if (!name.empty()) result.suggestedFileName = sanitizeFileName(percentDecode(name));
+        }
     } else {
         result.kind = SourceKind::Unsupported;
-        result.hint = "不支持的地址类型：本版本仅支持 HTTP 下载（HTTPS 由传输库支持，尚未验收）。";
+        result.hint = "不支持的地址类型。支持 HTTP(S)、FTP、磁力链接与 ed2k 文件链接。";
     }
     return result;
 }

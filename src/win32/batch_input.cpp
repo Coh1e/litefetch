@@ -44,17 +44,25 @@ BatchInput analyzeBatchInput(std::string_view text)
                 break;
             case SourceKind::Https:
                 entry.valid = true;
-                entry.verdict = "有效 · HTTPS 传输尚未验收（#6）";
+                entry.verdict = "有效 · HTTPS";
+                break;
+            case SourceKind::Ftp:
+                entry.valid = true;
+                entry.verdict = "有效 · FTP";
+                break;
+            case SourceKind::Magnet:
+                entry.valid = true;
+                entry.verdict = "有效 · 磁力链接";
+                break;
+            case SourceKind::Ed2k:
+                entry.valid = true;
+                entry.verdict = "有效 · ed2k";
                 break;
             case SourceKind::Multiple:
                 entry.verdict = "无效 · 每行只能包含一个地址";
                 break;
             case SourceKind::Unsupported: {
-                const auto protocol = protocolLabel(line);
-                if (protocol == "FTP" || protocol == "BitTorrent" || protocol == "ED2K")
-                    entry.verdict = "暂不支持 · " + protocol + " 引擎将在后续版本接入";
-                else
-                    entry.verdict = "无效 · 未知地址类型";
+                entry.verdict = "无效 · 未知地址类型";
                 break;
             }
             case SourceKind::Empty:

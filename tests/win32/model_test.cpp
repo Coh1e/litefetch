@@ -159,8 +159,12 @@ void sourceParsing()
     check(multiple.kind == SourceKind::Multiple, "multiple addresses are recognized");
     check(analyzeSourceInput("").kind == SourceKind::Empty, "empty input");
     check(analyzeSourceInput("   \r\n ").kind == SourceKind::Empty, "whitespace only input");
-    check(analyzeSourceInput("ftp://example.org/a").kind == SourceKind::Unsupported, "ftp is not supported yet");
-    check(analyzeSourceInput("magnet:?xt=urn:btih:abc").kind == SourceKind::Unsupported, "magnet is not supported yet");
+    check(analyzeSourceInput("ftp://example.org/a").kind == SourceKind::Ftp, "ftp is recognised");
+    check(analyzeSourceInput("magnet:?xt=urn:btih:abc").kind == SourceKind::Magnet, "magnet is recognised");
+    const auto ed2k = analyzeSourceInput(
+        "ed2k://|file|movie.mkv|734003200|0123456789abcdef0123456789abcdef|/");
+    check(ed2k.kind == SourceKind::Ed2k, "ed2k is recognised");
+    check(ed2k.suggestedFileName == "movie.mkv", "the ed2k link supplies the file name");
 
     check(suggestedFileName("https://example.org/") == "download.bin", "root URL falls back to a name");
     check(suggestedFileName("https://example.org/a%2Fb.bin") == "a_b.bin", "path separators are sanitized");

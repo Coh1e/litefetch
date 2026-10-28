@@ -102,12 +102,15 @@ bool accept(HWND dialog, DialogContext& context)
     }
     case SourceKind::Unsupported:
         MessageBoxW(dialog,
-            L"不支持的地址类型。本版本仅支持 HTTP 下载（HTTPS 由传输库支持，尚未验收）；FTP、BT、磁力与 ed2k 将在后续版本提供。",
+            L"不支持的地址类型。支持 HTTP(S)、FTP、磁力链接与 ed2k 文件链接。",
             L"新建下载", MB_OK | MB_ICONWARNING);
         SetFocus(GetDlgItem(dialog, IDC_URL));
         return false;
     case SourceKind::Http:
     case SourceKind::Https:
+    case SourceKind::Ftp:
+    case SourceKind::Magnet:
+    case SourceKind::Ed2k:
         break;
     }
 

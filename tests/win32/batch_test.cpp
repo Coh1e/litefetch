@@ -21,8 +21,8 @@ void mixedInput()
         "htp://example.org/error.zip\n";
     const auto input = analyzeBatchInput(text);
     check(input.lines.size() == 6, "one result per non-empty line");
-    check(input.validCount == 2, "only HTTP and HTTPS are valid for the current engine");
-    check(input.invalidCount == 4, "unsupported and unknown addresses are counted");
+    check(input.validCount == 5, "every supported scheme is valid");
+    check(input.invalidCount == 1, "only the unknown scheme is invalid");
     check(input.blankLines == 1, "interior blank line is reported, not silently dropped");
     check(input.lines[0].line == 1 && input.lines[1].line == 2 && input.lines[2].line == 3
             && input.lines[3].line == 4 && input.lines[4].line == 5 && input.lines[5].line == 7,
@@ -31,19 +31,16 @@ void mixedInput()
     check(input.lines[0].suggestedFileName == "\xE8\xB5\x84\xE6\x96\x99.zip",
         "percent-decoded UTF-8 file name");
     check(input.lines[1].valid && input.lines[1].verdict == "有效", "HTTP valid");
-    check(!input.lines[2].valid && input.lines[2].verdict.find("BitTorrent") != std::string::npos,
-        "magnet is explicitly unsupported, not silently accepted");
-    check(!input.lines[3].valid && input.lines[3].verdict.find("ED2K") != std::string::npos,
-        "ed2k is explicitly unsupported");
-    check(!input.lines[4].valid && input.lines[4].verdict.find("FTP") != std::string::npos,
-        "ftp is explicitly unsupported");
+    check(input.lines[2].valid, "magnet is a supported source");
+    check(input.lines[3].valid, "ed2k is a supported source");
+    check(input.lines[4].valid, "ftp is a supported source");
     check(!input.lines[5].valid && input.lines[5].verdict.find("未知地址类型") != std::string::npos,
         "typo scheme is invalid with a reason");
 
     const auto summary = batchSummary(input);
-    check(summary.find("有效: 2 / 6") != std::string::npos, "summary keeps the valid/total counts");
-    check(summary.find("另有 1 条") != std::string::npos,
-        "summary reports the remaining rejected lines instead of hiding them");
+    check(summary.find("有效: 5 / 6") != std::string::npos, "summary keeps the valid/total counts");
+    check(summary.find("未添加") != std::string::npos,
+        "summary reports the rejected lines instead of hiding them");
 }
 
 void edgeCases()

@@ -5,7 +5,7 @@
 
 namespace litefetch::ui {
 
-enum class SourceKind { Empty, Http, Https, Unsupported, Multiple };
+enum class SourceKind { Empty, Http, Https, Ftp, Magnet, Ed2k, Unsupported, Multiple };
 
 struct SourceInput {
     SourceKind kind = SourceKind::Empty;
