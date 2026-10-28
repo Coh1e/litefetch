@@ -318,9 +318,11 @@ void runChecks()
     HttpFixture fixture(HttpFixture::Options{body});
     const auto destination = options.downloadDirectory / "payload.bin";
     // The slow peer leaves time to pause mid-transfer.
-    const auto slowBody = payload(768 * 1024);
+    // Large and slow enough that a pause always lands mid-transfer even when
+    // the machine is busy running the rest of the suite.
+    const auto slowBody = payload(2 * 1024 * 1024);
     HttpFixture slowFixture(HttpFixture::Options{slowBody, 200, 8 * 1024,
-        std::chrono::milliseconds(15)});
+        std::chrono::milliseconds(25)});
     const auto slowDestination = options.downloadDirectory / "slow.bin";
 
     // Seed rows through the same core service the window reads, before the
