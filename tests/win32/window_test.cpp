@@ -404,7 +404,8 @@ void runChecks()
             return state != static_cast<UINT>(-1) && (state & MF_GRAYED) == 0;
         }, 3000), "properties is enabled for a single selection");
         // Start the real transfer from the list and wait for the published file.
-        selectRow(list, 2);
+        // Select by name: rows added in the same millisecond have no stable order.
+        selectRow(list, rowOf(list, L"payload.bin"));
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
         const bool published = pumpUntil([&] {
             std::error_code error;
@@ -414,7 +415,10 @@ void runChecks()
             // Read each status part once: taking begin() from one temporary and
             // end() from another is undefined behaviour, and it crashed here as
             // 0xc0000409 instead of reporting why the download stalled.
-            std::string detail = "status=" + utf8FromUtf16(statusText(status, 0))
+            const int stalledRow = rowOf(list, L"payload.bin");
+            std::string detail = "row=" + std::to_string(stalledRow)
+                + " text=" + utf8FromUtf16(stalledRow >= 0 ? itemText(list, stalledRow, 5) : std::wstring())
+                + " status=" + utf8FromUtf16(statusText(status, 0))
                 + " | error=" + utf8FromUtf16(statusText(status, 3))
                 + " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
             throw std::runtime_error("download did not publish: " + detail);
@@ -450,7 +454,7 @@ void runChecks()
 
         // Pause keeps the partial bytes, resume continues them and publishes
         // the complete file. The slow peer leaves time to pause mid-transfer.
-        selectRow(list, 2);
+        selectRow(list, rowOf(list, L"slow.bin"));
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
         const auto slowPartial = partialPathFor(slowDestination);
         check(pumpUntil([&] {
