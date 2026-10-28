@@ -35,7 +35,7 @@ CURLcode initializeCurl()
     return result;
 }
 
-bool isHttpUrl(const std::string& source)
+bool isSupportedUrl(const std::string& source)
 {
     CURLU* url = curl_url();
     if (!url) return false;
@@ -44,7 +44,8 @@ bool isHttpUrl(const std::string& source)
     const bool supported = parsed
         && curl_url_get(url, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK
         && scheme
-        && (std::string(scheme) == "http" || std::string(scheme) == "https");
+        && (std::string(scheme) == "http" || std::string(scheme) == "https"
+            || std::string(scheme) == "ftp");
     if (scheme) curl_free(scheme);
     curl_url_cleanup(url);
     return supported;
@@ -137,7 +138,7 @@ std::size_t writeData(char* data, std::size_t size, std::size_t count, void* use
 {
     auto& context = *static_cast<Context*>(user);
     if (context.cancelled.load()) return CURL_WRITEFUNC_ERROR;
-    if (context.resumeExpected) {
+    if (context.resumeExpected && context.statusCode > 0) {
         if (context.statusCode != 206) {
             // The server sent the whole resource: appending would corrupt the
             // partial data, so stop before a single byte is written.
@@ -351,8 +352,86 @@ ParsedUrl splitCredentials(const std::string& url)
     return parsed;
 }
 
-// One destination has one partial file, so two transfers must never write it at
-// the same time. They are serialised per destination instead: the loser then
+std::string schemeOf(const std::string& url)
+{
+    CURLU* handle = curl_url();
+    if (!handle) return {};
+    std::string scheme;
+    if (curl_url_set(handle, CURLUPART_URL, url.c_str(), 0) == CURLUE_OK) {
+        char* value = nullptr;
+        if (curl_url_get(handle, CURLUPART_SCHEME, &value, 0) == CURLUE_OK && value) {
+            scheme = value;
+            curl_free(value);
+        }
+    }
+    curl_url_cleanup(handle);
+    return scheme;
+}
+
+TransferError ftpErrorClass(long response)
+{
+    if (response == 530) return TransferError::Http;
+    if (response == 550) return TransferError::Http;
+    return TransferError::Network;
+}
+
+std::string ftpMessage(CURLcode code, long response, const std::array<char, CURL_ERROR_SIZE>& buffer)
+{
+    switch (response) {
+    case 421: return "FTP 421: service not available, closing control connection";
+    case 425: return "FTP 425: cannot open the data connection";
+    case 426: return "FTP 426: data connection closed, transfer aborted";
+    case 530: return "FTP 530: login failed";
+    case 550: return "FTP 550: file unavailable";
+    default: break;
+    }
+    if (code == CURLE_REMOTE_ACCESS_DENIED) return "FTP 530: login failed";
+    if (code == CURLE_FTP_COULDNT_RETR_FILE) return "FTP 550: file unavailable";
+    if (code == CURLE_FTP_COULDNT_USE_REST) return "resume is not supported by this server";
+    if (buffer[0] != '\0') return buffer.data();
+    return curl_easy_strerror(code);
+}
+
+// FTP has no HEAD: a body-less request makes curl issue SIZE instead.
+std::int64_t ftpRemoteSize(const std::string& url, const std::string& username,
+    const std::string& password, const std::atomic_bool& cancelled, long& code, std::string& message)
+{
+    if (cancelled.load()) {
+        message = "cancelled";
+        return -1;
+    }
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
+    if (!handle) {
+        message = "cannot create an FTP handle";
+        return -1;
+    }
+    std::array<char, CURL_ERROR_SIZE> errorBuffer{};
+    curl_easy_setopt(handle.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle.get(), CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "ftp,ftps");
+    curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, errorBuffer.data());
+    curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(handle.get(), CURLOPT_PROXY, "");
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "LiteFetch/0.1 (core)");
+    if (!username.empty()) {
+        curl_easy_setopt(handle.get(), CURLOPT_HTTPAUTH, static_cast<long>(CURLAUTH_BASIC));
+        curl_easy_setopt(handle.get(), CURLOPT_USERNAME, username.c_str());
+        curl_easy_setopt(handle.get(), CURLOPT_PASSWORD, password.c_str());
+    }
+    const CURLcode result = curl_easy_perform(handle.get());
+    curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &code);
+    if (result != CURLE_OK) {
+        message = ftpMessage(result, code, errorBuffer);
+        return -1;
+    }
+    curl_off_t length = -1;
+    curl_easy_getinfo(handle.get(), CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length);
+    return length >= 0 ? static_cast<std::int64_t>(length) : -1;
+}
+
+// One destination has one partial file, so two transfers must never write it at// the same time. They are serialised per destination instead: the loser then
 // fails the no-replace publish instead of corrupting the winner's bytes.
 std::shared_ptr<std::mutex> mutexForDestination(const std::string& destination)
 {
@@ -393,8 +472,8 @@ bool discardPartial(const std::filesystem::path& destination)
 TransferResult transferHttp(const TransferRequest& request, const std::atomic_bool& cancelled,
     const std::function<void(const TransferProgressInfo&)>& progress)
 {
-    if (!isHttpUrl(request.source))
-        return failure(TransferError::InvalidRequest, "source is not an HTTP(S) URL");
+    if (!isSupportedUrl(request.source))
+        return failure(TransferError::InvalidRequest, "source is not an HTTP(S) or FTP URL");
     const std::filesystem::path destination = pathFromUtf8(request.destination);
     if (!destination.is_absolute() || destination.filename().empty())
         return failure(TransferError::Destination, "destination must be an absolute file path");
@@ -440,10 +519,54 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     }
     meta.source = metaSource;
 
+    const std::string scheme = schemeOf(parsedSource.url);
+    const bool isFtp = scheme == "ftp" || scheme == "ftps";
+    if (isFtp) {
+        // FTP has no HEAD: a body-less request issues SIZE, which is what the
+        // resume decision needs. The remote size is also the consistency check:
+        // a changed size means the partial data belongs to an older file.
+        long code = 0;
+        std::string message;
+        const auto remote = ftpRemoteSize(parsedSource.url, username, password, cancelled, code, message);
+        if (remote < 0) {
+            TransferResult result;
+            result.status = TransferStatus::Failed;
+            result.error = ftpErrorClass(code);
+            result.message = message.empty() ? "cannot read the remote file size" : message;
+            result.responseCode = code;
+            return result;
+        }
+        if (offset > 0 && meta.total >= 0 && (remote != meta.total || offset > remote)) {
+            TransferResult result;
+            result.status = TransferStatus::Failed;
+            result.error = TransferError::Http;
+            result.restartRequired = true;
+            result.message = "remote file changed since the partial data was saved";
+            result.received = offset;
+            result.partialBytes = offset;
+            return result;
+        }
+        meta.total = remote;
+        writeMeta(metaPath, meta);
+        if (offset > 0 && offset == remote) {
+            std::string publishMessage;
+            if (!publishNoReplace(partial, destination, publishMessage)) {
+                return failure(TransferError::Destination, std::move(publishMessage));
+            }
+            std::error_code ignored;
+            std::filesystem::remove(metaPath, ignored);
+            TransferResult result;
+            result.status = TransferStatus::Completed;
+            result.error = TransferError::None;
+            result.received = offset;
+            return result;
+        }
+    }
+
     // A fresh transfer may use several ranges when the server advertises them
     // and the resource is big enough. Anything unusual in the probe falls back
     // to the single-stream path below, which is also the resume path.
-    if (offset == 0 && !cancelled.load()) {
+    if (!isFtp && offset == 0 && !cancelled.load()) {
         const auto probe = probeForSegments(parsedSource.url, username, password, cancelled);
         if (probe.ok && probe.ranges && probe.total >= segmentMinimumSize) {
             const int segments = static_cast<int>((std::min)(std::int64_t{4},
@@ -474,7 +597,7 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     };
     set(CURLOPT_URL, parsedSource.url.c_str());
     set(CURLOPT_ERRORBUFFER, errorBuffer.data());
-    set(CURLOPT_PROTOCOLS_STR, "http,https");
+    set(CURLOPT_PROTOCOLS_STR, "http,https,ftp");
     set(CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     set(CURLOPT_FOLLOWLOCATION, 1L);
     set(CURLOPT_MAXREDIRS, 10L);
@@ -502,14 +625,18 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
 
     curl_slist* headers = nullptr;
     if (offset > 0) {
-        const std::string range = std::to_string(offset) + "-";
-        set(CURLOPT_RANGE, range.c_str());
-        std::string validator;
-        if (!meta.etag.empty()) validator = "If-Range: " + meta.etag;
-        else if (!meta.lastModified.empty()) validator = "If-Range: " + meta.lastModified;
-        if (!validator.empty()) {
-            headers = curl_slist_append(headers, validator.c_str());
-            set(CURLOPT_HTTPHEADER, headers);
+        if (isFtp) {
+            set(CURLOPT_RESUME_FROM_LARGE, static_cast<curl_off_t>(offset));
+        } else {
+            const std::string range = std::to_string(offset) + "-";
+            set(CURLOPT_RANGE, range.c_str());
+            std::string validator;
+            if (!meta.etag.empty()) validator = "If-Range: " + meta.etag;
+            else if (!meta.lastModified.empty()) validator = "If-Range: " + meta.lastModified;
+            if (!validator.empty()) {
+                headers = curl_slist_append(headers, validator.c_str());
+                set(CURLOPT_HTTPHEADER, headers);
+            }
         }
     }
     if (optionResult != CURLE_OK) {
@@ -591,11 +718,23 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     }
     if (code != CURLE_OK) {
         output.close();
+        if (isFtp && context.resumeExpected && code == CURLE_FTP_COULDNT_USE_REST) {
+            // The server refuses REST: the partial bytes are still valid for this
+            // resource, so keep them and ask before starting over.
+            result.restartRequired = true;
+            result.error = TransferError::Http;
+            result.message = "resume is not supported by this server";
+            result.received = offset;
+            result.partialBytes = offset;
+            return result;
+        }
         if (code == CURLE_HTTP_RETURNED_ERROR) result.error = TransferError::Http;
+        if (isFtp) result.error = ftpErrorClass(response);
         if (code == CURLE_PEER_FAILED_VERIFICATION || code == CURLE_SSL_CONNECT_ERROR)
             result.error = TransferError::Network;
-        result.message = curlMessage(code, errorBuffer);
-        if (response >= 400) result.message = "HTTP " + std::to_string(response) + ": " + result.message;
+        result.message = isFtp ? ftpMessage(code, response, errorBuffer) : curlMessage(code, errorBuffer);
+        if (!isFtp && response >= 400)
+            result.message = "HTTP " + std::to_string(response) + ": " + result.message;
         result.received = offset + context.received;
         result.partialBytes = result.received;
         dropEmptyPartial();

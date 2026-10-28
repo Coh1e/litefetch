@@ -194,7 +194,7 @@ void batchResultsAndRecordDelete(const std::filesystem::path& root)
     const auto second = root / "batch-second.bin";
     worker.postAdd("http://127.0.0.1:1/first.bin", first.string(), false, 42, 1);
     worker.postAdd("http://127.0.0.1:1/second.bin", second.string(), false, 42, 2);
-    worker.postAdd("ftp://example.org/unsupported.bin", (root / "unsupported.bin").string(),
+    worker.postAdd("ed2k://|file|unsupported.bin|4|0123456789ABCDEF0123456789ABCDEF|/", (root / "unsupported.bin").string(),
         false, 43, 1);
     check(waitFor([&] { return worker.snapshot().addResults.size() >= 3; },
               std::chrono::seconds(5)), "batch results did not reach the UI snapshot");
@@ -239,7 +239,7 @@ void invalidAddReportsError(const std::filesystem::path& root)
     std::string error;
     check(worker.start(error), ("worker start failed: " + error).c_str());
     const auto before = worker.snapshot().lastErrorSequence;
-    worker.postAdd("ftp://example.org/file.bin", (root / "nope.bin").string(), false);
+    worker.postAdd("ed2k://|file|file.bin|4|0123456789ABCDEF0123456789ABCDEF|/", (root / "nope.bin").string(), false);
     check(waitFor([&] { return worker.snapshot().lastErrorSequence > before; }, std::chrono::seconds(5)),
         "add failure did not reach the worker error channel");
     const auto message = worker.snapshot().lastError;

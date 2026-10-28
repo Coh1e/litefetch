@@ -115,6 +115,7 @@ private:
     void toggleStatusBar();
 
     void promptForCredentials(const std::string& taskId);
+    void showProperties();
     void openNewDownload();
     void openBatchAdd(std::string initialText = {});
     void submitBatch(const BatchAddRequest& request, bool showDialog);

@@ -29,7 +29,7 @@ bool httpSource(std::string_view source)
         }
         return true;
     };
-    return startsWith("http://") || startsWith("https://");
+    return startsWith("http://") || startsWith("https://") || startsWith("ftp://");
 }
 
 CommandResult failure(std::string message)
@@ -82,7 +82,8 @@ std::vector<TaskSnapshot> TaskService::snapshots()
 
 CommandResult TaskService::add(const AddTaskCommand& command)
 {
-    if (!httpSource(command.source)) return failure("only HTTP(S) sources are supported by the core boundary");
+    if (!httpSource(command.source))
+        return failure("only HTTP(S) and FTP sources are supported by the core boundary");
     const std::filesystem::path destination = pathFromUtf8(command.destination);
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");

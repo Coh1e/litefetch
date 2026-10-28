@@ -14,8 +14,8 @@
 #include "test_support.h"
 
 #include <commctrl.h>
-#include <gdiplus.h>
 #include <ole2.h>
+#include <gdiplus.h>
 #include <uiautomation.h>
 
 #include <functional>
@@ -209,9 +209,10 @@ void captureWindow(HWND handle, const std::string& name)
     std::filesystem::create_directories(directory, error);
     CLSID encoder{};
     if (printed && pngEncoder(encoder) >= 0) {
-        const Gdiplus::Bitmap image(bitmap, nullptr);
+        Gdiplus::Bitmap image(bitmap, nullptr);
         const auto path = std::filesystem::path(directory) / (name + ".png");
-        image.Save(path.wstring().c_str(), &encoder, nullptr);
+        std::wstring output = path.wstring();
+        image.Save(output.c_str(), &encoder, nullptr);
     }
     DeleteObject(bitmap);
     check(printed != FALSE, "PrintWindow captured the window for evidence");
@@ -387,6 +388,14 @@ void runChecks()
         check(statusText(status, 0).find(L"任务: 4") != std::wstring::npos,
             "status reports the queue total without a filter");
 
+        // A single selection enables the properties command (FTP connection
+        // facts live in that dialog).
+        selectRow(list, 0);
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_REFRESH, 0), 0);
+        check(pumpUntil([&] {
+            const auto state = GetMenuState(GetMenu(handle), ID_TASK_PROPERTIES, MF_BYCOMMAND);
+            return state != static_cast<UINT>(-1) && (state & MF_GRAYED) == 0;
+        }, 3000), "properties is enabled for a single selection");
         // Start the real transfer from the list and wait for the published file.
         selectRow(list, 2);
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);

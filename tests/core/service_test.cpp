@@ -1,3 +1,4 @@
+#include "ftp_fixture.h"
 #include "http_fixture.h"
 #include "task_identity.h"
 #include "task_service.h"
@@ -262,6 +263,132 @@ void cancelSegmentedKeepsPrefix(const std::filesystem::path& root)
         "resume after a paused segmented run did not complete: " + resumed.task.error);
     check(readFile(destination) == body, "resumed file after segmentation is not byte-identical");
     checkNoStaging(root, "segment-cancel.bin");
+}
+
+void ftpTransfers(const std::filesystem::path& root)
+{
+    const auto body = payload(256 * 1024);
+    FtpFixture server(FtpFixture::Options{body});
+    const auto destination = root / "ftp.bin";
+    const auto database = root / "ftp.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "ftp add failed: " + added.error);
+
+    StartTaskCommand start{added.task.id};
+    start.username = "user";
+    start.password = "pass";
+    const auto completed = service.execute(start);
+    require(completed.ok, "ftp start was not committed: " + completed.error);
+    require(completed.task.state == TaskState::Completed,
+        "ftp download did not complete: " + completed.task.error);
+    check(readFile(destination) == body, "ftp download is not byte-identical");
+    checkEqual(static_cast<long long>(completed.task.total), static_cast<long long>(body.size()),
+        "ftp total comes from SIZE");
+
+    // A wrong password is classified, not merged into a generic network error.
+    const auto wrongDestination = root / "ftp-wrong.bin";
+    const auto wrongAdd = service.execute(AddTaskCommand{server.url("/other.bin"),
+        wrongDestination.string()});
+    require(wrongAdd.ok, "ftp add failed: " + wrongAdd.error);
+    StartTaskCommand wrongStart{wrongAdd.task.id};
+    wrongStart.username = "user";
+    wrongStart.password = "nope";
+    const auto denied = service.execute(wrongStart);
+    require(denied.ok, "ftp start was not committed: " + denied.error);
+    require(denied.task.state == TaskState::Failed, "a wrong password did not fail the task");
+    require(denied.task.error.find("530") != std::string::npos,
+        "530 is missing from the reason: " + denied.task.error);
+    check(!std::filesystem::exists(wrongDestination), "failed ftp login published a file");
+
+    // A missing file reports 550 and publishes nothing.
+    FtpFixture::Options missingOptions{body};
+    missingOptions.fileExists = false;
+    FtpFixture missing(missingOptions);
+    const auto missingDestination = root / "ftp-missing.bin";
+    const auto missingAdd = service.execute(AddTaskCommand{missing.url(), missingDestination.string()});
+    require(missingAdd.ok, "ftp add failed: " + missingAdd.error);
+    StartTaskCommand missingStart{missingAdd.task.id};
+    missingStart.username = "user";
+    missingStart.password = "pass";
+    const auto notFound = service.execute(missingStart);
+    require(notFound.ok, "ftp start was not committed: " + notFound.error);
+    require(notFound.task.state == TaskState::Failed, "a missing file did not fail the task");
+    require(notFound.task.error.find("550") != std::string::npos,
+        "550 is missing from the reason: " + notFound.task.error);
+    check(!std::filesystem::exists(missingDestination), "failed ftp transfer published a file");
+}
+
+void ftpResumeAndRestart(const std::filesystem::path& root)
+{
+    const auto body = payload(512 * 1024);
+    FtpFixture::Options options{body, "user", "pass", true, true, std::chrono::milliseconds(10), 8 * 1024};
+    FtpFixture server(options);
+    const auto destination = root / "ftp-resume.bin";
+    const auto database = root / "ftp-resume.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "ftp add failed: " + added.error);
+    StartTaskCommand start{added.task.id};
+    start.username = "user";
+    start.password = "pass";
+
+    std::promise<CommandResult> finished;
+    auto first = finished.get_future();
+    std::jthread worker([&] { finished.set_value(service.execute(start)); });
+    require(waitFor([&] {
+        const auto snapshot = service.snapshot(added.task.id);
+        return snapshot && snapshot->state == TaskState::Running && snapshot->received > 0;
+    }, std::chrono::seconds(20)), "ftp download reported no progress");
+    require(service.execute(PauseTaskCommand{added.task.id}).ok, "ftp pause failed");
+    const auto paused = first.get();
+    worker.join();
+    require(paused.task.state == TaskState::Paused, "ftp pause did not commit");
+    const auto partial = std::filesystem::path(partialPathFor(destination));
+    const auto prefix = std::filesystem::file_size(partial);
+    require(prefix > 0 && prefix < body.size(), "ftp pause kept no usable partial");
+    require(!server.resumeUsed(), "no REST before the first resume; commands: " + server.commandLog());
+
+    const auto resumed = service.execute(start);
+    require(resumed.ok, "ftp resume failed: " + resumed.error);
+    require(resumed.task.state == TaskState::Completed,
+        "ftp resume did not complete: " + resumed.task.error);
+    check(server.resumeUsed(), "the resume did not issue REST");
+    check(readFile(destination) == body, "resumed ftp file is not byte-identical");
+    checkNoStaging(root, "ftp-resume.bin");
+
+    // A server without REST must refuse to append instead of starting over.
+    FtpFixture::Options noRest{body, "user", "pass", false};
+    noRest.chunkDelay = std::chrono::milliseconds(10);
+    noRest.chunk = 8 * 1024;
+    FtpFixture refusing(noRest);
+    const auto refusedDestination = root / "ftp-no-rest.bin";
+    const auto refusedAdd = service.execute(AddTaskCommand{refusing.url(),
+        refusedDestination.string()});
+    require(refusedAdd.ok, "ftp add failed: " + refusedAdd.error);
+    StartTaskCommand refusedStart{refusedAdd.task.id};
+    refusedStart.username = "user";
+    refusedStart.password = "pass";
+    std::promise<CommandResult> refusedFinished;
+    auto refusedFirst = refusedFinished.get_future();
+    std::jthread refusedWorker([&] { refusedFinished.set_value(service.execute(refusedStart)); });
+    require(waitFor([&] {
+        const auto snapshot = service.snapshot(refusedAdd.task.id);
+        return snapshot && snapshot->state == TaskState::Running && snapshot->received > 0;
+    }, std::chrono::seconds(20)), "ftp download reported no progress before pause");
+    require(service.execute(PauseTaskCommand{refusedAdd.task.id}).ok, "ftp pause failed");
+    refusedFirst.get();
+    refusedWorker.join();
+    const auto refusedPartial = std::filesystem::path(partialPathFor(refusedDestination));
+    const auto refusedBytes = std::filesystem::file_size(refusedPartial);
+    const auto refusedResume = service.execute(refusedStart);
+    require(refusedResume.ok, "refused ftp resume was not committed: " + refusedResume.error);
+    require(refusedResume.task.state == TaskState::Paused, "refused ftp resume did not stay paused");
+    checkEqual(std::filesystem::file_size(refusedPartial), static_cast<long long>(refusedBytes),
+        "refused ftp resume wrote into the partial file");
+    check(!std::filesystem::exists(refusedDestination), "refused ftp resume published a file");
 }
 
 void sameDestinationRace(const std::filesystem::path& root)
@@ -570,6 +697,8 @@ int body()
     segmentedTransfer(root.path());
     noRangeFallback(root.path());
     cancelSegmentedKeepsPrefix(root.path());
+    ftpTransfers(root.path());
+    ftpResumeAndRestart(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

@@ -256,8 +256,48 @@ INT_PTR CALLBACK credentialDialogProc(HWND dialog, UINT message, WPARAM wParam, 
         return FALSE;
     }
 }
-} // namespace
+struct PropertyFields {
+    std::wstring name;
+    std::wstring source;
+    std::wstring destination;
+    std::wstring size;
+    std::wstring state;
+    std::wstring protocol;
+    std::wstring connection;
+};
 
+INT_PTR CALLBACK propertiesDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* fields = reinterpret_cast<PropertyFields*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        fields = reinterpret_cast<PropertyFields*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!fields) return FALSE;
+        SetDlgItemTextW(dialog, IDC_PROP_NAME, fields->name.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_SOURCE, fields->source.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_DEST, fields->destination.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_SIZE, fields->size.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_STATE, fields->state.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_PROTOCOL, fields->protocol.c_str());
+        SetDlgItemTextW(dialog, IDC_PROP_CONNECTION, fields->connection.c_str());
+        centerDialog(dialog, GetParent(dialog));
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dialog, IDOK);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+} // namespace
 INT_PTR CALLBACK MainWindow::deleteDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     auto* self = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
@@ -579,7 +619,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
                 return 0;
             }
             if (header->code == NM_DBLCLK) {
-                setNotice("任务属性将在后续版本提供；当前未修改任何任务。");
+                showProperties();
                 return 0;
             }
         }
@@ -636,7 +676,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除文件。");
             return 0;
         case ID_TASK_PROPERTIES:
-            setNotice("任务属性将在后续版本提供；当前未修改任何任务。");
+            showProperties();
             return 0;
         case ID_TOOLS_OPTIONS:
             setNotice("选项界面将在后续版本提供。");
@@ -1258,7 +1298,7 @@ void MainWindow::updateActions()
     enableMenu(ID_TASK_DELETE_FILES, false);
     enableMenu(ID_TASK_OPEN_FILE, interactive && actions.openFile);
     enableMenu(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
-    enableMenu(ID_TASK_PROPERTIES, false);
+    enableMenu(ID_TASK_PROPERTIES, interactive && actions.selectedCount == 1);
     enableMenu(ID_TOOLS_OPTIONS, false);
     enableButton(ID_FILE_NEW, interactive);
     enableButton(ID_TASK_START, interactive && actions.start);
@@ -1783,6 +1823,38 @@ void MainWindow::stopSelected()
     if (count > 0)
         setNotice("已请求停止 " + std::to_string(count)
             + " 个任务；停止后仍可从已下载位置续传");
+}
+
+void MainWindow::showProperties()
+{
+    const auto row = rowForId(focusedId());
+    if (!row) return;
+    PropertyFields fields;
+    fields.name = toWide(row->name);
+    fields.source = toWide(row->address);
+    fields.destination = toWide(row->savePath);
+    fields.size = toWide(row->size);
+    fields.state = toWide(row->status);
+    fields.protocol = toWide(row->protocol);
+
+    // Connection facts come from the task's real protocol: FTP uses a control
+    // connection plus a passive data connection the server opens; HTTP(S) uses
+    // one connection per request, several when segmentation is active.
+    std::string host;
+    const auto scheme = row->address.find("://");
+    if (scheme != std::string::npos) {
+        const auto start = scheme + 3;
+        const auto end = row->address.find_first_of("/?#", start);
+        host = row->address.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    }
+    const bool ftp = row->protocol == "FTP" || row->protocol == "FTPS";
+    const std::string connection = ftp
+        ? "控制连接：" + host + "\n数据连接：被动模式（服务器分配端口）\n认证：本次运行输入，未保存"
+        : "连接：" + host + "\n每个请求一条连接；分段下载时按站点上限并行";
+    fields.connection = toWide(connection);
+
+    DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_PROPERTIES), hwnd_,
+        propertiesDialogProc, reinterpret_cast<LPARAM>(&fields));
 }
 
 void MainWindow::deleteSelected()
