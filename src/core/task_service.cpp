@@ -214,7 +214,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
     TransferResult transferResult;
     try {
         transferResult = transfer_(TransferRequest{task.source, task.destination,
-            command.restartFromZero}, *active->cancelled, progress);
+            command.restartFromZero, command.username, command.password}, *active->cancelled, progress);
     } catch (const std::exception& error) {
         transferResult.status = TransferStatus::Failed;
         transferResult.error = TransferError::Internal;

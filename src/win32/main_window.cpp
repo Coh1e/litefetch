@@ -212,6 +212,49 @@ bool readTextFile(const std::filesystem::path& path, std::string& text)
     text = std::move(bytes);
     return true;
 }
+
+struct CredentialPrompt {
+    std::string username;
+    std::string password;
+};
+
+// The credentials dialog is modal: it runs its own loop and returns the typed
+// values before the caller retries the transfer.
+INT_PTR CALLBACK credentialDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* context = reinterpret_cast<CredentialPrompt*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        context = reinterpret_cast<CredentialPrompt*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        SetDlgItemTextW(dialog, IDC_CRED_HINT,
+            L"服务器要求登录（HTTP 401）。凭据只用于本次运行，不会保存。");
+        centerDialog(dialog, GetParent(dialog));
+        SetFocus(GetDlgItem(dialog, IDC_CRED_USER));
+        return FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            wchar_t buffer[256]{};
+            GetDlgItemTextW(dialog, IDC_CRED_USER, buffer, 256);
+            if (context) context->username = utf8FromUtf16(buffer);
+            GetDlgItemTextW(dialog, IDC_CRED_PASS, buffer, 256);
+            if (context) context->password = utf8FromUtf16(buffer);
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dialog, IDCANCEL);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
 } // namespace
 
 INT_PTR CALLBACK MainWindow::deleteDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
@@ -987,6 +1030,27 @@ void MainWindow::refreshFromWorker()
     syncList();
     updateStatus();
     updateActions();
+
+    // A 401 means the site wants credentials. Ask once per task and retry with
+    // them; they stay in memory for this run only.
+    for (const auto& task : snapshot.tasks) {
+        if (task.state != TaskState::Failed) continue;
+        if (task.error.find("401") == std::string::npos) continue;
+        if (!promptedCredentials_.insert(task.id).second) continue;
+        promptForCredentials(task.id);
+        break;
+    }
+}
+
+void MainWindow::promptForCredentials(const std::string& taskId)
+{
+    CredentialPrompt prompt;
+    if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_CREDENTIALS), hwnd_,
+            credentialDialogProc, reinterpret_cast<LPARAM>(&prompt)) != IDOK)
+        return;
+    if (prompt.username.empty()) return;
+    worker_->postStart(taskId, false, prompt.username, prompt.password);
+    setNotice("已使用输入的凭据重试；凭据仅用于本次运行");
 }
 
 void MainWindow::syncList()

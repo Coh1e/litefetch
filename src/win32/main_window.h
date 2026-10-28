@@ -118,6 +118,7 @@ private:
     void toggleToolbar();
     void toggleStatusBar();
 
+    void promptForCredentials(const std::string& taskId);
     void openNewDownload();
     void openBatchAdd(std::string initialText = {});
     void submitBatch(const BatchAddRequest& request, bool showDialog);
@@ -186,6 +187,7 @@ private:
     std::uint64_t lastAddSequence_ = 0;
     std::uint64_t lastOutcomeSequence_ = 0;
     std::set<std::string, std::less<>> pendingDeleteIds_;
+    std::set<std::string, std::less<>> promptedCredentials_;
     std::vector<std::string> pendingDeleteFailures_;
     std::size_t pendingDeleteTotal_ = 0;
     std::wstring tooltipText_;

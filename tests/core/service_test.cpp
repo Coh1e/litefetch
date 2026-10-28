@@ -110,6 +110,76 @@ void httpFailure(const std::filesystem::path& root)
     require(persisted.has_value() && persisted->state == TaskState::Failed, "failed state is not durable");
 }
 
+void siteAuthentication(const std::filesystem::path& root)
+{
+    const auto body = payload(64 * 1024);
+    HttpFixture::Options options{body};
+    options.requiredAuthorization = "Basic dXNlcjpwYXNz"; // user:pass
+    HttpFixture server(options);
+    const auto destination = root / "auth.bin";
+    const auto database = root / "auth.db";
+    TaskRepository repository(database);
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{server.url(), destination.string()});
+    require(added.ok, "add failed: " + added.error);
+
+    // Without credentials the transfer fails and publishes nothing.
+    const auto anonymous = service.execute(StartTaskCommand{added.task.id});
+    require(anonymous.ok, "anonymous start was not committed: " + anonymous.error);
+    require(anonymous.task.state == TaskState::Failed, "a 401 did not fail the task");
+    require(anonymous.task.error.find("401") != std::string::npos,
+        "the 401 reason is missing: " + anonymous.task.error);
+    check(!std::filesystem::exists(destination), "a 401 published a destination file");
+
+    // The same task succeeds once credentials are supplied for this run.
+    StartTaskCommand withCredentials{added.task.id};
+    withCredentials.username = "user";
+    withCredentials.password = "pass";
+    const auto authorized = service.execute(withCredentials);
+    require(authorized.ok, "authorized start was not committed: " + authorized.error);
+    require(authorized.task.state == TaskState::Completed,
+        "authorized transfer did not complete: " + authorized.task.error);
+    check(readFile(destination) == body, "authorized download bytes differ from the source");
+    checkEqual(server.lastAuthorization(), "Basic dXNlcjpwYXNz", "the fixture saw the basic credentials");
+
+    // Credentials are not persisted with the task.
+    require(authorized.task.source.find("pass") == std::string::npos, "password leaked into the row");
+    require(authorized.task.error.empty(), "a completed task keeps an error");
+
+    // A redirect to another host must not carry the Authorization header.
+    HttpFixture other(HttpFixture::Options{body});
+    HttpFixture::Options redirecting{body};
+    // A different host name (not just another port) is what makes curl strip
+    // the Authorization header on redirect.
+    redirecting.redirectTo = "http://localhost:" + std::to_string(other.port()) + "/payload.bin";
+    HttpFixture redirector(redirecting);
+    const auto redirectedDestination = root / "redirected.bin";
+    const auto redirectAdd = service.execute(AddTaskCommand{redirector.url(),
+        redirectedDestination.string()});
+    require(redirectAdd.ok, "redirect task add failed: " + redirectAdd.error);
+    StartTaskCommand redirectStart{redirectAdd.task.id};
+    redirectStart.username = "user";
+    redirectStart.password = "pass";
+    const auto redirected = service.execute(redirectStart);
+    require(redirected.ok, "redirect start was not committed: " + redirected.error);
+    require(redirected.task.state == TaskState::Completed,
+        "redirected transfer did not complete: " + redirected.task.error);
+    require(other.lastAuthorization().empty(),
+        "credentials were forwarded to a different host after a redirect");
+
+    // An https URL against a plain-HTTP port must fail: verification is not
+    // turned off to make such a request succeed.
+    const auto secure = root / "secure.bin";
+    auto secureUrl = server.url();
+    secureUrl.replace(0, 4, "https");
+    const auto secureAdd = service.execute(AddTaskCommand{secureUrl, secure.string()});
+    require(secureAdd.ok, "https task add failed: " + secureAdd.error);
+    const auto secureStart = service.execute(StartTaskCommand{secureAdd.task.id});
+    require(secureStart.ok, "https start was not committed: " + secureStart.error);
+    require(secureStart.task.state == TaskState::Failed, "a broken TLS peer did not fail the task");
+    check(!std::filesystem::exists(secure), "a failed TLS transfer published a file");
+}
+
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -412,6 +482,7 @@ int body()
 {
     TempDir root;
     completeRoundTrip(root.path());
+    siteAuthentication(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

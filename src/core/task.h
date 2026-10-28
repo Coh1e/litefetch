@@ -43,6 +43,10 @@ struct StartTaskCommand {
     // The user confirmed starting over after the server refused to resume or
     // the resource changed. Otherwise the stored partial bytes are kept.
     bool restartFromZero = false;
+    // Site credentials for this start only. They are not stored with the task;
+    // the "remember" feature is a later ticket.
+    std::string username;
+    std::string password;
 };
 // Stops a running transfer but keeps the partial data and marks the task
 // paused; Start resumes from the stored offset.

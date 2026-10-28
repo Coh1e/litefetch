@@ -70,12 +70,15 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     condition_.notify_all();
 }
 
-void TaskWorker::postStart(std::string taskId, bool restartFromZero)
+void TaskWorker::postStart(std::string taskId, bool restartFromZero, std::string username,
+    std::string password)
 {
     Command command;
     command.type = CommandType::Start;
     command.taskId = std::move(taskId);
     command.restartFromZero = restartFromZero;
+    command.username = std::move(username);
+    command.password = std::move(password);
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -276,7 +279,7 @@ void TaskWorker::execute(const Command& command)
             break;
         }
         case CommandType::Start:
-            launchStart(command.taskId, command.restartFromZero);
+            launchStart(command.taskId, command.restartFromZero, command.username, command.password);
             break;
         case CommandType::Pause: {
             const auto result = service_->execute(PauseTaskCommand{command.taskId});
@@ -324,7 +327,8 @@ void TaskWorker::execute(const Command& command)
     }
 }
 
-void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero)
+void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
+    std::string username, std::string password)
 {
     if (!service_) return;
     for (const auto& job : jobs_) {
@@ -335,10 +339,11 @@ void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero)
     job.taskId = taskId;
     job.finished = finished;
     try {
-        job.thread = std::thread([this, taskId, restartFromZero, finished] {
+        job.thread = std::thread([this, taskId, restartFromZero, username, password, finished] {
             SetThreadDescription(GetCurrentThread(), L"litefetch-transfer");
             try {
-                const auto result = service_->execute(StartTaskCommand{taskId, restartFromZero});
+                const auto result = service_->execute(StartTaskCommand{taskId, restartFromZero,
+                    username, password});
                 if (!result.ok && !result.error.empty()) publishError("任务失败: " + result.error);
             } catch (const std::exception& error) {
                 publishError(std::string("任务失败: ") + error.what());

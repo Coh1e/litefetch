@@ -10,6 +10,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <mutex>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,11 @@ public:
         // a server that ignores the request and sends the whole resource.
         bool supportsRange = true;
         std::string etag = "\"fixture-v1\"";
+        // When set, a request without exactly this Authorization header gets a
+        // 401 with a Basic challenge.
+        std::string requiredAuthorization;
+        // When set, every request is answered with a redirect to this URL.
+        std::string redirectTo;
     };
 
     explicit HttpFixture(Options options) : options_(std::move(options))
@@ -69,6 +75,24 @@ public:
     std::string url(const std::string& path = "/payload.bin") const
     {
         return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+    unsigned short port() const { return port_; }
+
+    // The last request seen, for credential-boundary assertions.
+    std::string lastAuthorization()
+    {
+        std::lock_guard lock(stateMutex_);
+        return lastAuthorization_;
+    }
+    std::string lastPath()
+    {
+        std::lock_guard lock(stateMutex_);
+        return lastPath_;
+    }
+    int requestCount()
+    {
+        std::lock_guard lock(stateMutex_);
+        return requests_;
     }
 
     void stop()
@@ -121,6 +145,28 @@ private:
             while (!value.empty() && value.front() == ' ') value.erase(value.begin());
             return value;
         };
+
+        {
+            std::lock_guard lock(stateMutex_);
+            lastAuthorization_ = header("Authorization");
+            lastPath_ = path;
+            ++requests_;
+        }
+
+        if (!options_.redirectTo.empty()) {
+            const std::string response = "HTTP/1.1 302 Found\r\nLocation: " + options_.redirectTo
+                + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            sendAll(client, response.data(), response.size());
+            return;
+        }
+
+        if (!options_.requiredAuthorization.empty()
+            && header("Authorization") != options_.requiredAuthorization) {
+            const std::string response = "HTTP/1.1 401 Unauthorized\r\n"
+                "WWW-Authenticate: Basic realm=\"fixture\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            sendAll(client, response.data(), response.size());
+            return;
+        }
 
         if (path == "/missing" || options_.status != 200) {
             const int status = path == "/missing" ? 404 : options_.status;
@@ -193,6 +239,10 @@ private:
     }
 
     Options options_;
+    std::mutex stateMutex_;
+    std::string lastAuthorization_;
+    std::string lastPath_;
+    int requests_ = 0;
     std::atomic<SOCKET> listener_{INVALID_SOCKET};
     std::atomic_bool stopping_{false};
     unsigned short port_ = 0;

@@ -17,6 +17,10 @@ struct TransferRequest {
     // The user confirmed starting over after the server refused to resume or
     // the resource changed. Without it a refused resume keeps the bytes on disk.
     bool restartFromZero = false;
+    // Site credentials for this transfer only. They are never persisted, never
+    // written to the resume sidecar and never sent to another host.
+    std::string username;
+    std::string password;
 };
 
 struct TransferProgressInfo {

@@ -65,6 +65,7 @@
 
 // Batch add dialog
 #define IDD_DELETE_TASK 303
+#define IDD_CREDENTIALS 305
 #define IDD_BATCH_RESULT 304
 #define IDD_BATCH_ADD 302
 #define IDC_BATCH_URLS 2110
@@ -75,6 +76,9 @@
 #define IDC_BATCH_ONLY_VALID 2115
 #define IDC_BATCH_AUTO_START 2116
 #define IDC_DELETE_MESSAGE 2120
+#define IDC_CRED_HINT 2140
+#define IDC_CRED_USER 2141
+#define IDC_CRED_PASS 2142
 #define IDC_BATCH_RESULT_LIST 2130
 
 // Timers and internal messages

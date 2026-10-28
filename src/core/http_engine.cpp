@@ -310,6 +310,44 @@ std::string curlMessage(CURLcode code, const std::array<char, CURL_ERROR_SIZE>& 
     return curl_easy_strerror(code);
 }
 
+// Credentials embedded in a URL are split off before curl sees the URL, so no
+// error message, redirect or sidecar file can echo them back.
+struct ParsedUrl {
+    std::string url;
+    std::string user;
+    std::string password;
+};
+
+ParsedUrl splitCredentials(const std::string& url)
+{
+    ParsedUrl parsed;
+    parsed.url = url;
+    CURLU* handle = curl_url();
+    if (!handle) return parsed;
+    if (curl_url_set(handle, CURLUPART_URL, url.c_str(), 0) == CURLUE_OK) {
+        char* user = nullptr;
+        char* password = nullptr;
+        if (curl_url_get(handle, CURLUPART_USER, &user, 0) == CURLUE_OK && user) {
+            parsed.user = user;
+            curl_free(user);
+        }
+        if (curl_url_get(handle, CURLUPART_PASSWORD, &password, 0) == CURLUE_OK && password) {
+            parsed.password = password;
+            curl_free(password);
+        }
+        if (curl_url_set(handle, CURLUPART_USER, nullptr, 0) == CURLUE_OK
+            && curl_url_set(handle, CURLUPART_PASSWORD, nullptr, 0) == CURLUE_OK) {
+            char* without = nullptr;
+            if (curl_url_get(handle, CURLUPART_URL, &without, 0) == CURLUE_OK && without) {
+                parsed.url = without;
+                curl_free(without);
+            }
+        }
+    }
+    curl_url_cleanup(handle);
+    return parsed;
+}
+
 // One destination has one partial file, so two transfers must never write it at
 // the same time. They are serialised per destination instead: the loser then
 // fails the no-replace publish instead of corrupting the winner's bytes.
@@ -383,15 +421,21 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     const auto metaPath = partialMetaPathFor(destination);
     if (request.restartFromZero) discardPartial(destination);
 
+    // Credentials are in-memory only: the sidecar keeps the source without
+    // userinfo, so a shared partial file never stores a password.
+    const auto parsedSource = splitCredentials(request.source);
+    const std::string metaSource = parsedSource.url;
+    const std::string username = request.username.empty() ? parsedSource.user : request.username;
+    const std::string password = request.username.empty() ? parsedSource.password : request.password;
     PartialMeta meta;
-    const bool haveMeta = readMeta(metaPath, meta) && meta.source == request.source;
+    const bool haveMeta = readMeta(metaPath, meta) && meta.source == metaSource;
     std::int64_t offset = haveMeta ? fileSize(partial) : 0;
     if (!haveMeta) {
         std::error_code ignored;
         std::filesystem::remove(partial, ignored);
         offset = 0;
     }
-    meta.source = request.source;
+    meta.source = metaSource;
 
     std::ofstream output(partial, std::ios::binary | (offset > 0 ? std::ios::app : std::ios::trunc));
     if (!output) return failure(TransferError::Destination, "cannot create the partial file");
@@ -411,7 +455,7 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     auto set = [&](CURLoption option, auto value) {
         if (optionResult == CURLE_OK) optionResult = curl_easy_setopt(handle.get(), option, value);
     };
-    set(CURLOPT_URL, request.source.c_str());
+    set(CURLOPT_URL, parsedSource.url.c_str());
     set(CURLOPT_ERRORBUFFER, errorBuffer.data());
     set(CURLOPT_PROTOCOLS_STR, "http,https");
     set(CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
@@ -424,6 +468,13 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     set(CURLOPT_LOW_SPEED_TIME, 60L);
     set(CURLOPT_PROXY, "");
     set(CURLOPT_USERAGENT, "LiteFetch/0.1 (core)");
+    // Basic auth for this transfer only. Redirects keep curl's default: the
+    // Authorization header is dropped when the host changes.
+    if (!username.empty()) {
+        set(CURLOPT_HTTPAUTH, static_cast<long>(CURLAUTH_BASIC));
+        set(CURLOPT_USERNAME, username.c_str());
+        set(CURLOPT_PASSWORD, password.c_str());
+    }
     set(CURLOPT_WRITEFUNCTION, &writeData);
     set(CURLOPT_WRITEDATA, &context);
     set(CURLOPT_HEADERFUNCTION, &readHeader);

@@ -70,7 +70,8 @@ public:
     bool start(std::string& error);
     void postAdd(std::string source, std::string destination, bool autoStart,
         std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false);
-    void postStart(std::string taskId, bool restartFromZero = false);
+    void postStart(std::string taskId, bool restartFromZero = false,
+        std::string username = {}, std::string password = {});
     void postPause(std::string taskId);
     void postCancel(std::string taskId);
     void postDelete(std::string taskId);
@@ -99,6 +100,8 @@ private:
         bool autoStart = false;
         bool allowDuplicate = false;
         bool restartFromZero = false;
+        std::string username;
+        std::string password;
         std::uint64_t batchId = 0;
         int line = 0;
     };
@@ -110,7 +113,8 @@ private:
 
     void controlLoop();
     void execute(const Command& command);
-    void launchStart(const std::string& taskId, bool restartFromZero = false);
+    void launchStart(const std::string& taskId, bool restartFromZero = false,
+        std::string username = {}, std::string password = {});
     void reapFinished();
     void reload();
     void cancelAll();
