@@ -746,6 +746,21 @@ void runChecks()
         check(pumpUntil([&] { return window.completedBatchesForTest() > 0; }, 5000),
             ("the worker reported the end of the batch: "
                 + std::to_string(window.completedBatchesForTest())).c_str());
+        // The window itself must go away. pumpUntil stops pumping at the first
+        // WM_QUIT and earlier windows leave one behind, so this loop keeps going.
+        bool vanished = false;
+        MSG message{};
+        const ULONGLONG started = GetTickCount64();
+        while (!vanished && GetTickCount64() - started < 30000) {
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message == WM_QUIT) continue;
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            vanished = IsWindow(handle) == FALSE;
+            Sleep(1);
+        }
+        check(vanished, "the window closed itself after the last transfer");
     }
 
 }

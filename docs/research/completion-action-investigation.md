@@ -138,3 +138,21 @@ the worker reported the end of the batch              → 通过
 `FAIL: the window holds the saved completion action: 0`。恢复后绿。
 
 同时保留了上一轮修的竞态（`jobs_.push_back` 与 `batchActive_` 同锁）。
+## 2026-10-29 第七轮：#25 完成动作链路打通并由用例锁住
+
+在设置持久化修好之后，补上最后一段断言："批次结束后窗口自行销毁"（以 `IsWindow(handle) == FALSE` 为准，
+不用残留的 `WM_QUIT`）。
+
+```
+the action is stored                                  → 通过
+the window holds the saved completion action: 2       → 通过
+the task completes                                    → 通过
+the worker reported the end of the batch              → 通过
+the window closed itself after the last transfer      → 通过
+```
+
+**有牙检查**：把 `main_window.cpp` 里 `completionAction_ == 2` 分支的 `PostMessageW(WM_CLOSE)` 去掉，
+用例立刻红（`the window closed itself after the last transfer`，50.6 s 超时）；恢复后绿（20.7 s）。
+
+至此 #25 里"完成后关闭程序"这条链路是**被测试锁住的行为**，
+剩下只有"完成后打开文件夹"（会拉起资源管理器，无法在进程内断言）与人眼项。
