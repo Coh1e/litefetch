@@ -50,6 +50,7 @@
 // New download dialog
 #define IDD_NEW_DOWNLOAD 300
 #define IDC_URL 2001
+#define IDC_CHECKSUM 2009
 #define IDC_URL_HINT 2002
 #define IDC_SAVE_DIR 2003
 #define IDC_BROWSE 2004

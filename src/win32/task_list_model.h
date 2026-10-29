@@ -44,6 +44,8 @@ struct TaskRow {
     std::vector<std::string> trackers;
     bool torrentPrivate = false;
     std::int64_t uploadedBytes = 0;
+    std::string sha256;
+    bool verified = false;
     int seedMode = 0;
     int seedRatioMilli = 1000;
     int seedMinutes = 30;

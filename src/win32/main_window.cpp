@@ -2225,6 +2225,8 @@ void MainWindow::showProperties()
         state.name = toWide(row->name);
         state.identity = toWide(row->id.substr(0, 16)) + L"…";
         state.state = toWide(row->status);
+        if (!row->sha256.empty())
+            state.state += row->verified ? L"（已校验）" : L"（校验值未通过或尚未校验）";
         state.size = toWide(row->size);
         state.savePath = toWide(row->savePath);
         state.privateText = row->torrentPrivate ? L"是（不可修改追踪器）" : L"否";
@@ -2269,6 +2271,9 @@ void MainWindow::showProperties()
     fields.destination = toWide(row->savePath);
     fields.size = toWide(row->size);
     fields.state = toWide(row->status);
+    if (!row->sha256.empty()) {
+        fields.state += row->verified ? L"（已校验）" : L"（校验值未通过或尚未校验）";
+    }
     fields.protocol = toWide(row->protocol);
 
     // Connection facts come from the task's real protocol: FTP uses a control

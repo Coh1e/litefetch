@@ -114,6 +114,29 @@ bool accept(HWND dialog, DialogContext& context)
         break;
     }
 
+    // The checksum is optional; when present it must look like a SHA-256 so a
+    // typo is caught before the download starts.
+    std::string checksum;
+    {
+        const auto checksumText = windowText(GetDlgItem(dialog, IDC_CHECKSUM));
+        checksum = utf8FromUtf16(checksumText);
+        if (!checksum.empty()) {
+            bool hex = checksum.size() == 64;
+            for (const char c : checksum) {
+                const bool digit = c >= '0' && c <= '9';
+                const bool lower = c >= 'a' && c <= 'f';
+                const bool upper = c >= 'A' && c <= 'F';
+                if (!digit && !lower && !upper) hex = false;
+            }
+            if (!hex) {
+                MessageBoxW(dialog, L"SHA-256 必须是 64 个十六进制字符。", L"新建下载",
+                    MB_OK | MB_ICONWARNING);
+                SetFocus(GetDlgItem(dialog, IDC_CHECKSUM));
+                return false;
+            }
+        }
+    }
+
     const std::wstring directoryText = windowText(GetDlgItem(dialog, IDC_SAVE_DIR));
     if (directoryText.empty()) {
         MessageBoxW(dialog, L"请选择保存文件夹。", L"新建下载", MB_OK | MB_ICONWARNING);
@@ -153,6 +176,7 @@ bool accept(HWND dialog, DialogContext& context)
 
     context.result = NewDownloadRequest{input.source, directory, input.suggestedFileName,
         IsDlgButtonChecked(dialog, IDC_AUTO_START) == BST_CHECKED};
+    context.result->sha256 = checksum;
     return true;
 }
 

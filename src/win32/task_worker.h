@@ -76,7 +76,8 @@ public:
     void postAdd(std::string source, std::string destination, bool autoStart,
         std::uint64_t batchId = 0, int line = 0, bool allowDuplicate = false,
         std::vector<int> files = {}, std::string identity = {},
-        std::vector<TorrentFileInfo> torrentFiles = {}, bool torrentPrivate = false);
+        std::vector<TorrentFileInfo> torrentFiles = {}, bool torrentPrivate = false,
+        std::string sha256 = {});
     void postStart(std::string taskId, bool restartFromZero = false,
         std::string username = {}, std::string password = {}, bool forceVerify = false);
     void postPause(std::string taskId);
@@ -123,6 +124,7 @@ private:
         std::vector<int> priorities;
         std::vector<std::string> trackers;
         bool torrentPrivate = false;
+        std::string sha256;
         int seedMode = 0;
         int seedRatioMilli = 1000;
         int seedMinutes = 30;

@@ -105,7 +105,8 @@ bool TaskWorker::start(std::string& error)
 
 void TaskWorker::postAdd(std::string source, std::string destination, bool autoStart,
     std::uint64_t batchId, int line, bool allowDuplicate, std::vector<int> files,
-    std::string identity, std::vector<TorrentFileInfo> torrentFiles, bool torrentPrivate)
+    std::string identity, std::vector<TorrentFileInfo> torrentFiles, bool torrentPrivate,
+    std::string sha256)
 {
     Command command;
     command.type = CommandType::Add;
@@ -119,6 +120,7 @@ void TaskWorker::postAdd(std::string source, std::string destination, bool autoS
     command.identity = std::move(identity);
     command.torrentFiles = std::move(torrentFiles);
     command.torrentPrivate = torrentPrivate;
+    command.sha256 = std::move(sha256);
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -376,6 +378,7 @@ void TaskWorker::execute(const Command& command)
             add.identity = command.identity;
             add.torrentFiles = command.torrentFiles;
             add.torrentPrivate = command.torrentPrivate;
+            add.sha256 = command.sha256;
             const auto result = service_->execute(add);
             AddResult addResult;
             addResult.batchId = command.batchId;

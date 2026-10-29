@@ -18,6 +18,8 @@ struct NewDownloadRequest {
     // text is carried over unchanged; declining never creates tasks.
     bool switchToBatch = false;
     std::string batchText;
+    // Optional SHA-256 the finished file must match (hex, case insensitive).
+    std::string sha256;
 };
 
 // Native modal dialog. Returns nothing when the user cancels. Only the
