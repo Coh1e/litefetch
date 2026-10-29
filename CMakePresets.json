@@ -38,6 +38,15 @@
         "VCPKG_INSTALLED_DIR": "${sourceDir}/.deps/installed-core",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/.deps/vcpkg/scripts/buildsystems/vcpkg.cmake"
       }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-core",
+      "binaryDir": "${sourceDir}/out/build/windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITEFETCH_BUILD_QT_LEGACY": "OFF"
+      }
     }
   ]
 }
