@@ -203,6 +203,51 @@ void pipeFailsWithoutAServer()
     check(answer.empty(), "no answer without a server");
     check(!error.empty(), "the failure is explained");
 }
+
+// The host starts the application when nobody is listening, because a browser
+// extension cannot: this is the difference between "nothing happened" and the
+// downloader opening itself.
+void pipeStartingTheApplicationRetries()
+{
+    const auto pipeName = defaultPipeName() + "-start-test";
+    const auto fullName = L"\\\\.\\pipe\\" + std::wstring(pipeName.begin(), pipeName.end());
+    std::thread server;
+    bool started = false;
+    const auto startApplication = [&] {
+        started = true;
+        server = std::thread([&] {
+            HANDLE pipe = CreateNamedPipeW(fullName.c_str(), PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+            if (pipe == INVALID_HANDLE_VALUE) return;
+            if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) {
+                CloseHandle(pipe);
+                return;
+            }
+            char header[4]{};
+            DWORD read = 0;
+            if (ReadFile(pipe, header, 4, &read, nullptr) && read == 4) {
+                const auto size = static_cast<std::size_t>(static_cast<unsigned char>(header[0]))
+                    | (static_cast<std::size_t>(static_cast<unsigned char>(header[1])) << 8)
+                    | (static_cast<std::size_t>(static_cast<unsigned char>(header[2])) << 16)
+                    | (static_cast<std::size_t>(static_cast<unsigned char>(header[3])) << 24);
+                std::string payload(size, '\0');
+                DWORD got = 0;
+                ReadFile(pipe, payload.data(), static_cast<DWORD>(size), &got, nullptr);
+                const auto answer = frameMessage(R"({"version":1,"ok":true})");
+                DWORD written = 0;
+                WriteFile(pipe, answer.data(), static_cast<DWORD>(answer.size()), &written, nullptr);
+            }
+            CloseHandle(pipe);
+        });
+    };
+    std::string error;
+    const auto answer = pipeRoundTripStarting(pipeName, R"({"id":7,"method":"ping"})", 1000,
+        startApplication, 30, 50, &error);
+    if (server.joinable()) server.join();
+    check(started, "the application is started when nobody answers");
+    check(answer.find("\"ok\":true") != std::string::npos,
+        ("the retry reaches the started application: " + error).c_str());
+}
 } // namespace
 
 int main()
@@ -215,6 +260,7 @@ int main()
         aShortFrameIsReported();
         pipeCarriesOneRequestAndAnswer();
         pipeFailsWithoutAServer();
+        pipeStartingTheApplicationRetries();
         return 0;
     });
 }

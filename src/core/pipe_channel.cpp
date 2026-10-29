@@ -94,4 +94,26 @@ std::string pipeRoundTrip(const std::string& pipeName, const std::string& reques
     return answer;
 }
 
+std::string pipeRoundTripStarting(const std::string& pipeName, const std::string& request,
+    int timeoutMillis, const std::function<void()>& startApplication,
+    int attempts, int delayMillis, std::string* error)
+{
+    std::string reason;
+    // The first try uses a short budget: when nobody is listening there is no
+    // point waiting out the full timeout before starting the application.
+    auto answer = pipeRoundTrip(pipeName, request, 300, reason);
+    if (!answer.empty() || !startApplication) {
+        if (error) *error = reason;
+        return answer;
+    }
+    startApplication();
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        Sleep(static_cast<DWORD>(delayMillis));
+        answer = pipeRoundTrip(pipeName, request, 300, reason);
+        if (!answer.empty()) return answer;
+    }
+    if (error) *error = reason.empty() ? "the application did not start" : reason;
+    return {};
+}
+
 } // namespace litefetch::browser

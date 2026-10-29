@@ -12,6 +12,38 @@
 #include <iostream>
 #include <string>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+namespace {
+// Starts the downloader that shipped beside this host. No waiting: the caller
+// retries the channel while the application comes up.
+void startApplicationBesideThisHost()
+{
+    if (GetEnvironmentVariableA("LITEFETCH_NO_AUTOSTART", nullptr, 0) > 0) return;
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return;
+    std::wstring executable(path, length);
+    const auto slash = executable.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return;
+    const auto application = executable.substr(0, slash + 1) + L"litefetch-win32.exe";
+    if (GetFileAttributesW(application.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    std::wstring command = L"\"" + application + L"\"";
+    if (CreateProcessW(application.c_str(), command.data(), nullptr, nullptr, FALSE,
+            DETACHED_PROCESS, nullptr, nullptr, &startup, &process)) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+}
+} // namespace
+
 int wmain(int argc, wchar_t** argv)
 {
     // The frame is binary (a 4 byte little endian length), so the standard
@@ -27,7 +59,11 @@ int wmain(int argc, wchar_t** argv)
     const auto pipeName = litefetch::browser::defaultPipeName();
     const auto channel = [pipeName](const std::string& request) {
         std::string error;
-        const auto answer = litefetch::browser::pipeRoundTrip(pipeName, request, 5000, error);
+        // The browser starts this host, and this host starts the downloader: the
+        // extension has no way to launch a program, and telling the user to open
+        // the application first is how "nothing happened" feels.
+        const auto answer = litefetch::browser::pipeRoundTripStarting(pipeName, request, 5000,
+            [] { startApplicationBesideThisHost(); });
         if (answer.empty()) throw std::runtime_error(error.empty() ? "no answer" : error);
         return answer;
     };
