@@ -16,6 +16,7 @@
 #include "http_fixture.h"
 #include "resource.h"
 #include "task_service.h"
+#include "settings.h"
 #include "task_store.h"
 #include "test_support.h"
 #include "text_utf8.h"
