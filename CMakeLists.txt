@@ -36,6 +36,7 @@ add_library(litefetch-core STATIC
     src/core/native_host_loop.cpp src/core/native_host_loop.h
     src/core/pipe_channel.cpp src/core/pipe_channel.h
     src/core/browser_bridge.cpp src/core/browser_bridge.h
+    src/core/browser_pipe_server.cpp src/core/browser_pipe_server.h
     src/core/credentials.cpp src/core/credentials.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/win32/options_dialog.cpp src/win32/options_dialog.h

@@ -1,6 +1,8 @@
 // The browser handoff protocol against a real task service: prepare, query,
 // commit and abort, including the lease rules.
 #include "browser_bridge.h"
+#include "browser_pipe_server.h"
+#include "pipe_channel.h"
 #include "native_frame.h"
 #include "test_support.h"
 
@@ -130,7 +132,37 @@ void anExpiredLeaseIsRefused(const std::filesystem::path& root)
     check(!refused.boolOr("ok", true), "committing an expired lease is refused");
 }
 
-void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
+void theServerAnswersOverARealPipe(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "bridge-pipe.db");
+    TaskService service(repository);
+    BrowserBridge bridge(service);
+    BrowserPipeServer server("litefetch-bridge-test");
+    std::string error;
+    check(server.start(bridge, error), ("the server did not start: " + error).c_str());
+
+    const auto destination = (root / "piped.bin").string();
+    std::string channelError;
+    const auto raw = pipeRoundTrip("litefetch-bridge-test",
+        request(11, "prepare", "req-pipe", "https://example.test/piped.bin", destination),
+        5000, channelError);
+    check(channelError.empty(), ("the channel failed: " + channelError).c_str());
+    const auto prepared = answer(raw);
+    check(prepared.boolOr("ok", false), "the server answers over the pipe");
+    checkEqual(static_cast<long long>(prepared.numberOr("id", 0)), 11LL, "the id crosses the pipe");
+    const auto taskId = prepared.find("result")->stringOr("taskId", "");
+    check(!taskId.empty(), "the prepared task is named");
+    check(service.snapshot(taskId).has_value(), "the task exists in the service");
+
+    // A second connection works too: the server keeps listening.
+    const auto again = answer(pipeRoundTrip("litefetch-bridge-test",
+        request(12, "query", "req-pipe"), 5000, channelError));
+    check(again.boolOr("ok", false), "the server accepts a second connection");
+    checkEqual(again.find("result")->stringOr("state", ""), std::string("prepared"),
+        "the lease survives between connections");
+
+    server.stop();
+}void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-bad.db");
     TaskService service(repository);
@@ -155,6 +187,7 @@ int main()
         commitAndAbortFollowTheRules(root.path());
         anExpiredLeaseIsRefused(root.path());
         malformedRequestsAreAnsweredNotThrown(root.path());
+        theServerAnswersOverARealPipe(root.path());
         return 0;
     });
 }
