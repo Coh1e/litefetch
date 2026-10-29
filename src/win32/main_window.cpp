@@ -1,3 +1,4 @@
+#include <thread>
 #include "main_window.h"
 
 #include "batch_dialog.h"
@@ -1171,7 +1172,7 @@ bool MainWindow::createControls()
 
 void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
 {
-    if (!trayVisible_) return; // the shell is not reachable in this session
+    if (!trayVisible_.load()) return; // the shell is not reachable in this session
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
     data.hWnd = hwnd_;
@@ -1189,25 +1190,33 @@ void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
 
 void MainWindow::addTrayIcon()
 {
-    if (trayVisible_ || !hwnd_) return;
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = hwnd_;
-    data.uID = trayIconId;
-    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    data.uCallbackMessage = appTrayMessage;
-    data.hIcon = largeIcon_ ? largeIcon_ : LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
-    // The tooltip keeps the task count so the window can stay minimised.
-    std::wstring tip = L"LiteFetch";
+    if (trayVisible_.load() || !hwnd_) return;
+    // Shell_NotifyIcon can spend seconds looking for a notification area that is
+    // not there, and it must never do that on the UI thread: the window would
+    // stop answering commands, so a paused transfer would keep running.
+    const HWND window = hwnd_;
+    const HICON icon = largeIcon_ ? largeIcon_
+        : LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
+    std::string tooltip = "LiteFetch";
     const auto count = model_.rows().size();
-    if (count > 0) tip += L" - " + std::to_wstring(count) + L" 个任务";
-    wcsncpy_s(data.szTip, tip.c_str(), _TRUNCATE);
-    trayVisible_ = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
+    if (count > 0) tooltip += " - " + std::to_string(count) + " 个任务";
+    const auto wideTip = toWide(tooltip);
+    std::thread([this, window, icon, wideTip] {
+        NOTIFYICONDATAW data{};
+        data.cbSize = sizeof(data);
+        data.hWnd = window;
+        data.uID = trayIconId;
+        data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        data.uCallbackMessage = appTrayMessage;
+        data.hIcon = icon;
+        wcsncpy_s(data.szTip, wideTip.c_str(), _TRUNCATE);
+        trayVisible_.store(Shell_NotifyIconW(NIM_ADD, &data) == TRUE);
+    }).detach();
 }
 
 void MainWindow::removeTrayIcon()
 {
-    if (!trayVisible_) return;
+    if (!trayVisible_.load()) return;
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
     data.hWnd = hwnd_;

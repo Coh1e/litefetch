@@ -193,7 +193,7 @@ private:
     HMENU menu_ = nullptr;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr;
-    bool trayVisible_ = false;
+    std::atomic_bool trayVisible_{false};
     HICON largeIcon_ = nullptr;
     HICON smallIcon_ = nullptr;
     AppOptions options_;
