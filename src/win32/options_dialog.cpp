@@ -1,6 +1,7 @@
 #include "options_dialog.h"
 
 #include "resource.h"
+#include "schedule.h"
 #include "text_utf8.h"
 
 #include <cstdlib>
@@ -33,6 +34,30 @@ std::string windowTextUtf8(HWND dialog, int id)
     return utf8FromUtf16(buffer);
 }
 
+// Every non-empty line must parse; the first bad one is reported with its
+// number so the user can fix it instead of losing the whole list.
+template <typename Validator>
+bool validateLines(const std::string& text, Validator valid, HWND dialog, const wchar_t* title)
+{
+    std::size_t start = 0;
+    int lineNumber = 0;
+    while (start <= text.size()) {
+        auto end = text.find('\n', start);
+        auto line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        ++lineNumber;
+        if (!line.empty() && !valid(line)) {
+            const auto message = std::wstring(title) + L" 第 " + std::to_wstring(lineNumber)
+                + L" 行格式不正确。";
+            MessageBoxW(dialog, message.c_str(), L"选项", MB_OK | MB_ICONWARNING);
+            return false;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return true;
+}
+
 INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     auto* context = reinterpret_cast<OptionsContext*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
@@ -59,6 +84,10 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
             static_cast<UINT>(context->current.maxConcurrentDownloads), FALSE);
         CheckDlgButton(dialog, IDC_OPT_CATEGORY,
             context->current.saveByCategory ? BST_CHECKED : BST_UNCHECKED);
+        SetDlgItemTextW(dialog, IDC_OPT_BANDS,
+            wideOf(formatRateBands(context->current.rateBands)).c_str());
+        SetDlgItemTextW(dialog, IDC_OPT_SCHEDULE,
+            wideOf(formatScheduledActions(context->current.scheduledActions)).c_str());
         return TRUE;
     }
     case WM_COMMAND:
@@ -79,6 +108,24 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
                     IsDlgButtonChecked(dialog, IDC_OPT_CATEGORY) == BST_CHECKED;
                 settings.renameOnConflict =
                     IsDlgButtonChecked(dialog, IDC_OPT_RENAME) == BST_CHECKED;
+                // Time bands and the schedule are typed text; a bad line is
+                // reported instead of being silently dropped.
+                const auto bands = windowTextUtf8(dialog, IDC_OPT_BANDS);
+                if (!validateLines(bands, [](const std::string& line) {
+                        litefetch::RateBand band;
+                        return litefetch::parseRateBand(line, band);
+                    }, dialog, L"时段限速")) {
+                    return TRUE;
+                }
+                settings.rateBands = parseRateBands(bands);
+                const auto schedule = windowTextUtf8(dialog, IDC_OPT_SCHEDULE);
+                if (!validateLines(schedule, [](const std::string& line) {
+                        litefetch::ScheduledAction action;
+                        return litefetch::parseScheduledAction(line, action);
+                    }, dialog, L"计划任务")) {
+                    return TRUE;
+                }
+                settings.scheduledActions = parseScheduledActions(schedule);
                 settings.ed2kServers.clear();
                 const auto servers = windowTextUtf8(dialog, IDC_OPT_ED2K);
                 std::size_t start = 0;
