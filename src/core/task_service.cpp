@@ -415,11 +415,16 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             // A transient network failure gets a small, bounded budget instead of
             // retrying forever; TLS, disk and permission errors are final.
             for (int attempt = 1; attempt <= 3; ++attempt) {
+                const auto startedAt = std::chrono::steady_clock::now();
                 transferResult = transfer_(TransferRequest{task.source, task.destination,
                     command.restartFromZero, command.username, command.password},
                     *active->cancelled, progress);
+                const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+                // A slow failure is usually a real timeout, not a blip; retrying
+                // it would triple the wait for no benefit.
                 const bool transient = transferResult.status == TransferStatus::Failed
-                    && transferResult.error == TransferError::Network;
+                    && transferResult.error == TransferError::Network
+                    && elapsed < std::chrono::seconds(5);
                 if (!transient || active->cancelled->load() || attempt == 3) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(200 * attempt));
             }
