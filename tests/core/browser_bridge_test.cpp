@@ -97,11 +97,17 @@ void commitAndAbortFollowTheRules(const std::filesystem::path& root)
         "https://example.test/c.bin", (root / "c.bin").string())));
     const auto taskId = prepared.find("result")->stringOr("taskId", "");
 
+    // The application learns about the commit so it can start the task: the user
+    // confirmed the takeover in the browser, and a second press in the window
+    // would be a surprise.
+    std::string startedTask;
+    bridge.setCommittedHandler([&](const std::string& id) { startedTask = id; });
     const auto committed = answer(bridge.handle(request(2, "commit", "req-3")));
     check(committed.boolOr("ok", false), "commit is accepted");
     checkEqual(committed.find("result")->stringOr("state", ""), std::string("committed"),
         "the lease is committed");
     check(service.snapshot(taskId).has_value(), "a committed task stays");
+    checkEqual(startedTask, taskId, "the application is told which task to start");
 
     // A committed request cannot be aborted away.
     const auto refused = answer(bridge.handle(request(3, "abort", "req-3")));

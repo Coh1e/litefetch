@@ -360,6 +360,9 @@ void TaskWorker::startBridge()
     if (!service_) return;
     if (downloadDirectory_.empty()) downloadDirectory_ = databasePath_.parent_path() / "downloads";
     bridge_ = std::make_unique<browser::BrowserBridge>(*service_, downloadDirectory_);
+    // A committed takeover means the user already said yes in the browser; the
+    // row would otherwise sit in the queue waiting for a second press.
+    bridge_->setCommittedHandler([this](const std::string& taskId) { postStart(taskId); });
     bridgeServer_ = std::make_unique<browser::BrowserPipeServer>(browser::defaultPipeName());
     std::string ignored;
     // A channel that cannot bind must not stop the downloader; the user simply

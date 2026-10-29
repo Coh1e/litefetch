@@ -143,6 +143,9 @@ std::string BrowserBridge::commit(const JsonValue& id, const std::string& reques
     if (known->second.expiresAt <= std::chrono::steady_clock::now())
         return failAnswer(id, "the prepared request expired");
     known->second.committed = true;
+    // The task is the user's now; the application starts it, so confirming the
+    // takeover in the browser is all the confirmation that is needed.
+    if (onCommitted_) onCommitted_(known->second.taskId);
     auto result = JsonValue::makeObject();
     result.set("state", JsonValue::makeString("committed"));
     result.set("taskId", JsonValue::makeString(known->second.taskId));

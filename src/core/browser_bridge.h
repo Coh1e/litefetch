@@ -27,6 +27,14 @@ public:
     // silently creating a task much later.
     void setLeaseDuration(std::chrono::seconds duration) { lease_ = duration; }
 
+    // Called after a request is committed, so the application can start the task
+    // it created. Without this the row sits in the queue waiting for a second
+    // press that the user has no reason to expect.
+    void setCommittedHandler(std::function<void(const std::string&)> handler)
+    {
+        onCommitted_ = std::move(handler);
+    }
+
 private:
     struct Lease {
         std::string taskId;
@@ -44,6 +52,7 @@ private:
     std::filesystem::path downloadDirectory_;
     std::map<std::string, Lease, std::less<>> leases_;
     std::chrono::seconds lease_{300};
+    std::function<void(const std::string&)> onCommitted_;
 };
 
 } // namespace litefetch::browser
