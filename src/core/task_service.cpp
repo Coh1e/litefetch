@@ -1,5 +1,6 @@
 #include "task_service.h"
 
+#include "settings.h"
 #include "task_identity.h"
 #include "text_utf8.h"
 
@@ -201,6 +202,16 @@ CommandResult TaskService::add(const AddTaskCommand& command)
             }
         }
         if (!allocated) return failure("cannot allocate a duplicate task identity");
+    }
+    // Categorized saving only applies to single files: a torrent already has a
+    // folder of its own.
+    if (saveByCategory_ && !torrent) {
+        const auto category = categoryForFile(destination.filename().string());
+        const auto folder = destination.parent_path() / std::filesystem::path(std::u8string(
+            reinterpret_cast<const char8_t*>(category.data()), category.size()));
+        std::error_code folderError;
+        std::filesystem::create_directories(folder, folderError);
+        if (!folderError) destination = folder / destination.filename();
     }
     // A torrent saves into a directory, which normally already exists; the
     // single-file "do not overwrite" rule applies to HTTP/FTP destinations only.

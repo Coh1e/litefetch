@@ -19,6 +19,8 @@ struct Settings {
     // What to do when the destination already exists: false refuses (default),
     // true picks "name (1).ext" instead of failing.
     bool renameOnConflict = false;
+    // Save single-file downloads into a per-category subfolder (视频/音频/...).
+    bool saveByCategory = false;
     // ed2k servers, "host:port" each.
     std::vector<std::string> ed2kServers;
 };
@@ -29,6 +31,9 @@ Settings loadSettings(const TaskRepository& repository);
 
 // Writes settings into the same database.
 void saveSettings(TaskRepository& repository, const Settings& settings);
+
+// Folder name a file belongs to when categorized saving is on.
+std::string categoryForFile(const std::string& fileName);
 
 // "host:port" parsing shared by the settings file and the server list.
 bool parseServerEndpoint(const std::string& text, std::string& host, std::uint16_t& port);

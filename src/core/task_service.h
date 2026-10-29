@@ -49,6 +49,8 @@ public:
     void setHttpProxy(std::string proxy);
     // When true a taken destination becomes "name (1).ext" instead of an error.
     void setRenameOnConflict(bool rename) { renameOnConflict_ = rename; }
+    // When true a single-file download goes into a per-category subfolder.
+    void setSaveByCategory(bool saveByCategory) { saveByCategory_ = saveByCategory; }
 
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
         ProgressObserver observer = {}, BtTransfer btTransfer = {},
@@ -92,6 +94,7 @@ private:
     std::shared_ptr<RateBudget> budget_ = std::make_shared<RateBudget>();
     std::string proxy_;
     bool renameOnConflict_ = false;
+    bool saveByCategory_ = false;
     // Starts that are between "decided" and "registered", and stops that arrived
     // in that window. The stop is honoured instead of being overwritten.
     std::set<std::string, std::less<>> starting_;

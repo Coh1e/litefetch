@@ -55,6 +55,8 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
         SetDlgItemTextW(dialog, IDC_OPT_ED2K, wideOf(servers).c_str());
         CheckDlgButton(dialog, IDC_OPT_RENAME,
             context->current.renameOnConflict ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(dialog, IDC_OPT_CATEGORY,
+            context->current.saveByCategory ? BST_CHECKED : BST_UNCHECKED);
         return TRUE;
     }
     case WM_COMMAND:
@@ -69,6 +71,8 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
                 const auto timeout = GetDlgItemInt(dialog, IDC_OPT_TIMEOUT, &translated, FALSE);
                 settings.connectTimeoutSeconds = translated ? static_cast<int>(timeout) : 30;
                 if (settings.connectTimeoutSeconds < 5) settings.connectTimeoutSeconds = 5;
+                settings.saveByCategory =
+                    IsDlgButtonChecked(dialog, IDC_OPT_CATEGORY) == BST_CHECKED;
                 settings.renameOnConflict =
                     IsDlgButtonChecked(dialog, IDC_OPT_RENAME) == BST_CHECKED;
                 settings.ed2kServers.clear();

@@ -939,6 +939,48 @@ void renameOnConflictPicksAFreeName(const std::filesystem::path& root)
         std::string("photo (1).bin"), "the first free suffix is used");
     check(readFile(taken) == body, "the original file is untouched");
 }
+void categorizedSavingSortsFiles(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "category.db");
+    TaskService service(repository);
+    const auto body = payload(256);
+    HttpFixture fixture(HttpFixture::Options{body});
+    const auto folder = root / "sorted";
+    std::filesystem::create_directories(folder);
+
+    // Category names do not depend on the transfer.
+    checkEqual(categoryForFile("movie.MP4"), std::string("视频"), "video goes to its folder");
+    checkEqual(categoryForFile("song.flac"), std::string("音频"), "audio goes to its folder");
+    checkEqual(categoryForFile("shot.png"), std::string("图片"), "images go to their folder");
+    checkEqual(categoryForFile("book.pdf"), std::string("文档"), "documents go to their folder");
+    checkEqual(categoryForFile("pack.zip"), std::string("压缩包"), "archives go to their folder");
+    checkEqual(categoryForFile("thing.bin"), std::string("其他"), "everything else has its folder");
+
+    service.setSaveByCategory(true);
+    const auto added = service.execute(AddTaskCommand{fixture.url("/movie.mp4"),
+        (folder / "movie.mp4").string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto destination = std::filesystem::path(added.task.destination);
+    checkEqual(destination.parent_path().filename().string(), std::string("视频"),
+        "the task was filed into the video folder");
+    checkEqual(destination.filename().string(), std::string("movie.mp4"),
+        "the file keeps its name");
+
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Completed, "the categorized download completes");
+    // Find the file by walking the folder: comparing narrow paths with non-ASCII
+    // segments is what breaks here, not the download.
+    std::filesystem::path written;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().filename() == L"movie.mp4") written = entry.path();
+    }
+    check(!written.empty(), "the file exists below the download folder");
+    check(written.parent_path().filename().wstring() == L"视频",
+        "the file sits in the video folder");
+    check(readFile(written) == body, "the bytes landed in the category folder");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1260,6 +1302,7 @@ int body()
     settingsRoundTrip(root.path());
     proxyIsUsedForHttp(root.path());
     renameOnConflictPicksAFreeName(root.path());
+    categorizedSavingSortsFiles(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());
