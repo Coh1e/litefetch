@@ -296,6 +296,13 @@ std::optional<StoredCredential> TaskWorker::storedCredential(const std::string& 
     return store.load(host);
 }
 
+void TaskWorker::forgetCredentials()
+{
+    // The file only holds DPAPI blobs; removing it forgets every host at once.
+    std::error_code error;
+    std::filesystem::remove(databasePath_.parent_path() / "credentials.dat", error);
+}
+
 Settings TaskWorker::settings() const
 {
     std::lock_guard lock(settingsMutex_);

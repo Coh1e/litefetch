@@ -112,6 +112,7 @@ public:
     void rememberCredential(const std::string& host, const std::string& username,
         const std::string& password);
     std::optional<StoredCredential> storedCredential(const std::string& host) const;
+    void forgetCredentials();
     void applySettings(const Settings& settings);
 
 private:

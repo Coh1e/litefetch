@@ -1,4 +1,4 @@
-﻿// DPAPI-backed credential memory: the file never contains the password, and a
+// DPAPI-backed credential memory: the file never contains the password, and a
 // blob from another account (or a tampered one) simply does not decrypt.
 #include "credentials.h"
 #include "test_support.h"
@@ -33,6 +33,21 @@ void roundTrip(const std::filesystem::path& root)
     check(!store.load("example.org").has_value(), "a removed credential does not load");
 }
 
+void forgettingRemovesEverything(const std::filesystem::path& root)
+{
+    const auto file = root / "forget.dat";
+    CredentialStore store(file);
+    check(store.save("one.example", "alice", "a"), "the first host is stored");
+    check(store.save("two.example", "bob", "b"), "the second host is stored");
+    check(store.has("one.example") && store.has("two.example"), "both hosts are remembered");
+    // "Forget all" is the file going away; the next load starts empty.
+    std::error_code error;
+    std::filesystem::remove(file, error);
+    check(!store.has("one.example"), "forgetting clears the first host");
+    check(!store.has("two.example"), "forgetting clears the second host");
+    check(!store.load("one.example").has_value(), "a forgotten host does not load");
+}
+
 void tamperedBlobIsRejected(const std::filesystem::path& root)
 {
     const auto file = root / "tampered.dat";
@@ -62,6 +77,7 @@ int main()
         TempDir root;
         roundTrip(root.path());
         tamperedBlobIsRejected(root.path());
+        forgettingRemovesEverything(root.path());
         return 0;
     });
 }

@@ -22,7 +22,8 @@ std::wstring wideOf(std::string_view utf8)
 
 struct OptionsContext {
     Settings current;
-    std::optional<Settings> result;
+    std::optional<OptionsResult> result;
+    bool forgetCredentials = false;
 };
 
 std::string windowTextUtf8(HWND dialog, int id)
@@ -78,9 +79,20 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
                     if (end == std::string::npos) break;
                     start = end + 1;
                 }
-                context->result = settings;
+                OptionsResult result;
+                result.settings = settings;
+                result.forgetCredentials = context->forgetCredentials;
+                context->result = result;
             }
             EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDC_OPT_FORGET) {
+            if (MessageBoxW(dialog, L"清除这台账户下记住的所有站点密码？", L"选项",
+                    MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+                if (context) context->forgetCredentials = true;
+                SetDlgItemTextW(dialog, IDC_OPT_HINT, L"已请求清除记住的密码，确定后生效。");
+            }
             return TRUE;
         }
         if (LOWORD(wParam) == IDCANCEL) {
@@ -97,7 +109,7 @@ INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
 }
 } // namespace
 
-std::optional<Settings> showOptionsDialog(HWND owner, const Settings& current)
+std::optional<OptionsResult> showOptionsDialog(HWND owner, const Settings& current)
 {
     OptionsContext context;
     context.current = current;

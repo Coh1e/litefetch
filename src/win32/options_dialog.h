@@ -10,6 +10,12 @@ namespace litefetch::ui {
 
 // Modal options dialog: speed limit, HTTP proxy, connect timeout and the ed2k
 // server list. Returns std::nullopt when the user cancels.
-std::optional<Settings> showOptionsDialog(HWND owner, const Settings& current);
+struct OptionsResult {
+    Settings settings;
+    // The user asked to forget every remembered credential.
+    bool forgetCredentials = false;
+};
+
+std::optional<OptionsResult> showOptionsDialog(HWND owner, const Settings& current);
 
 } // namespace litefetch::ui
