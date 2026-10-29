@@ -357,6 +357,7 @@ void TaskWorker::applySettings(const Settings& settings)
             std::lock_guard lock(settingsMutex_);
             rateBands_ = settings.rateBands;
             baseLimit_ = settings.speedLimitBytesPerSecond;
+            onAllComplete_ = settings.onAllComplete;
         }
         applyTimeBandLimit();
         setMaxConcurrent(settings.maxConcurrentDownloads);
@@ -411,6 +412,7 @@ WorkerSnapshot TaskWorker::snapshot()
     result.outcomes = outcomes_;
     result.lastError = lastError_;
     result.runtimeConcurrency = runtimeConcurrency_;
+    result.allCompleteSequence = allCompleteSequence_;
     if (service_) {
         result.traffic[0] = service_->traffic().bytes(TrafficCategory::Download);
         result.traffic[1] = service_->traffic().bytes(TrafficCategory::Upload);
@@ -798,6 +800,11 @@ void TaskWorker::launchStartNow(const std::string& taskId, bool restartFromZero,
         return;
     }
     jobs_.push_back(std::move(job));
+    {
+        std::lock_guard lock(mutex_);
+        // A batch is in flight; its end is what the completion action waits for.
+        batchActive_ = true;
+    }
     reload();
     wakeUi();
 }
@@ -808,6 +815,23 @@ bool TaskWorker::anyJobFinished() const
         if (job.finished->load()) return true;
     }
     return false;
+}
+
+void TaskWorker::noteBatchProgress()
+{
+    bool finished = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (!jobs_.empty() || !pendingStarts_.empty()) {
+            batchActive_ = true;
+            return;
+        }
+        if (!batchActive_) return;
+        batchActive_ = false;
+        finished = onAllComplete_ != 0;
+        if (finished) ++allCompleteSequence_;
+    }
+    if (finished) wakeUi();
 }
 
 void TaskWorker::reapFinished()
@@ -821,6 +845,7 @@ void TaskWorker::reapFinished()
         it = jobs_.erase(it);
     }
     launchPendingStarts();
+    noteBatchProgress();
 }
 
 void TaskWorker::reload()

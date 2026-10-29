@@ -59,6 +59,8 @@ struct WorkerSnapshot {
     int runtimeConcurrency = 0;
     // Traffic totals: download, upload, metadata, verify.
     std::array<std::int64_t, 4> traffic{};
+    // Bumped once when the last running transfer ends and nothing is queued.
+    std::uint64_t allCompleteSequence = 0;
     std::uint64_t lastErrorSequence = 0;
     std::uint64_t addResultSequence = 0;
     std::uint64_t outcomeSequence = 0;
@@ -177,6 +179,7 @@ private:
     // Recomputes the slot limit from the low-usage policy; call with the lock held.
     void evaluateLowUsageLocked();
     void noteActivity();
+    void noteBatchProgress();
     // Recomputes the limit from the time bands and hands it to the service.
     void applyTimeBandLimit();
     void launchPendingStarts();
@@ -205,6 +208,10 @@ private:
     std::unique_ptr<KadNode> kad_;
     mutable std::mutex settingsMutex_;
     std::vector<RateBand> rateBands_;
+    int onAllComplete_ = 0;
+    std::uint64_t allCompleteSequence_ = 0;
+    // True while work is in flight, so the completion fires once per batch.
+    bool batchActive_ = false;
     std::int64_t baseLimit_ = 0;
     Settings settings_;
     std::thread controlThread_;

@@ -148,7 +148,7 @@ void priorityJumpsTheQueue(const std::filesystem::path& root)
     check(worker.start(error), ("worker start failed: " + error).c_str());
     worker.setMaxConcurrent(1);
 
-    worker.postAdd(server.url("/a.bin"), (root / "a.bin").string(), true);
+    worker.postAdd(server.url("/batch-a.bin"), (root / "batch-a.bin").string(), true);
     std::string firstId;
     check(waitFor([&] {
         const auto tasks = worker.snapshot().tasks;
@@ -158,7 +158,7 @@ void priorityJumpsTheQueue(const std::filesystem::path& root)
     }, std::chrono::seconds(15)), "the first task did not start");
 
     // Second task waits behind the first.
-    worker.postAdd(server.url("/b.bin"), (root / "b.bin").string(), true);
+    worker.postAdd(server.url("/batch-b.bin"), (root / "batch-b.bin").string(), true);
     check(waitFor([&] { return worker.snapshot().tasks.size() == 2; },
         std::chrono::seconds(10)), "the waiting task was not added");
 
@@ -215,6 +215,43 @@ void lowUsageBacksOffWhenIdle(const std::filesystem::path& root)
     worker.postRefresh();
     check(waitFor([&] { return worker.snapshot().runtimeConcurrency == 4; },
         std::chrono::seconds(10)), "activity did not restore the user limit");
+    worker.shutdown();
+}
+void theLastFinishedTransferIsAnnounced(const std::filesystem::path& root)
+{
+    const auto body = payload(256 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 64 * 1024, std::chrono::milliseconds(5)});
+    TaskWorker worker(root / "worker-complete-action.db");
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+
+    Settings settings;
+    settings.onAllComplete = 1; // open the folder
+    worker.applySettings(settings);
+    checkEqual(static_cast<long long>(worker.snapshot().allCompleteSequence), 0LL,
+        "nothing is announced before any work runs");
+
+    worker.postAdd(server.url("/done-a.bin"), (root / "done-a.bin").string(), true);
+    check(waitFor([&] { return worker.snapshot().allCompleteSequence == 1; },
+        std::chrono::seconds(20)), "the finished batch was not announced");
+
+    // A second task in the same session announces again, once.
+    worker.postAdd(server.url("/done-b.bin"), (root / "done-b.bin").string(), true);
+    check(waitFor([&] { return worker.snapshot().allCompleteSequence == 2; },
+        std::chrono::seconds(20)), "the second batch was not announced");
+
+    // With the action turned off nothing is announced.
+    settings.onAllComplete = 0;
+    worker.applySettings(settings);
+    worker.postAdd(server.url("/done-c.bin"), (root / "done-c.bin").string(), true);
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.destination.find("done-c.bin") != std::string::npos)
+                return task.state == TaskState::Completed;
+        return false;
+    }, std::chrono::seconds(20)), "the third task did not finish");
+    checkEqual(static_cast<long long>(worker.snapshot().allCompleteSequence), 2LL,
+        "a disabled completion action announces nothing");
     worker.shutdown();
 }
 void cancelledDownload(const std::filesystem::path& root)
@@ -383,6 +420,7 @@ int body()
     extraStartsWaitForASlot(root.path());
     priorityJumpsTheQueue(root.path());
     lowUsageBacksOffWhenIdle(root.path());
+    theLastFinishedTransferIsAnnounced(root.path());
     return 0;
 }
 } // namespace
