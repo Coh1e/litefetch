@@ -712,6 +712,9 @@ void runChecks()
         }
         check(quit, "second window closes cleanly");
     }
+
+
+
 }
 
 } // namespace
