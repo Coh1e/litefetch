@@ -713,6 +713,41 @@ void runChecks()
         check(quit, "second window closes cleanly");
     }
 
+    // A saved completion action must survive the next start, and a finished
+    // transfer must be reported as the end of a batch: that report is what the
+    // action hangs on, and without it the setting has nothing to trigger.
+    {
+        {
+            std::filesystem::create_directories(options.downloadDirectory);
+            TaskRepository repository(options.databasePath);
+            TaskService service(repository);
+            const auto added = service.execute(AddTaskCommand{fixture.url("/payload.bin"),
+                (options.downloadDirectory / "completion.bin").string()});
+            check(added.ok, "the completion task is queued");
+            Settings settings = loadSettings(repository);
+            settings.onAllComplete = 2;
+            saveSettings(repository, settings);
+            check(loadSettings(repository).onAllComplete == 2, "the action is stored");
+        }
+        MainWindow window(options);
+        check(window.create(instance, SW_SHOWNORMAL), "window opens with a completion action");
+        check(window.completionActionForTest() == 2,
+            ("the window holds the saved completion action: "
+                + std::to_string(window.completionActionForTest())).c_str());
+        const HWND handle = window.handle();
+        const HWND list = childOfClass(handle, L"SysListView32");
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) > 0; }, 5000),
+            "the window lists the tasks");
+        selectRow(list, rowOf(list, L"completion.bin"));
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        check(pumpUntil([&] { return window.statusOfTaskNamed("completion.bin") == "已完成"; }, 20000),
+            ("the task completes: " + window.statusOfTaskNamed("completion.bin")
+                + " | " + window.errorOfTaskNamed("completion.bin")).c_str());
+        check(pumpUntil([&] { return window.completedBatchesForTest() > 0; }, 5000),
+            ("the worker reported the end of the batch: "
+                + std::to_string(window.completedBatchesForTest())).c_str());
+    }
+
 }
 
 } // namespace

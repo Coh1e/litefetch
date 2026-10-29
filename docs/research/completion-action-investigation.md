@@ -116,3 +116,25 @@ FAIL: the window holds the completion action: 0
 1. 查 `MainWindow` 构造时从哪里读设置（`options` 还是仓库）；若读的是启动时的快照，需要改成读仓库；
 2. 让"保存后新建窗口能读到完成动作"这条断言转绿；
 3. 再加"任务跑完 → `completedBatchesForTest() > 0` → 窗口自行销毁"的完整链路断言。
+## 2026-10-29 第六轮：根因确认并修复
+
+`TaskWorker` **从不读取已保存的设置**：`applySettings()` 只在选项对话框保存时被调用，
+`loadSettings()` 在 `task_worker.cpp` 里一次都没出现过。所以每次启动，
+限速、代理、并发数、低占用、限速时段、计划动作、完成后动作**全部回到默认值**。
+
+这不是"完成动作"一个功能的问题，而是**设置不持久**的通用缺陷。
+
+修复：`TaskWorker::start()` 在 `pauseInterrupted()` 之后读回设置并应用（速率、代理、同名策略、
+分类保存、并发上限、时段/计划、完成后动作）。用例：
+
+```
+the action is stored                                  → 通过
+the window holds the saved completion action: 2       → 通过（修复前是 0）
+the task completes                                    → 通过
+the worker reported the end of the batch              → 通过
+```
+
+**有牙检查**：把用例里的 `onAllComplete` 改回 0，立刻红：
+`FAIL: the window holds the saved completion action: 0`。恢复后绿。
+
+同时保留了上一轮修的竞态（`jobs_.push_back` 与 `batchActive_` 同锁）。

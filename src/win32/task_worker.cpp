@@ -127,6 +127,24 @@ bool TaskWorker::start(std::string& error)
         // A running row can only come from a previous process that died; a
         // restart shows it as paused instead of resuming silently.
         service_->pauseInterrupted();
+        // Settings are only written when the dialog is used, so a restart has to
+        // read them back: without this the speed limit, proxy, concurrency and
+        // the completion action all silently revert to defaults on every start.
+        Settings stored;
+        {
+            stored = loadSettings(*repository_);
+            std::lock_guard lock(settingsMutex_);
+            settings_ = stored;
+            rateBands_ = stored.rateBands;
+            schedule_ = stored.scheduledActions;
+            baseLimit_ = stored.speedLimitBytesPerSecond;
+            onAllComplete_ = stored.onAllComplete;
+        }
+        service_->setRateLimit(stored.speedLimitBytesPerSecond);
+        service_->setHttpProxy(stored.httpProxy);
+        service_->setRenameOnConflict(stored.renameOnConflict);
+        service_->setSaveByCategory(stored.saveByCategory);
+        setMaxConcurrent(stored.maxConcurrentDownloads);
     } catch (const std::exception& failure) {
         error = failure.what();
         return false;
