@@ -26,6 +26,7 @@ add_library(litefetch-core STATIC
     src/core/kad_id.cpp src/core/kad_id.h
     src/core/kad_routing.cpp src/core/kad_routing.h
     src/core/kad_wire.cpp src/core/kad_wire.h
+    src/core/kad_node.cpp src/core/kad_node.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
@@ -123,7 +124,7 @@ if(BUILD_TESTING)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
     add_executable(core-kad-tests tests/core/kad_test.cpp)
     target_include_directories(core-kad-tests PRIVATE tests/core)
-    target_link_libraries(core-kad-tests PRIVATE litefetch-core)
+    target_link_libraries(core-kad-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME core-kad COMMAND core-kad-tests)
     set_tests_properties(core-kad PROPERTIES TIMEOUT 60)
 

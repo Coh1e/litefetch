@@ -1,6 +1,7 @@
 // Kad routing primitives: 128-bit ids, XOR distance, bucket eviction and the
 // contact file that survives a restart.
 #include "kad_routing.h"
+#include "kad_node.h"
 #include "kad_wire.h"
 #include "test_support.h"
 
@@ -38,7 +39,41 @@ void ids()
     check(!KadId::fromHex("zz", parsed), "a short or bad hex id is rejected");
 }
 
-void wire()
+void twoNodes(const std::filesystem::path& root)
+{
+    KadNode first(idFrom("11111111111111111111111111111111"));
+    KadNode second(idFrom("22222222222222222222222222222222"));
+    std::string error;
+    check(first.start(0, error), ("first node did not start: " + error).c_str());
+    check(second.start(0, error), ("second node did not start: " + error).c_str());
+
+    const bool bootstrapped = first.bootstrap("127.0.0.1", second.port(), 2000, error);
+    check(bootstrapped, ("bootstrap failed: " + error).c_str());
+    check(first.table().size() >= 1, "the bootstrapping node learned a contact");
+    check(second.table().size() >= 1, "the answering node learned the caller");
+
+    const auto found = first.findNode(second.id(), 4, 1500);
+    check(!found.empty(), "find-node answered with a contact");
+    checkEqual(found.front().id.toHex(), second.id().toHex(), "the nearest contact is the target");
+
+    check(second.refresh(1000) >= 1, "hello refreshes a live contact");
+
+    // Persistence: the contacts file brought back into a fresh table.
+    const auto contactsPath = (root / "kad-contacts.dat").string();
+    check(first.saveContacts(contactsPath), "contacts are saved");
+    KadNode reloaded;
+    check(reloaded.loadContacts(contactsPath), "contacts are loaded");
+    checkEqual(static_cast<long long>(reloaded.table().size()),
+        static_cast<long long>(first.table().size()), "the saved contacts come back");
+
+    // A node that is gone does not answer the hello and is dropped.
+    second.stop();
+    checkEqual(second.refresh(300), 0, "a stopped node answers nothing");
+    checkEqual(static_cast<long long>(first.refresh(300)), 0LL,
+        "the dead contact is dropped from the table");
+
+    first.stop();
+}void wire()
 {
     KadPacket hello;
     hello.opcode = KadOpcode::HelloRequest;
@@ -139,6 +174,8 @@ int main()
         ids();
         table();
         wire();
+        TempDir root;
+        twoNodes(root.path());
         return 0;
     });
 }
