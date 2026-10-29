@@ -70,3 +70,31 @@
 - 5 张票部分完成，缺口已逐条列明；
 - 5 张票未开工，其中 3 张需要外部环境（浏览器、旧库、真实 eD2k 网络）；
 - **因此 #28 尚不满足**，不能报告完成。
+
+## 六、最终验收记录（第 59 轮）
+
+```
+命令: cmd /c test-local.cmd
+结果: 100% tests passed, 0 failed out of 17
+耗时: 138.91 s
+```
+
+| # | 测试 | 耗时 |
+|---|---|---|
+| 1–9 | core-*（store/service/http/ftp/bt 等） | 见日志 |
+| 10 | win32-native-bridge | 0.01 s |
+| 11 | core-credentials | 0.04 s |
+| 12 | core-rate-limit | 2.02 s |
+| 13 | core-kad | 2.48 s |
+| 14 | core-ed2k | 16.79 s |
+| 15 | core-bt | 13.79 s |
+| 16 | ui-worker | 7.78 s |
+| 17 | ui-window | 9.66 s |
+
+发布包（同轮重建，11 文件 / 16.0 MiB）真实启动：
+
+```
+window: appeared after 220 ms
+process: exited after 313 ms with code 0
+evidence: .pi/evidence/release-final/run-.../smoke.log
+```
