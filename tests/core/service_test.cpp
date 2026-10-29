@@ -839,6 +839,29 @@ void reverifyOnDemand(const std::filesystem::path& root)
     require(noChecksum.error.find("checksum") != std::string::npos,
         "the refusal explains why: " + noChecksum.error);
 }
+void globalRateLimitSlowsTransfers(const std::filesystem::path& root)
+{
+    // 128 KiB at 64 KiB/s: the bucket starts full, so the first 64 KiB are free
+    // and the rest must take about a second.
+    const auto body = payload(128 * 1024);
+    HttpFixture fixture(HttpFixture::Options{body});
+    TaskRepository repository(root / "limit.db");
+    TaskService service(repository);
+    service.setRateLimit(64 * 1024);
+
+    const auto added = service.execute(AddTaskCommand{fixture.url("/limited.bin"),
+        (root / "limited.bin").string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto started = std::chrono::steady_clock::now();
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Completed, "the limited transfer still completes");
+    check(seconds > 0.6, "the global limit slows the transfer down");
+    check(seconds < 5.0, "the limit does not stall the transfer");
+    checkEqual(static_cast<long long>(std::filesystem::file_size(root / "limited.bin")),
+        static_cast<long long>(body.size()), "the limited transfer wrote every byte");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1156,6 +1179,7 @@ int body()
     sha256Verification(root.path());
     transientFailuresAreRetried(root.path());
     reverifyOnDemand(root.path());
+    globalRateLimitSlowsTransfers(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

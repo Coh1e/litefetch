@@ -131,6 +131,10 @@ struct Context {
     bool diskError = false;
     bool callbackError = false;
     std::string diskMessage;
+    // Set to the request being served so the progress callback can charge the
+    // shared rate budget.
+    const TransferRequest* request = nullptr;
+    std::int64_t lastCharged = 0;
     std::string restartReason;
 };
 
@@ -254,6 +258,15 @@ int reportProgress(void* user, curl_off_t total, curl_off_t now, curl_off_t, cur
 {
     auto& context = *static_cast<Context*>(user);
     if (context.cancelled.load()) return 1;
+    // Charge the bytes that arrived since the last callback to the shared
+    // budget; this is where a global limit turns into waiting.
+    if (context.request && context.request->budget) {
+        const auto delta = static_cast<std::int64_t>(now) - context.lastCharged;
+        if (delta > 0) {
+            context.lastCharged = static_cast<std::int64_t>(now);
+            context.request->budget->spend(delta);
+        }
+    }
     try {
         if (context.progress) {
             const auto reported = context.offset + static_cast<std::int64_t>(now);
@@ -584,6 +597,7 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     if (!handle) return failure(TransferError::Internal, "cannot create an HTTP handle");
 
     Context context{output, cancelled, progress};
+    context.request = &request;
     context.meta = meta;
     context.metaPath = metaPath;
     context.offset = offset;

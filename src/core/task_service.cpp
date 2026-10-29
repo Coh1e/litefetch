@@ -419,7 +419,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             for (int attempt = 1; attempt <= 3; ++attempt) {
                 const auto startedAt = std::chrono::steady_clock::now();
                 transferResult = transfer_(TransferRequest{task.source, task.destination,
-                    command.restartFromZero, command.username, command.password},
+                    command.restartFromZero, command.username, command.password, budget_},
                     *active->cancelled, progress);
                 const auto elapsed = std::chrono::steady_clock::now() - startedAt;
                 // A slow failure is usually a real timeout, not a blip; retrying
@@ -597,6 +597,11 @@ int TaskService::pauseInterrupted()
         ++changed;
     }
     return changed;
+}
+
+void TaskService::setRateLimit(std::int64_t bytesPerSecond)
+{
+    budget_->setLimit(bytesPerSecond);
 }
 
 CommandResult TaskService::verify(const VerifyTaskCommand& command)

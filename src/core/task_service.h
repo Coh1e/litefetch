@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bt_engine.h"
+#include "rate_limit.h"
 #include "ed2k_task.h"
 #include "http_engine.h"
 #include "task.h"
@@ -38,6 +39,10 @@ public:
 
     // Free space on the volume that holds a path, or -1 when it cannot be read.
     using FreeSpaceFn = std::function<std::int64_t(const std::filesystem::path&)>;
+
+    // Global byte budget shared by every transfer this service starts. Zero
+    // means unlimited.
+    void setRateLimit(std::int64_t bytesPerSecond);
 
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
         ProgressObserver observer = {}, BtTransfer btTransfer = {},
@@ -78,6 +83,7 @@ private:
     BtTransfer btTransfer_;
     Ed2kTransfer ed2kTransfer_;
     FreeSpaceFn freeSpace_;
+    std::shared_ptr<RateBudget> budget_ = std::make_shared<RateBudget>();
     ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<ActiveTransfer>, std::less<>> active_;
