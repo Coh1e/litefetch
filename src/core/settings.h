@@ -27,6 +27,8 @@ struct Settings {
     int lowUsageIdleSeconds = 0;
     // Time bands that override the speed limit by the clock.
     std::vector<RateBand> rateBands;
+    // Minutes of the day that start or pause everything.
+    std::vector<ScheduledAction> scheduledActions;
     // 0 = nothing, 1 = open the folder, 2 = leave the program.
     int onAllComplete = 0;
     // ed2k servers, "host:port" each.

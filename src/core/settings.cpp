@@ -18,6 +18,7 @@ constexpr const char* saveByCategoryKey = "download.save_by_category";
 constexpr const char* maxConcurrentKey = "download.max_concurrent";
 constexpr const char* lowUsageKey = "download.low_usage_idle";
 constexpr const char* rateBandsKey = "network.rate_bands";
+constexpr const char* scheduleKey = "download.schedule";
 constexpr const char* onAllCompleteKey = "download.on_all_complete";
 
 std::int64_t parseInt64(const std::string& text, std::int64_t fallback)
@@ -101,6 +102,7 @@ Settings loadSettings(const TaskRepository& repository)
     settings.lowUsageIdleSeconds =
         static_cast<int>(parseInt64(repository.metaValue(lowUsageKey), 0));
     settings.rateBands = parseRateBands(repository.metaValue(rateBandsKey));
+    settings.scheduledActions = parseScheduledActions(repository.metaValue(scheduleKey));
     settings.onAllComplete =
         static_cast<int>(parseInt64(repository.metaValue(onAllCompleteKey), 0));
     return settings;
@@ -122,6 +124,7 @@ void saveSettings(TaskRepository& repository, const Settings& settings)
     repository.setMetaValue(maxConcurrentKey, std::to_string(settings.maxConcurrentDownloads));
     repository.setMetaValue(lowUsageKey, std::to_string(settings.lowUsageIdleSeconds));
     repository.setMetaValue(rateBandsKey, formatRateBands(settings.rateBands));
+    repository.setMetaValue(scheduleKey, formatScheduledActions(settings.scheduledActions));
     repository.setMetaValue(onAllCompleteKey, std::to_string(settings.onAllComplete));
 }
 

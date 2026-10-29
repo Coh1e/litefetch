@@ -178,6 +178,7 @@ private:
     void execute(const Command& command);
     // Recomputes the slot limit from the low-usage policy; call with the lock held.
     void evaluateLowUsageLocked();
+    void runSchedule();
     void noteActivity();
     void noteBatchProgress();
     // Recomputes the limit from the time bands and hands it to the service.
@@ -208,6 +209,10 @@ private:
     std::unique_ptr<KadNode> kad_;
     mutable std::mutex settingsMutex_;
     std::vector<RateBand> rateBands_;
+    std::vector<ScheduledAction> schedule_;
+    int lastFiredMinute_ = -1;
+    std::vector<std::string> launches_;
+    std::vector<std::string> pauses_;
     int onAllComplete_ = 0;
     std::uint64_t allCompleteSequence_ = 0;
     // True while work is in flight, so the completion fires once per batch.

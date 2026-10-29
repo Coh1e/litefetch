@@ -90,4 +90,65 @@ std::string formatRateBands(const std::vector<RateBand>& bands)
     return text;
 }
 
+std::optional<ScheduledAction> actionAtMinute(const std::vector<ScheduledAction>& actions,
+    int minute)
+{
+    const int now = ((minute % 1440) + 1440) % 1440;
+    for (const auto& action : actions) {
+        if (action.minute == now) return action;
+    }
+    return std::nullopt;
+}
+
+bool shouldFire(int lastFiredMinute, int currentMinute, const ScheduledAction& action)
+{
+    if (action.minute != currentMinute) return false;
+    return lastFiredMinute != currentMinute;
+}
+
+bool parseScheduledAction(const std::string& text, ScheduledAction& action)
+{
+    const auto colon = text.rfind(':');
+    if (colon == std::string::npos) return false;
+    long long minute = 0;
+    if (!parseNumber(std::string_view(text).substr(0, colon), minute)) return false;
+    if (minute < 0 || minute > 1439) return false;
+    const auto flag = text.substr(colon + 1);
+    if (flag != "s" && flag != "p") return false;
+    action.minute = static_cast<int>(minute);
+    action.start = flag == "s";
+    return true;
+}
+
+std::string formatScheduledAction(const ScheduledAction& action)
+{
+    return std::to_string(action.minute) + (action.start ? ":s" : ":p");
+}
+
+std::vector<ScheduledAction> parseScheduledActions(const std::string& text)
+{
+    std::vector<ScheduledAction> actions;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        auto end = text.find('\n', start);
+        auto line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        ScheduledAction action;
+        if (!line.empty() && parseScheduledAction(line, action)) actions.push_back(action);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return actions;
+}
+
+std::string formatScheduledActions(const std::vector<ScheduledAction>& actions)
+{
+    std::string text;
+    for (const auto& action : actions) {
+        if (!text.empty()) text += '\n';
+        text += formatScheduledAction(action);
+    }
+    return text;
+}
+
 } // namespace litefetch

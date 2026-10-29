@@ -1,4 +1,4 @@
-﻿// Time bands decide the limit by the clock; the evaluation is pure so the tests
+// Time bands decide the limit by the clock; the evaluation is pure so the tests
 // do not depend on when they run.
 #include "schedule.h"
 #include "test_support.h"
@@ -57,6 +57,34 @@ void parsingRejectsGarbage()
 }
 } // namespace
 
+void scheduledActionsFireOnceOnTheirMinute()
+{
+    const std::vector<ScheduledAction> actions{{480, true}, {1080, false}};
+    const auto morning = actionAtMinute(actions, 480);
+    check(morning.has_value(), "the morning action is due at its minute");
+    check(morning->start, "the morning action starts everything");
+    const auto evening = actionAtMinute(actions, 1080);
+    check(evening.has_value() && !evening->start, "the evening action pauses everything");
+    check(!actionAtMinute(actions, 600).has_value(), "a minute without an entry does nothing");
+
+    // Firing once: the same minute must not run twice.
+    check(shouldFire(-1, 480, *morning), "the first time this minute is seen it fires");
+    check(!shouldFire(480, 480, *morning), "the same minute never fires again");
+    check(!shouldFire(480, 481, *morning), "the action is not due at another minute");
+
+    ScheduledAction parsed;
+    check(parseScheduledAction("480:s", parsed), "a start entry parses");
+    check(parsed.start && parsed.minute == 480, "the entry keeps its meaning");
+    check(formatScheduledAction(parsed) == std::string("480:s"), "the entry round trips");
+    check(parseScheduledAction("1080:p", parsed) && !parsed.start, "a pause entry parses");
+    check(!parseScheduledAction("1080:x", parsed), "an unknown action is refused");
+    check(!parseScheduledAction("1440:s", parsed), "minute 1440 is not a schedule slot");
+
+    const auto many = parseScheduledActions("480:s\n1080:p\nnoise\n1439:p");
+    checkEqual(static_cast<long long>(many.size()), 3LL, "only the valid lines survive");
+    checkEqual(formatScheduledActions(many), std::string("480:s\n1080:p\n1439:p"),
+        "the schedule round trips");
+}
 int main()
 {
     return run("schedule", [] {
@@ -65,6 +93,7 @@ int main()
         bandsCanWrapMidnight();
         theFirstMatchWins();
         parsingRejectsGarbage();
+        scheduledActionsFireOnceOnTheirMinute();
         return 0;
     });
 }

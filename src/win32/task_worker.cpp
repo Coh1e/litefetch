@@ -356,6 +356,7 @@ void TaskWorker::applySettings(const Settings& settings)
         {
             std::lock_guard lock(settingsMutex_);
             rateBands_ = settings.rateBands;
+            schedule_ = settings.scheduledActions;
             baseLimit_ = settings.speedLimitBytesPerSecond;
             onAllComplete_ = settings.onAllComplete;
         }
@@ -445,7 +446,7 @@ void TaskWorker::controlLoop()
             evaluateLowUsageLocked();
             bandTick += 1;
             // A band boundary must not wait for the next command.
-            if (bandTick % 8 == 0) applyTimeBandLimit();
+            if (bandTick % 8 == 0) { applyTimeBandLimit(); runSchedule(); }
             const auto ready = [this] {
                 return stopping_ || !queue_.empty() || anyJobFinished();
             };
@@ -634,6 +635,41 @@ void TaskWorker::applyTimeBandLimit()
     GetLocalTime(&now);
     const int minute = static_cast<int>(now.wHour) * 60 + static_cast<int>(now.wMinute);
     if (service_) service_->setRateLimit(limitAtMinute(bands, minute, base));
+}
+
+void TaskWorker::runSchedule()
+{
+    std::vector<ScheduledAction> schedule;
+    {
+        std::lock_guard lock(settingsMutex_);
+        schedule = schedule_;
+    }
+    if (schedule.empty()) return;
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    const int minute = static_cast<int>(now.wHour) * 60 + static_cast<int>(now.wMinute);
+    const auto due = actionAtMinute(schedule, minute);
+    if (!due) return;
+    {
+        std::lock_guard lock(settingsMutex_);
+        if (!shouldFire(lastFiredMinute_, minute, *due)) return;
+        lastFiredMinute_ = minute;
+    }
+    // The schedule acts on the whole list, not on a selection.
+    for (const auto& task : service_->snapshots()) {
+        if (due->start) {
+            if (task.state == TaskState::Queued || task.state == TaskState::Paused
+                || task.state == TaskState::Failed)
+                launches_.push_back(task.id);
+        } else if (task.state == TaskState::Running) {
+            pauses_.push_back(task.id);
+        }
+    }
+    // Commands must not run on the control thread, so queue them like any other.
+    for (const auto& id : launches_) postStart(id);
+    for (const auto& id : pauses_) postPause(id);
+    launches_.clear();
+    pauses_.clear();
 }
 
 void TaskWorker::noteActivity()
