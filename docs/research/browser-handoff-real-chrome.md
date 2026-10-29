@@ -189,3 +189,23 @@ service worker 会休眠、`import()` 被规范禁止、下载事件时有时无
 下一轮用**干净 profile + 该开关**正常加载扩展，让 MV3 生命周期按浏览器默认行为运行，再跑点击测试。
 
 这样即使仍失败，也能确定问题在扩展逻辑而不是加载方式。
+
+## 2026-10-29 第七轮：`browser_not_eligible` 与"加载的可能是旧代码"
+
+本轮把检查推进到最后一层：
+
+- 在 SW 里确认监听器都注册了：`downloads: true, headers: true, enabled: true`；
+- 点击后匹配器确实运行，返回 `browser_not_eligible`；
+- 但从 CDP 读到的下载项是 `state: in_progress, paused: false, byExtensionId: null, incognito: false`——
+  按 `match()` 的判定条件，它**应当**是合格的。
+
+两者矛盾，说明**运行的 worker 代码与磁盘上的不一致**：我在 `worker.mjs` 里加的详细日志
+（打印 item 各字段）没有出现在输出里，只有旧格式的一行。上一次扩展是用同一个 profile 加载的，
+`Extensions.loadUnpacked` 很可能复用了已安装的副本，而不是重新读取磁盘。
+
+## 下一轮（确定性做法）
+
+每次运行使用**全新 profile 目录**（如 `.deps/chrome-profile-<随机>`），确保 Chrome 从磁盘读取当前
+`browser/` 代码；同时把 `worker.mjs` 的日志保留为默认行为（它本身对用户也有价值）。
+若 `browser_not_eligible` 仍在"字段全部合格"时出现，那就是判定逻辑与 Chrome 实际字段不符，
+届时应打印 `JSON.stringify(item)` 全文比对，而不是继续猜。

@@ -19,11 +19,17 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
   async function consider(item) {
     await ready;
     if (!settings.enabled) return;
+    // The item handed to onCreated is a snapshot from before the download has
+    // settled; the matcher judges its state, so read it again first.
+    const fresh = await browser.get(item.id);
+    if (fresh) item = fresh;
     const result = observer.match(item);
     // Say why a download was left to the browser: without it, "the handoff did
     // nothing" and "the handoff is broken" look identical from the outside.
     if (!result.request) {
-      console.log('handoff: ignored', item.id, result.reason);
+      console.log('handoff: ignored', item.id, result.reason, JSON.stringify({
+        state: item.state, paused: item.paused, byExtensionId: item.byExtensionId ?? null,
+        incognito: item.incognito, id: item.id, exists: item.exists}));
       return;
     }
     const record = await controller.run(item.id, result.request);
