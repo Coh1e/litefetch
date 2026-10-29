@@ -1,3 +1,9 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+
 #include "ftp_fixture.h"
 #include "http_fixture.h"
 #include "task_identity.h"
@@ -7,6 +13,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <stdexcept>
 #include <thread>
@@ -679,6 +686,117 @@ void refusesWhenTheVolumeIsFull(const std::filesystem::path& root)
         "the refusal explains the space problem: " + started.task.error);
     require(!std::filesystem::exists(destination), "nothing was written");
 }
+std::string sha256OfBytes(const std::vector<unsigned char>& bytes)
+{
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return {};
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::string result;
+    if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
+        if (BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()),
+                static_cast<ULONG>(bytes.size()), 0) >= 0) {
+            unsigned char digest[32]{};
+            if (BCryptFinishHash(hash, digest, 32, 0) >= 0) {
+                static constexpr char digits[] = "0123456789abcdef";
+                for (const auto byte : digest) {
+                    result.push_back(digits[byte >> 4]);
+                    result.push_back(digits[byte & 0x0f]);
+                }
+            }
+        }
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    return result;
+}
+void sha256Verification(const std::filesystem::path& root)
+{
+    const auto body = payload(4096);
+    HttpFixture fixture(HttpFixture::Options{body});
+    TaskRepository repository(root / "verify.db");
+    TaskService service(repository);
+
+    // Known-good checksum: the download finishes and is marked verified.
+    const auto goodDestination = root / "verified.bin";
+    AddTaskCommand good;
+    good.source = fixture.url("/verified.bin");
+    good.destination = goodDestination.string();
+    good.sha256 = sha256OfBytes(body);
+    const auto goodTask = service.execute(good);
+    require(goodTask.ok, "add failed: " + goodTask.error);
+    require(goodTask.task.sha256 == good.sha256,
+        "the checksum did not reach the task: got " + goodTask.task.sha256);
+    const auto goodRun = service.execute(StartTaskCommand{goodTask.task.id});
+    require(goodRun.ok, "start failed: " + goodRun.error);
+    require(goodRun.task.state == TaskState::Completed, "a matching checksum completes");
+    require(goodRun.task.verified, "a matching checksum is reported as verified");
+
+    // Wrong checksum: the task fails and says why.
+    const auto badDestination = root / "mismatch.bin";
+    AddTaskCommand bad;
+    bad.source = fixture.url("/mismatch.bin");
+    bad.destination = badDestination.string();
+    bad.sha256 = std::string(64, '0');
+    const auto badTask = service.execute(bad);
+    require(badTask.ok, "the second add failed: " + badTask.error);
+    const auto badRun = service.execute(StartTaskCommand{badTask.task.id});
+    require(badRun.ok, "the second start failed: " + badRun.error);
+    require(badRun.task.state == TaskState::Failed, "a wrong checksum fails the task");
+    require(badRun.task.error.find("checksum") != std::string::npos,
+        "the failure names the checksum: " + badRun.task.error);
+
+    // No checksum: complete, but never claimed verified.
+    const auto plainDestination = root / "plain.bin";
+    AddTaskCommand plain;
+    plain.source = fixture.url("/plain.bin");
+    plain.destination = plainDestination.string();
+    const auto plainTask = service.execute(plain);
+    require(plainTask.ok, "the third add failed: " + plainTask.error);
+    const auto plainRun = service.execute(StartTaskCommand{plainTask.task.id});
+    require(plainRun.ok, "the third start failed: " + plainRun.error);
+    require(plainRun.task.state == TaskState::Completed, "a download without a checksum completes");
+    require(!plainRun.task.verified, "a download without a checksum is not verified");
+}
+void transientFailuresAreRetried(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "retry.db");
+    int calls = 0;
+    auto flaky = [&](const TransferRequest& request, const std::atomic_bool&,
+                     const std::function<void(const TransferProgressInfo&)>&) {
+        ++calls;
+        TransferResult result;
+        if (calls < 3) {
+            result.status = TransferStatus::Failed;
+            result.error = TransferError::Network;
+            result.message = "the connection was reset";
+            return result;
+        }
+        std::ofstream output(request.destination, std::ios::binary);
+        output << "done";
+        result.status = TransferStatus::Completed;
+        result.received = 4;
+        result.total = 4;
+        return result;
+    };
+    TaskService service(repository, flaky);
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/flaky.bin",
+        (root / "flaky.bin").string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Completed, "the third attempt completes");
+    checkEqual(static_cast<long long>(calls), 3LL, "a transient failure is retried up to success");
+
+    // A permanent network failure stops at the budget instead of retrying forever.
+    calls = -97; // the next three attempts all fail
+    const auto stubborn = service.execute(AddTaskCommand{"http://example.invalid/stuck.bin",
+        (root / "stuck.bin").string()});
+    require(stubborn.ok, "second add failed: " + stubborn.error);
+    const auto stuckRun = service.execute(StartTaskCommand{stubborn.task.id});
+    require(stuckRun.ok, "second start failed: " + stuckRun.error);
+    require(stuckRun.task.state == TaskState::Failed, "a permanent failure fails the task");
+    checkEqual(static_cast<long long>(calls), -94LL, "the retry budget is three attempts");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -993,6 +1111,8 @@ int body()
     ed2kPauseUsesSharedStop(root.path());
     deleteTaskWithFiles(root.path());
     refusesWhenTheVolumeIsFull(root.path());
+    sha256Verification(root.path());
+    transientFailuresAreRetried(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

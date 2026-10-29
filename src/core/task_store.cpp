@@ -192,6 +192,8 @@ TaskSnapshot readTask(Statement& statement)
     task.seedMode = static_cast<int>(statement.integer(15));
     task.seedRatioMilli = static_cast<int>(statement.integer(16));
     task.seedMinutes = static_cast<int>(statement.integer(17));
+    task.sha256 = statement.text(18);
+    task.verified = statement.integer(19) != 0;
     task.createdAt = statement.integer(7);
     task.updatedAt = statement.integer(8);
     return task;
@@ -229,7 +231,9 @@ void migrateSchema(sqlite3* database)
             "bt_uploaded INTEGER NOT NULL DEFAULT 0,"
             "bt_seed_mode INTEGER NOT NULL DEFAULT 0,"
             "bt_seed_ratio INTEGER NOT NULL DEFAULT 1000,"
-            "bt_seed_minutes INTEGER NOT NULL DEFAULT 30 );"
+            "bt_seed_minutes INTEGER NOT NULL DEFAULT 30,"
+            "sha256 TEXT NOT NULL DEFAULT '',"
+            "verified INTEGER NOT NULL DEFAULT 0 );"
             "INSERT INTO native_tasks_v2(id,source,destination,state,received,total,error,"
             "created_at,updated_at) SELECT id,source,destination,state,received,total,error,"
             "created_at,updated_at FROM native_tasks;"
@@ -278,11 +282,17 @@ void migrateSchema(sqlite3* database)
             "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
             "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
             "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;");
+            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
+            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;");
+    } else if (version == "7") {
+        execute(database,
+            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;");
     } else {
         return;
     }
-    execute(database, "UPDATE native_meta SET value='7' WHERE key='schema_version';");
+    execute(database, "UPDATE native_meta SET value='8' WHERE key='schema_version';");
 }
 
 void verifyVersion(sqlite3* database)
@@ -293,7 +303,7 @@ void verifyVersion(sqlite3* database)
     // 1: original states. 2: paused. 3: restart flag. 4: torrent files.
     // 5: user trackers.
     if (version != "1" && version != "2" && version != "3" && version != "4" && version != "5"
-        && version != "6" && version != "7")
+        && version != "6" && version != "7" && version != "8")
         throw StorageError("Database was created by a newer LiteFetch native version");
 }
 
@@ -382,7 +392,9 @@ void TaskRepository::initialize()
             "bt_uploaded INTEGER NOT NULL DEFAULT 0,"
             "bt_seed_mode INTEGER NOT NULL DEFAULT 0,"
             "bt_seed_ratio INTEGER NOT NULL DEFAULT 1000,"
-            "bt_seed_minutes INTEGER NOT NULL DEFAULT 30);");
+            "bt_seed_minutes INTEGER NOT NULL DEFAULT 30,"
+            "sha256 TEXT NOT NULL DEFAULT '',"
+            "verified INTEGER NOT NULL DEFAULT 0);");
         execute(database_, "INSERT OR IGNORE INTO native_meta(key,value) VALUES('schema_version','1');");
         migrateSchema(database_);
         execute(database_, "COMMIT;");
@@ -398,8 +410,8 @@ void TaskRepository::insert(const TaskSnapshot& task)
     std::lock_guard lock(mutex_);
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
-        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        "INSERT INTO native_tasks(id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes,sha256,verified) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     statement.text(1, task.id);
     statement.text(2, task.source);
     statement.text(3, task.destination);
@@ -418,6 +430,8 @@ void TaskRepository::insert(const TaskSnapshot& task)
     statement.integer(16, task.seedMode);
     statement.integer(17, task.seedRatioMilli);
     statement.integer(18, task.seedMinutes);
+    statement.text(19, task.sha256);
+    statement.integer(20, task.verified ? 1 : 0);
     statement.done();
 }
 
@@ -427,7 +441,7 @@ void TaskRepository::update(const TaskSnapshot& task)
     if (readOnly_) throw StorageError("Database is read-only");
     Statement statement(database_,
         "UPDATE native_tasks SET source=?,destination=?,state=?,received=?,total=?,error=?,updated_at=?,"
-        "restart_required=?,bt_files=?,bt_trackers=?,bt_meta=?,bt_private=?,bt_uploaded=?,bt_seed_mode=?,bt_seed_ratio=?,bt_seed_minutes=? WHERE id=?");
+        "restart_required=?,bt_files=?,bt_trackers=?,bt_meta=?,bt_private=?,bt_uploaded=?,bt_seed_mode=?,bt_seed_ratio=?,bt_seed_minutes=?,sha256=?,verified=? WHERE id=?");
     statement.text(1, task.source);
     statement.text(2, task.destination);
     statement.text(3, taskStateName(task.state));
@@ -444,7 +458,9 @@ void TaskRepository::update(const TaskSnapshot& task)
     statement.integer(14, task.seedMode);
     statement.integer(15, task.seedRatioMilli);
     statement.integer(16, task.seedMinutes);
-    statement.text(17, task.id);
+    statement.text(17, task.sha256);
+    statement.integer(18, task.verified ? 1 : 0);
+    statement.text(19, task.id);
     statement.done();
     if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not updated");
 }
@@ -462,7 +478,7 @@ void TaskRepository::remove(std::string_view id)
 std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes,sha256,verified "
         "FROM native_tasks WHERE id=?");
     statement.text(1, id);
     if (!statement.row()) return std::nullopt;
@@ -472,7 +488,7 @@ std::optional<TaskSnapshot> TaskRepository::find(std::string_view id)
 std::vector<TaskSnapshot> TaskRepository::all()
 {
     std::lock_guard lock(mutex_);
-    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes "
+    Statement statement(database_, "SELECT id,source,destination,state,received,total,error,created_at,updated_at,restart_required,bt_files,bt_trackers,bt_meta,bt_private,bt_uploaded,bt_seed_mode,bt_seed_ratio,bt_seed_minutes,sha256,verified "
         "FROM native_tasks ORDER BY created_at,id");
     std::vector<TaskSnapshot> tasks;
     while (statement.row()) tasks.push_back(readTask(statement));

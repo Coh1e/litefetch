@@ -4,13 +4,71 @@
 #include "text_utf8.h"
 
 #include <chrono>
+#include <thread>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <vector>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 
 namespace litefetch {
 namespace {
+namespace {
+std::string sha256File(const std::string& path)
+{
+    // Hex SHA-256 of the finished file, empty when it cannot be read.
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return {};
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::string result;
+    if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
+        std::vector<char> buffer(64 * 1024);
+        bool ok = true;
+        while (input) {
+            input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const auto read = input.gcount();
+            if (read > 0
+                && BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()),
+                       static_cast<ULONG>(read), 0) < 0) {
+                ok = false;
+                break;
+            }
+        }
+        unsigned char digest[32]{};
+        if (ok && BCryptFinishHash(hash, digest, 32, 0) >= 0) {
+            static constexpr char digits[] = "0123456789abcdef";
+            for (const auto byte : digest) {
+                result.push_back(digits[byte >> 4]);
+                result.push_back(digits[byte & 0x0f]);
+            }
+        }
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    return result;
+}
+
+bool equalsNoCase(const std::string& left, const std::string& right)
+{
+    if (left.size() != right.size()) return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(left[index]))
+            != std::tolower(static_cast<unsigned char>(right[index])))
+            return false;
+    }
+    return true;
+}
+} // namespace
+
 std::int64_t nowMillis()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -160,6 +218,7 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     task.trackers = command.trackers;
     task.torrentFiles = command.torrentFiles;
     task.torrentPrivate = command.torrentPrivate;
+    task.sha256 = command.sha256;
     task.createdAt = nowMillis();
     task.updatedAt = task.createdAt;
     try {
@@ -353,8 +412,17 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         }
     } else {
         try {
-            transferResult = transfer_(TransferRequest{task.source, task.destination,
-                command.restartFromZero, command.username, command.password}, *active->cancelled, progress);
+            // A transient network failure gets a small, bounded budget instead of
+            // retrying forever; TLS, disk and permission errors are final.
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                transferResult = transfer_(TransferRequest{task.source, task.destination,
+                    command.restartFromZero, command.username, command.password},
+                    *active->cancelled, progress);
+                const bool transient = transferResult.status == TransferStatus::Failed
+                    && transferResult.error == TransferError::Network;
+                if (!transient || active->cancelled->load() || attempt == 3) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(200 * attempt));
+            }
         } catch (const std::exception& error) {
             transferResult.status = TransferStatus::Failed;
             transferResult.error = TransferError::Internal;
@@ -375,6 +443,22 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         task.state = TaskState::Completed;
         task.error.clear();
         task.restartRequired = false;
+        // A checksum turns "finished" into "verified"; without one the task is
+        // complete but never claims to be verified.
+        if (!task.sha256.empty()) {
+            const auto actual = sha256File(task.destination);
+            if (actual.empty()) {
+                task.state = TaskState::Failed;
+                task.error = "cannot read the finished file to verify it";
+            } else if (!equalsNoCase(actual, task.sha256)) {
+                task.state = TaskState::Failed;
+                task.error = "checksum mismatch: expected " + task.sha256 + ", got " + actual;
+            } else {
+                task.verified = true;
+            }
+        } else {
+            task.verified = false;
+        }
     } else if (transferResult.restartRequired) {
         // The bytes on disk no longer match the resource. Nothing is deleted
         // until the user confirms a restart from zero.

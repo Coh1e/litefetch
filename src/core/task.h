@@ -50,6 +50,10 @@ struct TaskSnapshot {
     int seedMinutes = 30;
     // Live peer count reported by the engine; never persisted.
     int peers = 0;
+    // User supplied SHA-256 (hex) and whether it was actually checked. A
+    // finished download without a checksum is never reported as verified.
+    std::string sha256;
+    bool verified = false;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };
@@ -69,6 +73,8 @@ struct AddTaskCommand {
     // content itself, so a magnet and a .torrent for the same torrent share one
     // task even though their source strings differ.
     std::string identity;
+    // Optional SHA-256 the finished file must match.
+    std::string sha256;
     // BitTorrent only: the metadata the selection dialog showed, kept so the
     // properties page can list the files without re-fetching.
     std::vector<TorrentFileInfo> torrentFiles;
