@@ -55,6 +55,8 @@ public:
     std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
     // Exposed for the window harness: the DPI the layout is currently using.
     int dpiForTest() const { return dpi_; }
+    // How many times the worker has reported that the batch is over.
+    int completedBatchesForTest() { return worker_ ? worker_->snapshot().allCompleteSequence : 0; }
     // Exposed for the window harness: the status text the list shows.
     std::string errorOfTaskNamed(const std::string& name) const
     {

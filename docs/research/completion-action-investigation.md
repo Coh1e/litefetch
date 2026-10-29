@@ -47,3 +47,26 @@ the task finishes: 下载失败 | 无法写入目标文件（destination directo
 正确的断言应该是"窗口句柄已经不存在"（`IsWindow(handle) == FALSE`），而不是"读到 WM_QUIT"。
 这一点已经想清楚，但本轮改文件时把中文串写坏了（PowerShell 写入破坏了 UTF-8），
 所以先回滚文件、保住绿色，下一轮用编辑工具重做这条断言。
+## 2026-10-29 第三轮：批次从未被记为结束
+
+把窗口的等待改成"句柄消失"（`IsWindow(handle) == FALSE`）之后，任务确实完成，窗口仍未销毁。
+再加一个测试访问器直接读 worker 的计数：
+
+```
+the worker reported the end of the batch: 0
+```
+
+**根因找到了**：`TaskWorker::allCompleteSequence_` 在任务成功后仍然是 0——即"批次结束"这个事件根本没有发生，
+所以窗口里的完成动作分支永远不执行。这不是窗口的问题，是 worker 的批次记账问题。
+
+`noteBatchProgress()` 只在 `reapFinished()` 末尾调用；`batchActive_` 在派发任务时置真。
+按代码看应该能递增，但实测没有，说明要么 `reapFinished()` 没被调用到，要么这次任务不是以 job 形式跑的。
+
+顺带排除了一个假警报：用 `Get-Content` 看到 `task_worker.cpp` 里有乱码，但 `git diff` 为空、
+按 UTF-8 读取正常——是控制台解码造成的，文件本身没坏。**先验证再动手**，差点去"修"一个不存在的问题。
+
+## 下一步
+
+1. 确认 `refreshFromWorker()` 是否调用 `worker_->reapFinished()`（若刷新路径不回收，单任务跑完后 jobs_ 永远非空）；
+2. 若是，则完成动作在任何场景下都不会触发，属于真实缺陷，需要在 worker 侧修；
+3. 修好后用同一用例（句柄消失 + 计数 > 0）验证，并用"去掉完成动作"做有牙检查。
