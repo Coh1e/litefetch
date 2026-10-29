@@ -226,6 +226,13 @@ void theServerAnswersOverARealPipe(const std::filesystem::path& root)
     checkEqual(id->asString(), std::string("m-9f2"), "the id value is unchanged");
     const auto taskId = answered.find("result")->stringOr("taskId", "");
     check(!taskId.empty(), "the task was created");
+    // The extension checks this against Date.now(), so it must be an absolute
+    // epoch millisecond value rather than a duration.
+    const auto expiresAt = answered.find("result")->numberOr("expiresAt", 0);
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    check(expiresAt > now, "the lease expiry is in the future");
+    check(expiresAt < now + 600000, "the lease expiry is bounded");
     const auto stored = service.snapshot(taskId);
     check(stored.has_value() && stored->source == "https://example.test/ext.bin",
         "payload.url became the task source");

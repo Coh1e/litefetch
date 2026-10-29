@@ -48,3 +48,18 @@ node scripts\browser-probe.mjs 9334
 ```
 
 清单必须是 **UTF-8 无 BOM**：PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM，Chrome 会拒绝。
+
+## 2026-10-29 续：租约字段与"服务工作者不启动"
+
+扩展的 `handoff.mjs` 用 `status.expiresAt` 与 `Date.now()` 比较；桥接层原先只回 `expiresInMs`，
+会被判为 `native_lease_invalid` 并落到 `attention`。已改为回**绝对 epoch 毫秒**，并有用例锁住。
+
+**尚未打通**：从真实下载事件触发接管。原因不是协议，而是本会话里扩展的 **MV3 service worker
+从未启动**（`/json/list` 里只有 popup 页面，没有 `service_worker` 目标），因此 `downloads.onCreated`
+不触发；Chrome 155 的 DevTools 端点也不再提供 `ServiceWorker.startWorker`（返回 -32601）。
+页面上点击链接的下载本身成功（`downloads.search` 显示 `state: complete`）。
+
+下一步的两条路：
+
+1. 在 popup 页面里 `import('./worker.mjs')` 并 `installWorker(chrome)`，用真实扩展代码驱动一次；
+2. 或不经 CDP 加载扩展（正常"加载已解压扩展"后手动点一次），让 MV3 生命周期按浏览器默认行为运行。

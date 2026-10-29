@@ -96,11 +96,16 @@ std::string BrowserBridge::prepare(const JsonValue& id, const std::string& reque
     lease.expiresAt = std::chrono::steady_clock::now() + lease_;
     leases_[requestId] = lease;
 
+    // The extension compares this with Date.now(), so it is an absolute epoch
+    // millisecond value, not a duration.
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
         lease.expiresAt - std::chrono::steady_clock::now());
+    const auto epochNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch());
     auto result = JsonValue::makeObject();
     result.set("state", JsonValue::makeString("prepared"));
     result.set("taskId", JsonValue::makeString(added.task.id));
+    result.set("expiresAt", JsonValue::makeNumber(epochNow.count() + remaining.count()));
     result.set("expiresInMs", JsonValue::makeNumber(remaining.count()));
     return okAnswer(id, std::move(result));
 }
