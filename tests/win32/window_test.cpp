@@ -488,15 +488,22 @@ void runChecks()
             return status == L"下载中" || status == L"正在连接";
         }, 15000), "the slow task reports a running transfer before the pause");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PAUSE, 0), 0);
+        // The transfer may still be winding down when the pause lands; wait for
+        // the size to stop changing instead of requiring it instantly.
+        std::error_code sizeError;
+        auto lastSize = std::filesystem::file_size(slowPartial, sizeError);
+        int stableSamples = 0;
         check(pumpUntil([&] {
-            std::error_code error;
-            const auto first = std::filesystem::file_size(slowPartial, error);
-            for (int sample = 0; sample < 4; ++sample) {
-                pumpUntil([] { return false; }, 100);
-                std::error_code next;
-                if (std::filesystem::file_size(slowPartial, next) != first) return false;
+            pumpUntil([] { return false; }, 100);
+            std::error_code next;
+            const auto size = std::filesystem::file_size(slowPartial, next);
+            if (next) return false;
+            if (size == lastSize) ++stableSamples;
+            else {
+                stableSamples = 0;
+                lastSize = size;
             }
-            return first > 0;
+            return stableSamples >= 3 && size > 0;
         }, 15000), "pause stops the transfer and keeps the partial data");
         check(!std::filesystem::exists(slowDestination), "paused transfer is not published");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
