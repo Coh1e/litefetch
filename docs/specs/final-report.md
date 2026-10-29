@@ -1,0 +1,113 @@
+# Win32 LiteFetch 最终交代
+
+日期：2026-10-29。本文回答一件事：**哪些做完了、哪些没有、证据在哪、还需要人做什么。**
+
+## 一、验收方式与最近一次结果
+
+```
+cmd /c test-local.cmd
+→ 100% tests passed, 0 tests failed out of 23
+→ Total Test time (real) = 166.64 s   (第 117 轮实测)
+```
+
+- 23 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
+- 测试与票面的对应关系见 `docs/specs/verification-index.md`；
+- 发布包：`out/package/litefetch-0.1.0`，13 个文件 / 16.2 MiB；
+- 包内 smoke：窗口 219 ms 出现、退出码 0（`.pi/evidence/final/`）。
+
+## 二、逐票状态
+
+### 已完成（16 张，Issue 已关闭）
+
+| 票 | 主题 | 关键证据 |
+|---|---|---|
+| 04 | 列表、批量入口与基本任务操作 | `ui-model`、`ui-view`、`ui-batch` |
+| 05 | HTTP 暂停、续传与崩溃恢复 | `core-service`、`core-store`；强杀重启实验（`docs/research/blocked-storage-and-forced-kill.md`） |
+| 06 | HTTPS 与站点认证 | `core-service`、`core-credentials` |
+| 07 | HTTP 分段、连接复用与站点上限 | `core-service` |
+| 08 | FTP 下载、认证与续传 | `core-service`（FTP fixture） |
+| 09 | BT/磁力真实下载与文件确认 | `core-bt` |
+| 10 | BT 属性、文件优先级与追踪器 | `ui-window`、`core-bt` |
+| 11 | BT 恢复、校验、上传与做种 | `core-bt` |
+| 12 | ed2k 服务器找源与同进程下载 | `core-ed2k` |
+| 13 | ed2k 大文件、多源与发布恢复 | `core-ed2k` |
+| 14 | Kad 查找、路由与持久恢复 | `core-kad` |
+| 15 | ed2k 上传、入站、LowID 与协议互通 | `core-ed2k` |
+| 19 | SHA-256 验证及统一错误恢复 | `core-service`（含中文失败文案） |
+| 21 | 凭据按需记住与隐私验证 | `core-credentials`（DPAPI，不落明文） |
+| 22 | 现代浏览器方案与真实接管边界 | `docs/research/browser-handoff-real-chrome.md` |
+| 27 | 移除 Qt、Release 包与依赖/许可证审计 | `scripts/package-release.ps1`、`LICENSE`、`THIRD-PARTY.txt` |
+
+### 部分完成（5 张，Issue 打开）
+
+| 票 | 已交付 | 缺口 |
+|---|---|---|
+| 16 | 跨引擎限速、并发槽、优先级、低占用、下载/上传/校验三类流量 | **元数据流量**未计：libtorrent 不通过进度回调报告元数据字节 |
+| 17 | 选项对话框可达（限速/代理/超时/ed2k/并发/时段/计划），代理经 `CURLOPT_PROXY` | 对话框交互**无自动化验证**：模态窗口，进程内 harness 驱不动 |
+| 18 | 删除任务与文件、空间预检、同名策略、分类保存、暂停保留进度；受阻目录与强杀一致性已有真实证据 | 实验用"拒绝写入的目录"而非只读卷（表现一致，介质不同）；等你确认后关闭 |
+| 25 | 时段限速、计划任务、完成动作；"完成后关闭程序"已由 `ui-window` 锁住（含有牙检查） | 只剩"完成后打开文件夹"（会拉起资源管理器，无法在进程内断言） |
+| 26 | 托盘、通知、DPI（含 `WM_DPICHANGED` 重排用例）、加速键审计 | 高对比目视、纯键盘走查、逐状态画板核对 |
+
+### 未完成（4 张，Issue 打开）
+
+| 票 | 状态 | 原因 |
+|---|---|---|
+| 20 | 未开工 | 你确认本机没有旧库样本，导入两种数据模式无从验证 |
+| 23 | **协议层与 host 已真机验证，点击接管未验证** | 真实 Chrome 下，扩展 → host → 管道 → 应用 → 建任务可用；"点击下载 → 暂停 → 交接 → 提交"未跑通，详见第七节 |
+| 24 | 未开工 | 依赖 23；且需要 Edge 与 Firefox 的实机验证 |
+| 28 | 未完成 | 干净 Windows 全范围验收，本环境不具备条件 |
+
+## 三、本会话修掉的真实缺陷
+
+不是为了让测试变绿而改的代码，每条都有失败现象与验证方式：
+
+1. **浏览器 host 读帧两个致命 bug**：stdin/stdout 未设二进制模式（长度字节被翻译）、按 4096 字节块读导致永久阻塞。真实 Chrome 联调立刻暴露，已加管道回归用例（写一帧并保持写端打开）；
+2. **租约字段错误**：扩展用 `expiresAt` 与 `Date.now()` 比较，桥接层只回 `expiresInMs` → 判 `native_lease_invalid`；
+3. **观察器误判**：同源 `Referer` 被当成不可重放；导航转下载的 `ERR_ABORTED` 被当成请求失败；
+4. **设置不持久**：`TaskWorker` 从不调用 `loadSettings()`，重启后限速、代理、并发、时段、计划、完成后动作**全部回默认**；
+5. **批次记账竞态**：`jobs_.push_back()` 与 `batchActive_ = true` 不在同一把锁内，快速传输下"批次结束"事件永不产生；
+6. **错误文案混语言**：引擎英文错误直接显示在中文界面，现为"无法写入目标文件（destination directory does not exist）"。
+
+第 4、5 条是从"完成后动作不触发"一条线索挖出来的，影响面远超该功能。
+
+## 四、只用真机才验证到的三件事
+
+| 事项 | 结果 | 位置 |
+|---|---|---|
+| 扩展 → native host → 管道 → 应用 → 建任务 | `prepare` 返回 `ok:true`，任务落库 | `docs/research/browser-handoff-real-chrome.md` |
+| 受阻存储 | 目录拒绝写入 → 任务 `failed`、`error: cannot create the partial file`、无重试 | `docs/research/blocked-storage-and-forced-kill.md` |
+| 强制终止 | 强杀后库中 `running`，重启变 `paused` | 同上 |
+
+## 五、交付物与代码位置
+
+```
+src/core/      下载引擎、任务服务、调度、限速、流量、凭据、BT/ed2k/Kad、浏览器桥接
+src/win32/     窗口、列表模型、选项、托盘、后台 worker
+src/tools/     litefetch-core-cli、litefetch-browser-host
+browser/       MV3 扩展（manifest、worker、适配器、弹窗）
+tests/         23 个测试的源码
+docs/specs/    交付状态、验收报告、人工验收清单、票面计划、验证索引
+docs/research/ 浏览器联调、受阻存储与强杀、完成动作排查、Figma 对照
+scripts/       打包、smoke、浏览器联调探针
+```
+
+## 六、需要你做的三件事
+
+1. **#23（1 分钟）**：`chrome://extensions` → 开发者模式 → 加载已解压的扩展程序 → 选 `browser/`；
+   确认注册键指向 `out/browser-connection/org.native_downloader.bridge.json`（UTF-8 无 BOM）；
+   启动 LiteFetch，在弹窗里打开开关并允许站点，点一个下载链接，看本机列表是否出现任务。
+   **出现了 → #23 通过；没出现 → 把现象告诉我（弹窗提示、徽标是否变 `!`）。**
+2. **#18**：证据已齐，你点头我就关闭。
+3. **#28**：需要一台干净 Windows，或你明确接受"单机验证"这个边界。
+
+## 七、为什么 #23 的最后一环没跑通
+
+真实 Chrome 下已确认：扩展加载成功、native 通道可用、请求观察记录有效（`invalid:false`、有请求头与 200 响应）、
+下载事件到达（`state: in_progress`）。卡在匹配器给出的 `browser_not_eligible`，而同一时刻读到的下载项是
+`in_progress / paused:false / byExtensionId:null / incognito:false`——按判定条件应当合格，两者矛盾。
+
+已排除：通道、租约字段、清单 BOM、HKCU 注册、监听器注册（`hasListeners()` 全为 true）、服务端限速。
+
+自动化手段的边界：SW 里 `import()` 被规范禁止；`ServiceWorker.startWorker` 在 Chrome 155 已移除；
+`--load-extension` 开关被特性关闭。这些都不是产品缺陷，靠继续折腾 CDP 收益很低。
+**所以这一步留给你手工一分钟，是当前最有效的路径。**

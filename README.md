@@ -2,7 +2,10 @@
 
 面向 Windows 10/11 x64 的开源原生下载管理器，目标是统一支持 HTTP(S)/FTP、BT/磁力链、ed2k/Kad，以及浏览器接管、任务恢复、限速与计划任务。
 
-项目正在从迁入的 Qt 实现重新设计为 C++23 / Win32 原生应用。当前源码仍依赖 Qt，Win32 迁移和完整功能尚未完成。原 MiniThunder 逆向成果用于行为研究，不加载其闭源下载 DLL，不接入迅雷加速网络。
+当前实现是 **C++23 / Win32 原生应用**，Qt 旧实现已从仓库移除。逐票交付状态见
+[交付状态](docs/specs/win32-delivery-status.md)，全范围结论见 [最终交代](docs/specs/final-report.md)，
+测试与票面的对应见 [验证索引](docs/specs/verification-index.md)。
+原 MiniThunder 逆向成果仅用于行为研究，不加载其闭源下载 DLL，不接入迅雷加速网络。
 
 ## 设计与范围
 
@@ -12,19 +15,21 @@
 
 ## 环境准备、构建与运行
 
-现有构建使用 MSVC、CMake/Ninja、vcpkg，以及 Qt、libcurl、libtorrent、SQLite 等依赖。旧 Qt 应用仍是完整功能的对照实现；新的无 Qt 任务核心与命令行已可用于 HTTP 下载、状态快照和持久化验证。
+现有构建使用 MSVC、CMake/Ninja 与项目内 vcpkg（libcurl、libtorrent、SQLite 等）。
 
-### 无 Qt 任务核心（当前验证范围）
+### 构建、测试与运行
 
-前置：在项目内准备 vcpkg 并安装 curl、sqlite3（本仓库使用 `.deps/vcpkg` 与 `.deps/installed-core`，均为被忽略目录，不做全局安装；可运行 `powershell -File scripts\bootstrap-core-deps.ps1`）。先加载 MSVC 环境（如 `vcvars64.bat`），然后：
+前置：在项目内准备 vcpkg 依赖（本仓库使用 `.deps/`，被忽略，不做全局安装；可运行
+`powershell -File scripts\bootstrap-core-deps.ps1`）。先加载 MSVC 环境（`vcvars64.bat`），然后：
 
 ```powershell
 cmake --preset windows-core
 cmake --build out/build/windows-core
-ctest --test-dir out/build/windows-core --output-on-failure
+cmd /c test-local.cmd     # 23 个测试，约 165–185 秒
+out\build\windows-core\litefetch-win32.exe
 ```
 
-`windows-core` 预设显式关闭 Qt 对照目标、使用项目内最小依赖树，并保持 `TEMP`/`TMP` 在项目内。命令行入口：
+`windows-core` 预设使用项目内最小依赖树，并保持 `TEMP`/`TMP` 在项目内。命令行入口：
 
 ```powershell
 out/build/windows-core/litefetch-core-cli.exe add --db data/tasks.db --source http://127.0.0.1:8080/file.bin --destination D:\Downloads\file.bin
@@ -32,13 +37,21 @@ out/build/windows-core/litefetch-core-cli.exe start --db data/tasks.db --id <tas
 out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
 ```
 
+发布包：`powershell -File scripts/package-release.ps1` → `out/package/litefetch-0.1.0`；
+包内 smoke：`powershell -File scripts/win32-smoke.ps1 -AppPath <exe>`。
+
 手工验证可用 `node scripts/core-http-fixture.mjs 8080 262144` 启动受控 HTTP 对端；脚本输出内容 SHA-256，便于与下载文件独立比对。
 
-### 旧 Qt 对照路径
+### 浏览器接管
 
-`windows-base` 预设和 `native-downloader` 目标保留原有 Qt 实现，依赖 Qt/libtorrent 等完整依赖树；默认在检测到 Qt 时启用，也可用 `-DLITEFETCH_BUILD_QT_LEGACY=ON/OFF` 显式控制。本轮未构建该路径。
+扩展在 `browser/`，原生宿主在 `out/browser-connection/`。安装步骤与注册键见
+[人工验收清单](docs/specs/human-acceptance-checklist.md) 第 4 节；真实 Chrome 下的联调记录见
+[浏览器联调](docs/research/browser-handoff-real-chrome.md)。
 
-旧入口 configure-local.cmd、build-local.cmd、test-local.cmd 和 smoke-local.ps1 保留供迁移核对；其中含旧机器工具路径，并依赖未迁入的本机预设和依赖，当前不能保证直接运行。准备环境前先核对这些路径和 CMakePresets.json，不将历史构建成功视为当前可构建。
+### 旧入口
+
+configure-local.cmd、build-local.cmd、test-local.cmd 与 smoke-local.ps1 中的工具路径属于迁移前环境；
+准备环境前先核对它们与 `CMakePresets.json`，不将历史构建成功视为当前可构建。
 
 依赖和缓存放 .deps/，构建和部署放 out/；本机 CMakeUserPresets.json 不入库。工具、配置、临时文件与运行数据均留在项目内，不做全局安装或使用其他项目配置。
 
