@@ -53,6 +53,8 @@ public:
     // Exposed for the window harness: the priority the list currently shows.
     // Exposed for the window harness: the traffic totals the window last saw.
     std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
+    // Exposed for the window harness: the DPI the layout is currently using.
+    int dpiForTest() const { return dpi_; }
     // Exposed for the window harness: the status text the list shows.
     std::string statusOfTaskNamed(const std::string& name) const
     {

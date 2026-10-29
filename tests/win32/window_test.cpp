@@ -288,6 +288,35 @@ void checkHighContrastNotification(HWND handle, HWND list)
     }
 }
 
+// A DPI change must reflow the window: the columns still fill the list and the
+// rows survive. The harness cannot change the real monitor DPI, so it sends the
+// message Windows would send.
+void checkDpiReflow(HWND handle, HWND list)
+{
+    RECT window{};
+    GetWindowRect(handle, &window);
+    const auto width = window.right - window.left;
+    const auto height = window.bottom - window.top;
+    // 144 DPI is 150% of the usual 96.
+    const UINT dpi = 144;
+    auto* windowObject = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+    const auto before = windowObject->dpiForTest();
+    RECT suggested{window.left, window.top,
+        window.left + width * dpi / 96, window.top + height * dpi / 96};
+    SendMessageW(handle, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+    pumpUntil([] { return false; }, 300);
+    check(listColumnWidthSum(list) == listClientWidth(list),
+        "columns fill the list after a DPI change");
+    check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4, "rows survive a DPI change");
+    check(windowObject->dpiForTest() == static_cast<int>(dpi), "the layout uses the new DPI");
+
+    // Back to 96 so later checks see the usual metrics.
+    RECT back{window.left, window.top, window.left + width, window.top + height};
+    SendMessageW(handle, WM_DPICHANGED, MAKEWPARAM(96, 96), reinterpret_cast<LPARAM>(&back));
+    pumpUntil([] { return false; }, 300);
+    check(listColumnWidthSum(list) == listClientWidth(list),
+        "columns fill the list again after returning to 96 DPI");
+}
 void checkAutomationSurface(HWND handle, int expectedRows)
 {
     IUIAutomation* automation = nullptr;
@@ -423,6 +452,7 @@ void runChecks()
         check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
         check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4; }, 5000),
             "seeded tasks reach the list");
+        checkDpiReflow(handle, list);
         checkAcceleratorCoverage();
         checkHighContrastNotification(handle, list);
         checkAutomationSurface(handle, 4);
