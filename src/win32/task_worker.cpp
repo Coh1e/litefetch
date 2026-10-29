@@ -404,6 +404,12 @@ WorkerSnapshot TaskWorker::snapshot()
     result.outcomes = outcomes_;
     result.lastError = lastError_;
     result.runtimeConcurrency = runtimeConcurrency_;
+    if (service_) {
+        result.traffic[0] = service_->traffic().bytes(TrafficCategory::Download);
+        result.traffic[1] = service_->traffic().bytes(TrafficCategory::Upload);
+        result.traffic[2] = service_->traffic().bytes(TrafficCategory::Metadata);
+        result.traffic[3] = service_->traffic().bytes(TrafficCategory::Verify);
+    }
     result.lastErrorSequence = lastErrorSequence_;
     result.addResultSequence = addResultSequence_;
     result.outcomeSequence = outcomeSequence_;

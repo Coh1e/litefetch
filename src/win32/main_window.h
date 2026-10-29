@@ -51,6 +51,8 @@ public:
     // Exposed for the window harness: whether the notification icon is up.
     bool trayIconVisible() const { return trayVisible_; }
     // Exposed for the window harness: the priority the list currently shows.
+    // Exposed for the window harness: the traffic totals the window last saw.
+    std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
     int priorityOfTaskNamed(const std::string& name) const
     {
         for (const auto& row : model_.rows())
@@ -208,6 +210,7 @@ private:
     std::set<std::string, std::less<>> pendingDeleteIds_;
     std::set<std::string, std::less<>> promptedCredentials_;
     NotificationPolicy notifications_;
+    std::array<std::int64_t, 4> traffic_{};
     std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
     bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;

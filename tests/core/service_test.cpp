@@ -1023,6 +1023,23 @@ void verificationCountsAsItsOwnTraffic(const std::filesystem::path& root)
     checkEqual(service.traffic().bytes(TrafficCategory::Download), 0LL,
         "verification is not counted as a download");
 }
+void downloadsCountAsDownloadTraffic(const std::filesystem::path& root)
+{
+    const auto body = payload(8192);
+    HttpFixture fixture(HttpFixture::Options{body});
+    TaskRepository repository(root / "traffic-download.db");
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{fixture.url("/traffic-dl.bin"),
+        (root / "traffic-dl.bin").string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Completed, "the download completes");
+    checkEqual(service.traffic().bytes(TrafficCategory::Download),
+        static_cast<std::int64_t>(body.size()), "the received bytes are download traffic");
+    checkEqual(service.traffic().bytes(TrafficCategory::Verify), 0LL,
+        "a task without a checksum counts no verify traffic");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1347,6 +1364,7 @@ int body()
     categorizedSavingSortsFiles(root.path());
     priorityIsStoredAndChanged(root.path());
     verificationCountsAsItsOwnTraffic(root.path());
+    downloadsCountAsDownloadTraffic(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

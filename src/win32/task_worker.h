@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 
 #include "kad_node.h"
@@ -55,6 +56,8 @@ struct WorkerSnapshot {
     std::string lastError;
     // The slot limit in force right now (low-usage mode lowers it when idle).
     int runtimeConcurrency = 0;
+    // Traffic totals: download, upload, metadata, verify.
+    std::array<std::int64_t, 4> traffic{};
     std::uint64_t lastErrorSequence = 0;
     std::uint64_t addResultSequence = 0;
     std::uint64_t outcomeSequence = 0;

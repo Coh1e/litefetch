@@ -331,7 +331,13 @@ CommandResult TaskService::start(const StartTaskCommand& command)
 
     std::string progressStorageError;
     std::int64_t lastPersist = nowMillis();
+    std::int64_t lastDownloaded = 0;
     auto progress = [&](const TransferProgressInfo& update) {
+        // Only the increase counts: engines report the running total.
+        if (update.received > lastDownloaded) {
+            traffic_.add(TrafficCategory::Download, update.received - lastDownloaded);
+            lastDownloaded = update.received;
+        }
         task.received = update.received;
         task.total = update.total;
         if (observer_) {

@@ -1526,6 +1526,7 @@ void MainWindow::refreshFromWorker()
     const auto snapshot = worker_->snapshot();
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    traffic_ = snapshot.traffic;
     model_.update(snapshot.tasks, snapshot.active, now);
     if (snapshot.lastErrorSequence != lastErrorSequence_) {
         lastErrorSequence_ = snapshot.lastErrorSequence;
