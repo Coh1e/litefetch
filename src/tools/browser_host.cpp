@@ -7,13 +7,20 @@
 #include "pipe_channel.h"
 
 #include <cstdio>
+#include <fcntl.h>
+#include <io.h>
 #include <iostream>
 #include <string>
 
 int wmain(int argc, wchar_t** argv)
 {
+    // The frame is binary (a 4 byte little endian length), so the standard
+    // handles must not translate line endings or stop at a control byte. Chrome
+    // sends bytes, and without this the length arrives corrupted.
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+
     // The browser passes the calling extension's origin as the first argument.
-    // This host serves one origin, so it only reports what it was given.
     if (argc > 1) {
         std::fwprintf(stderr, L"litefetch browser host: origin %s\n", argv[1]);
     }
