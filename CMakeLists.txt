@@ -23,6 +23,8 @@ add_library(litefetch-core STATIC
     src/core/ed2k_transfer.cpp src/core/ed2k_transfer.h
     src/core/ed2k_task.cpp src/core/ed2k_task.h
     src/core/ed2k_serve.cpp src/core/ed2k_serve.h
+    src/core/kad_id.cpp src/core/kad_id.h
+    src/core/kad_routing.cpp src/core/kad_routing.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
@@ -118,6 +120,12 @@ if(BUILD_TESTING)
     target_link_libraries(win32-native-bridge-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME win32-native-bridge COMMAND win32-native-bridge-tests)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
+    add_executable(core-kad-tests tests/core/kad_test.cpp)
+    target_include_directories(core-kad-tests PRIVATE tests/core)
+    target_link_libraries(core-kad-tests PRIVATE litefetch-core)
+    add_test(NAME core-kad COMMAND core-kad-tests)
+    set_tests_properties(core-kad PROPERTIES TIMEOUT 60)
+
     add_executable(litefetch-ed2khash src/tools/ed2khash.cpp)
     target_link_libraries(litefetch-ed2khash PRIVATE litefetch-core bcrypt)
     add_executable(litefetch-ed2kseed src/tools/ed2kseed.cpp)
