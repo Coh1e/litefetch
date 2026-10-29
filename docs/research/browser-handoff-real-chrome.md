@@ -165,3 +165,27 @@ observerRecords: /handoff.bin  invalid: true
 修完后同一次运行的理由变为 **`browser_not_eligible`**，说明匹配已通过，卡在下载项的状态判断上
 （`item.state !== 'in_progress'` 或 `item.paused`）。下一轮在 `onCreated` 的第一次调用上打印
 `item.state / item.paused / item.byExtensionId`，确认是"创建即完成"还是"创建即暂停"。
+
+## 2026-10-29 第六轮：匹配已通过，缺的是"下载事件送达"
+
+这次页面加载后再点击（避免点空页面），记录显示：
+
+```
+/handoff.bin  invalid: false  hops: [{method: GET, headers: true, response: false}]
+```
+
+- **`invalid` 已为 `false`**：上一轮的两处修复（同源 Referer、ERR_ABORTED）生效，请求可以通过重放判定；
+- **`response: false`**：`onHeadersReceived` 这一跳没有送达扩展；
+- **没有任何 `onCreated` 日志**：这次 `downloads.onCreated` 也没送到。
+
+结论：**协议与匹配逻辑都不是瓶颈**，瓶颈在于"用 CDP 加载的扩展，其事件送达不稳定"——
+service worker 会休眠、`import()` 被规范禁止、下载事件时有时无。
+
+## 下一步：用正常方式加载扩展
+
+`--load-extension` 在 Chrome 137+ 被 `DisableLoadExtensionCommandLineSwitch` 特性关闭，
+但可以用 `--disable-features=DisableLoadExtensionCommandLineSwitch` 重新打开（此前一次尝试失败，
+是因为同一 profile 还有别的 Chrome 实例占用，进程直接退出，不是开关无效）。
+下一轮用**干净 profile + 该开关**正常加载扩展，让 MV3 生命周期按浏览器默认行为运行，再跑点击测试。
+
+这样即使仍失败，也能确定问题在扩展逻辑而不是加载方式。
