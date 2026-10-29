@@ -31,12 +31,16 @@ param(
     # Where the run directory and smoke.log go. Relative paths resolve against
     # the repository root. Default: .pi/evidence/smoke (release runs have no
     # ticket number); ticket runs pass .pi/evidence/<ticket>.
-    [string]$EvidenceRoot = ''
+    [string]$EvidenceRoot = '',
+    # Which exe to launch. Defaults to the core build; the release package passes
+    # its own copy so the shipped folder is what gets exercised.
+    [string]$AppPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path $RepositoryRoot).Path
-$appPath = Join-Path $root 'out/build/windows-core/litefetch-win32.exe'
+$appPath = if ($AppPath -ne '') { (Resolve-Path $AppPath).Path }
+    else { Join-Path $root 'out/build/windows-core/litefetch-win32.exe' }
 $depsBin = Join-Path $root '.deps/installed-core/x64-windows/debug/bin'
 if (-not $EvidenceRoot) {
     $EvidenceRoot = Join-Path $root '.pi/evidence/smoke'
