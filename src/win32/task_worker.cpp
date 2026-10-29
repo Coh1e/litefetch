@@ -37,11 +37,44 @@ bool TaskWorker::start(std::string& error)
     }
     try {
         repository_ = std::make_unique<TaskRepository>(databasePath_);
+        // A Kad node makes ed2k tasks able to find sources without a server. The
+        // contact file lives next to the database and is rewritten on exit.
+        const auto contactsPath = (databasePath_.parent_path() / "kad-contacts.dat").string();
+        try {
+            kad_ = std::make_unique<KadNode>();
+            std::string kadError;
+            if (kad_->start(0, kadError)) kad_->loadContacts(contactsPath);
+            else kad_.reset();
+        } catch (const std::exception&) {
+            kad_.reset();
+        }
+        TaskService::Ed2kTransfer ed2kWithKad = ed2kTransfer_;
+        if (kad_) {
+            ed2kWithKad = [this, contactsPath](const Ed2kTaskRequest& request,
+                              const std::atomic_bool& cancelled,
+                              const std::function<void(std::int64_t, std::int64_t)>& progress) {
+                auto withLookup = request;
+                withLookup.lookup = [this](const std::string& fileHash) {
+                    std::vector<Ed2kSource> sources;
+                    KadId id;
+                    if (!KadId::fromHex(fileHash, id)) return sources;
+                    for (const auto& contact : kad_->findSources(id, 500)) {
+                        Ed2kSource source;
+                        source.address = contact.address;
+                        source.port = contact.port;
+                        sources.push_back(source);
+                    }
+                    return sources;
+                };
+                return ed2kTransfer_(withLookup, cancelled, progress);
+            };
+            (void)contactsPath;
+        }
         service_ = std::make_unique<TaskService>(*repository_, transferHttp,
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total, progress.peers);
             },
-            btTransfer_, ed2kTransfer_,
+            btTransfer_, ed2kWithKad,
             [](const std::filesystem::path& path) -> std::int64_t {
                 // Free bytes on the volume that holds the destination.
                 ULARGE_INTEGER available{};
@@ -189,6 +222,7 @@ void TaskWorker::postRefresh()
 
 void TaskWorker::beginShutdown()
 {
+    stopKad();
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -199,6 +233,15 @@ void TaskWorker::beginShutdown()
     }
     condition_.notify_all();
     wakeUi();
+}
+
+void TaskWorker::stopKad()
+{
+    if (!kad_) return;
+    const auto contactsPath = (databasePath_.parent_path() / "kad-contacts.dat").string();
+    kad_->saveContacts(contactsPath);
+    kad_->stop();
+    kad_.reset();
 }
 
 bool TaskWorker::shutdownComplete() const

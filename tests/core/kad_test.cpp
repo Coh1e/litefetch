@@ -1,6 +1,12 @@
 // Kad routing primitives: 128-bit ids, XOR distance, bucket eviction and the
 // contact file that survives a restart.
 #include "kad_routing.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include "kad_node.h"
 #include "kad_wire.h"
 #include "test_support.h"
@@ -102,6 +108,33 @@ void twoNodes(const std::filesystem::path& root)
 
     owner.stop();
     querier.stop();
+}void badPacketsDoNotKillTheNode(const std::filesystem::path& root)
+{
+    (void)root;
+    KadNode node(idFrom("88888888888888888888888888888888"));
+    std::string error;
+    check(node.start(0, error), "the node starts");
+
+    // Garbage on the socket is ignored and the node keeps answering.
+    sockaddr_in target{};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(node.port());
+    ::inet_pton(AF_INET, "127.0.0.1", &target.sin_addr);
+    const auto udp = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    check(udp != INVALID_SOCKET, "a raw UDP socket is available");
+    const char junk[8] = {'n', 'o', 't', 'k', 'a', 'd', '!', '!'};
+    ::sendto(udp, junk, sizeof(junk), 0, reinterpret_cast<const sockaddr*>(&target),
+        sizeof(target));
+    ::closesocket(udp);
+
+    // A valid bootstrap still works afterwards.
+    KadNode other(idFrom("99999999999999999999999999999999"));
+    check(other.start(0, error), "the second node starts");
+    const bool bootstrapped = other.bootstrap("127.0.0.1", node.port(), 1500, error);
+    check(bootstrapped, ("bootstrap after junk failed: " + error).c_str());
+    check(other.table().size() >= 1, "the node still answers");
+    other.stop();
+    node.stop();
 }void wire()
 {
     KadPacket hello;
@@ -206,6 +239,7 @@ int main()
         TempDir root;
         twoNodes(root.path());
         sourcePublishing(root.path());
+        badPacketsDoNotKillTheNode(root.path());
         return 0;
     });
 }

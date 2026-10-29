@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kad_node.h"
 #include "task.h"
 #include "task_service.h"
 
@@ -90,6 +91,7 @@ public:
     // Non-blocking shutdown request; the control thread cancels live tasks and
     // joins the start threads, then sets shutdownComplete().
     void beginShutdown();
+    void stopKad();
     bool shutdownComplete() const;
     bool hasActiveTasks();
 
@@ -152,6 +154,7 @@ private:
     std::unique_ptr<TaskService> service_;
     TaskService::BtTransfer btTransfer_;
     TaskService::Ed2kTransfer ed2kTransfer_;
+    std::unique_ptr<KadNode> kad_;
     std::thread controlThread_;
     std::mutex mutex_;
     std::condition_variable condition_;
