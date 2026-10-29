@@ -66,6 +66,16 @@ bool TaskWorker::start(std::string& error)
                     }
                     return sources;
                 };
+                withLookup.publish = [this](const std::string& fileHash,
+                                               const std::string& host, std::uint16_t port) {
+                    KadId id;
+                    if (!KadId::fromHex(fileHash, id)) return;
+                    KadContact self;
+                    self.id = kad_->id();
+                    self.address = host;
+                    self.port = port;
+                    kad_->publishSource(id, self, 500);
+                };
                 return ed2kTransfer_(withLookup, cancelled, progress);
             };
             (void)contactsPath;

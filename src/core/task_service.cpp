@@ -275,6 +275,9 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             Ed2kTaskRequest request;
             request.link = task.source;
             request.destination = std::filesystem::path(pathFromUtf8(task.destination)).string();
+            // The seed policy applies to ed2k too: a finished download keeps
+            // serving for the configured minutes, stop-on-complete means zero.
+            request.shareMinutes = task.seedMode == 0 ? 0 : task.seedMinutes;
             try {
                 const auto result = ed2kTransfer_(request, *active->cancelled,
                     [&](std::int64_t received, std::int64_t total) {

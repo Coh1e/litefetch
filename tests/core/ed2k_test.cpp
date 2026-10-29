@@ -15,6 +15,7 @@
 #include "test_support.h"
 
 #include <atomic>
+#include <thread>
 #include <cstdio>
 #include <chrono>
 #include <thread>
@@ -529,6 +530,65 @@ void sourcesFromKad(const std::filesystem::path& root)
     owner.stop();
     server.stop();
 }
+void taskSharesAfterDownload(const std::filesystem::path& root)
+{
+    // The download keeps serving when asked, and a second client can fetch the
+    // same file from it while the task is still "running".
+    const auto payload = litefetch::test::payload(15000);
+    const auto sharedPath = root / "share-source.bin";
+    writeFile(sharedPath, payload);
+    const auto hash = ed2kFileHash(sharedPath.string());
+    Ed2kPeerServer upstream(sharedPath.string(), hash, 0);
+    std::string error;
+    check(upstream.start(error), "the upstream seeder starts");
+
+    Ed2kTaskRequest request;
+    request.link = "ed2k://|file|share.bin|" + std::to_string(payload.size()) + "|" + hash + "|/";
+    request.destination = (root / "share-downloaded.bin").string();
+    request.peers = {{"127.0.0.1", upstream.port()}};
+    request.timeoutMillis = 5000;
+    request.shareMinutes = 1;
+    std::atomic_bool cancelled{false};
+    std::atomic<std::uint16_t> sharePort{0};
+    request.onSharing = [&](std::uint16_t port) { sharePort.store(port); };
+    Ed2kTaskResult taskResult;
+    std::thread task([&] { taskResult = downloadEd2kTask(request, cancelled); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (sharePort.load() == 0 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const auto port = sharePort.load();
+    check(port != 0, "the finished task started sharing");
+
+    // A second client downloads from the sharing task.
+    const auto secondPath = root / "share-second.bin";
+    Ed2kPeerRequest second;
+    second.host = "127.0.0.1";
+    second.port = port;
+    second.fileHash = hash;
+    second.fileSize = static_cast<std::int64_t>(payload.size());
+    second.partPath = secondPath.string();
+    second.timeoutMillis = 5000;
+    const std::atomic_bool stopped{false};
+    const auto fetched = downloadFromEd2kPeer(second, stopped);
+    check(fetched.ok, ("the second client failed: " + fetched.error).c_str());
+    check(readFile(secondPath) == payload, "the shared bytes match");
+
+    // Cancelling the task stops the share.
+    cancelled.store(true);
+    task.join();
+    check(taskResult.ok, "the task ended cleanly");
+    check(taskResult.uploaded > 0, "the task counted the bytes it served");
+    Ed2kPeerRequest after;
+    after.host = "127.0.0.1";
+    after.port = port;
+    after.fileHash = hash;
+    after.fileSize = static_cast<std::int64_t>(payload.size());
+    after.partPath = (root / "after.bin").string();
+    after.timeoutMillis = 1500;
+    check(!downloadFromEd2kPeer(after, stopped).ok, "the share is closed after the task stops");
+    upstream.stop();
+}
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(18000);
@@ -789,6 +849,7 @@ int main()
         manyPartsTransfer(root.path());
         twoLiteFetchPeers(root.path());
         sourcesFromKad(root.path());
+        taskSharesAfterDownload(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;

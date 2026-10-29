@@ -1,6 +1,10 @@
 #include "ed2k_task.h"
 
+#include "ed2k_serve.h"
 #include "ed2k_transfer.h"
+
+#include <chrono>
+#include <thread>
 
 #include <filesystem>
 
@@ -153,6 +157,27 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
     }
     result.ok = true;
     result.received = link.link.size;
+
+    // Sharing keeps the task busy after the bytes are on disk: the same file is
+    // served to other peers until the budget ends or the task is cancelled.
+    if (request.shareMinutes > 0) {
+        Ed2kPeerServer server(request.destination, link.link.hash, request.sharePort);
+        std::string shareError;
+        if (server.start(shareError)) {
+            if (request.onSharing) request.onSharing(server.port());
+            if (request.publish)
+                request.publish(link.link.hash, "127.0.0.1", server.port());
+            const auto deadline = std::chrono::steady_clock::now()
+                + std::chrono::minutes(request.shareMinutes);
+            while (!cancelled.load() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            server.stop();
+            result.uploaded = server.uploadedBytes();
+        } else {
+            result.error = "cannot share the finished file: " + shareError;
+            result.ok = false;
+        }
+    }
     return result;
 }
 

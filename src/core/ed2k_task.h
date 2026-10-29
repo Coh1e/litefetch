@@ -22,11 +22,20 @@ struct Ed2kTaskRequest {
     // Last resort when no peer is known and no server answers: ask Kad.
     std::function<std::vector<Ed2kSource>(const std::string& fileHash)> lookup;
     int timeoutMillis = 15000;
+    // After the file is published, keep serving it for this many minutes
+    // (0 stops). Cancelling the task stops the share immediately.
+    int shareMinutes = 0;
+    std::uint16_t sharePort = 0;
+    // Called once the share is listening, so callers (and tests) can reach it.
+    std::function<void(std::uint16_t port)> onSharing;
+    // Announces the share so other nodes can find it (Kad).
+    std::function<void(const std::string& fileHash, const std::string& host, std::uint16_t port)> publish;
 };
 
 struct Ed2kTaskResult {
     bool ok = false;
     std::int64_t received = 0;
+    std::int64_t uploaded = 0;
     std::string error;
     // True when at least one server answered but knew no sources, which is a
     // different situation from every server failing.
