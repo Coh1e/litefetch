@@ -48,7 +48,7 @@
 | 票 | 主题 | 说明 |
 |---|---|---|
 | 20 | 旧任务显式导入与两种数据模式 | 人类确认没有旧库样本 |
-| 23 | 浏览器本机交接与 Chrome 完整链 | **协议层与 host 已在真实 Chrome 上验证**：扩展 → host → 管道 → 应用 → 创建任务（`prepare` 返回 `ok:true`）；**未验证**：点击下载后由扩展发起交接这一步（详见 `docs/research/browser-handoff-real-chrome.md`） |
+| 23 | 浏览器本机交接与 Chrome 完整链 | **重大缺陷（用户判定，2026-10-30）**：真实使用中点下载仍由浏览器完成，本机只留下"等待中"的任务。协议层、host、管道、自动拉起可用；`prepare` 之后到 commit 的链路未打通 | 见 Issue #23 与 `docs/research/browser-handoff-real-chrome.md` |
 | 24 | Edge/Firefox 与认证接管、组件生命周期 | 同上，且依赖 23 |
 | 28 | 全范围总验收与干净 Windows 交付验证 | 依赖上面全部完成 |
 
