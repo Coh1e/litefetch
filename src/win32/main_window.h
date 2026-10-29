@@ -56,6 +56,13 @@ public:
     // Exposed for the window harness: the DPI the layout is currently using.
     int dpiForTest() const { return dpi_; }
     // Exposed for the window harness: the status text the list shows.
+    std::string errorOfTaskNamed(const std::string& name) const
+    {
+        for (const auto& row : model_.rows())
+            if (row.name == name) return row.error;
+        return {};
+    }
+
     std::string statusOfTaskNamed(const std::string& name) const
     {
         for (const auto& row : model_.rows())
