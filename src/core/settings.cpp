@@ -17,6 +17,8 @@ constexpr const char* renameOnConflictKey = "download.rename_on_conflict";
 constexpr const char* saveByCategoryKey = "download.save_by_category";
 constexpr const char* maxConcurrentKey = "download.max_concurrent";
 constexpr const char* lowUsageKey = "download.low_usage_idle";
+constexpr const char* rateBandsKey = "network.rate_bands";
+constexpr const char* onAllCompleteKey = "download.on_all_complete";
 
 std::int64_t parseInt64(const std::string& text, std::int64_t fallback)
 {
@@ -98,6 +100,9 @@ Settings loadSettings(const TaskRepository& repository)
         static_cast<int>(parseInt64(repository.metaValue(maxConcurrentKey), 0));
     settings.lowUsageIdleSeconds =
         static_cast<int>(parseInt64(repository.metaValue(lowUsageKey), 0));
+    settings.rateBands = parseRateBands(repository.metaValue(rateBandsKey));
+    settings.onAllComplete =
+        static_cast<int>(parseInt64(repository.metaValue(onAllCompleteKey), 0));
     return settings;
 }
 
@@ -116,6 +121,8 @@ void saveSettings(TaskRepository& repository, const Settings& settings)
     repository.setMetaValue(saveByCategoryKey, settings.saveByCategory ? "1" : "0");
     repository.setMetaValue(maxConcurrentKey, std::to_string(settings.maxConcurrentDownloads));
     repository.setMetaValue(lowUsageKey, std::to_string(settings.lowUsageIdleSeconds));
+    repository.setMetaValue(rateBandsKey, formatRateBands(settings.rateBands));
+    repository.setMetaValue(onAllCompleteKey, std::to_string(settings.onAllComplete));
 }
 
 } // namespace litefetch

@@ -31,6 +31,7 @@ add_library(litefetch-core STATIC
     src/core/settings.cpp src/core/settings.h
     src/core/low_usage.cpp src/core/low_usage.h
     src/core/traffic_meter.cpp src/core/traffic_meter.h
+    src/core/schedule.cpp src/core/schedule.h
     src/core/credentials.cpp src/core/credentials.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/win32/options_dialog.cpp src/win32/options_dialog.h
@@ -135,6 +136,12 @@ if(BUILD_TESTING)
     target_link_libraries(core-credentials-tests PRIVATE litefetch-core crypt32)
     add_test(NAME core-credentials COMMAND core-credentials-tests)
     set_tests_properties(core-credentials PROPERTIES TIMEOUT 60)
+
+    add_executable(core-schedule-tests tests/core/schedule_test.cpp)
+    target_include_directories(core-schedule-tests PRIVATE tests/core)
+    target_link_libraries(core-schedule-tests PRIVATE litefetch-core)
+    add_test(NAME core-schedule COMMAND core-schedule-tests)
+    set_tests_properties(core-schedule PROPERTIES TIMEOUT 60)
 
     add_executable(core-traffic-tests tests/core/traffic_test.cpp)
     target_include_directories(core-traffic-tests PRIVATE tests/core)

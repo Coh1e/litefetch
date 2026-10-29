@@ -5,6 +5,7 @@
 
 #include "kad_node.h"
 #include "credentials.h"
+#include "schedule.h"
 #include "settings.h"
 #include "task.h"
 #include "task_service.h"
@@ -176,6 +177,8 @@ private:
     // Recomputes the slot limit from the low-usage policy; call with the lock held.
     void evaluateLowUsageLocked();
     void noteActivity();
+    // Recomputes the limit from the time bands and hands it to the service.
+    void applyTimeBandLimit();
     void launchPendingStarts();
     int priorityOf(const std::string& taskId) const;
     void launchStartNow(const std::string& taskId, bool restartFromZero, std::string username,
@@ -201,6 +204,8 @@ private:
     TaskService::Ed2kTransfer ed2kTransfer_;
     std::unique_ptr<KadNode> kad_;
     mutable std::mutex settingsMutex_;
+    std::vector<RateBand> rateBands_;
+    std::int64_t baseLimit_ = 0;
     Settings settings_;
     std::thread controlThread_;
     std::mutex mutex_;

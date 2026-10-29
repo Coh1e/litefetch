@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
+#include "schedule.h"\n\n#include <vector>
 
 namespace litefetch {
 
@@ -25,6 +25,10 @@ struct Settings {
     int maxConcurrentDownloads = 0;
     // Back off to one transfer when nothing happened for this long; 0 disables.
     int lowUsageIdleSeconds = 0;
+    // Time bands that override the speed limit by the clock.
+    std::vector<RateBand> rateBands;
+    // 0 = nothing, 1 = open the folder, 2 = leave the program.
+    int onAllComplete = 0;
     // ed2k servers, "host:port" each.
     std::vector<std::string> ed2kServers;
 };

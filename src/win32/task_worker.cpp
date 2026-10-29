@@ -2,6 +2,7 @@
 #include "task_worker.h"
 
 #include "low_usage.h"
+#include "schedule.h"
 
 #include "http_engine.h"
 #include "task_service.h"
@@ -352,6 +353,12 @@ void TaskWorker::applySettings(const Settings& settings)
         service_->setHttpProxy(settings.httpProxy);
         service_->setRenameOnConflict(settings.renameOnConflict);
         service_->setSaveByCategory(settings.saveByCategory);
+        {
+            std::lock_guard lock(settingsMutex_);
+            rateBands_ = settings.rateBands;
+            baseLimit_ = settings.speedLimitBytesPerSecond;
+        }
+        applyTimeBandLimit();
         setMaxConcurrent(settings.maxConcurrentDownloads);
     }
 }
@@ -421,6 +428,7 @@ WorkerSnapshot TaskWorker::snapshot()
 void TaskWorker::controlLoop()
 {
     SetThreadDescription(GetCurrentThread(), L"litefetch-task-worker");
+    int bandTick = 0;
     // Existing rows must be visible on startup, before any command wakes the
     // control loop (the window refreshes its snapshot immediately after start).
     reload();
@@ -433,6 +441,9 @@ void TaskWorker::controlLoop()
             std::unique_lock lock(mutex_);
             hasJobs = !jobs_.empty();
             evaluateLowUsageLocked();
+            bandTick += 1;
+            // A band boundary must not wait for the next command.
+            if (bandTick % 8 == 0) applyTimeBandLimit();
             const auto ready = [this] {
                 return stopping_ || !queue_.empty() || anyJobFinished();
             };
@@ -602,6 +613,25 @@ void TaskWorker::execute(const Command& command)
     } catch (...) {
         publishError("命令失败: unknown error");
     }
+}
+
+void TaskWorker::applyTimeBandLimit()
+{
+    std::vector<RateBand> bands;
+    std::int64_t base = 0;
+    {
+        std::lock_guard lock(settingsMutex_);
+        bands = rateBands_;
+        base = baseLimit_;
+    }
+    if (bands.empty()) {
+        if (service_) service_->setRateLimit(base);
+        return;
+    }
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    const int minute = static_cast<int>(now.wHour) * 60 + static_cast<int>(now.wMinute);
+    if (service_) service_->setRateLimit(limitAtMinute(bands, minute, base));
 }
 
 void TaskWorker::noteActivity()
