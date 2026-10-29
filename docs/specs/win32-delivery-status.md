@@ -98,3 +98,7 @@ window: appeared after 220 ms
 process: exited after 313 ms with code 0
 evidence: .pi/evidence/release-final/run-.../smoke.log
 ```
+
+## 七、总验收
+
+#28 的结论单独记录在 [win32-acceptance-report.md](win32-acceptance-report.md)：**未通过**，原因与待决事项在那一页。
