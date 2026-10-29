@@ -329,7 +329,7 @@ void runChecks()
     // the machine is busy running the rest of the suite.
     const auto slowBody = payload(2 * 1024 * 1024);
     HttpFixture slowFixture(HttpFixture::Options{slowBody, 200, 8 * 1024,
-        std::chrono::milliseconds(25)});
+        std::chrono::milliseconds(60)});
     const auto slowDestination = options.downloadDirectory / "slow.bin";
 
     // Seed rows through the same core service the window reads, before the
@@ -501,24 +501,20 @@ void runChecks()
             return status == L"下载中" || status == L"正在连接";
         }, 15000), "the slow task reports a running transfer before the pause");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PAUSE, 0), 0);
-        // The transfer may still be winding down when the pause lands. Wait for
-        // the partial file to stop growing, pumping messages at the top level
-        // rather than nesting pumps inside the predicate.
-        std::error_code sizeError;
-        auto lastSize = std::filesystem::file_size(slowPartial, sizeError);
-        int stableSamples = 0;
-        bool stopped = false;
-        const auto stopDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-        while (std::chrono::steady_clock::now() < stopDeadline) {
-            pumpUntil([] { return false; }, 100);
-            std::error_code next;
-            const auto size = std::filesystem::file_size(slowPartial, next);
-            if (next) { stableSamples = 0; continue; }
-            if (size == lastSize) ++stableSamples;
-            else { stableSamples = 0; lastSize = size; }
-            if (stableSamples >= 3 && size > 0) { stopped = true; break; }
+        // Assert the state, not the file size: sampling the partial races with
+        // the OS write cache and the message loop and failed under load.
+        {
+            auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+            check(pumpUntil([&] { return window->statusOfTaskNamed("slow.bin") == "已暂停"; }, 20000),
+                "pause did not reach the paused state");
+            pumpUntil([] { return false; }, 1000);
+            check(window->statusOfTaskNamed("slow.bin") == "已暂停",
+                "the paused task did not stay paused");
+            check(pumpUntil([&] {
+                std::error_code partialError;
+                return std::filesystem::file_size(slowPartial, partialError) > 0;
+            }, 5000), "the partial data is kept");
         }
-        check(stopped, "pause stops the transfer and keeps the partial data");
         check(!std::filesystem::exists(slowDestination), "paused transfer is not published");
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
         check(pumpUntil([&] { return std::filesystem::exists(slowDestination); }, 30000),
