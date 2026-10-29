@@ -63,3 +63,27 @@ node scripts\browser-probe.mjs 9334
 
 1. 在 popup 页面里 `import('./worker.mjs')` 并 `installWorker(chrome)`，用真实扩展代码驱动一次；
 2. 或不经 CDP 加载扩展（正常"加载已解压扩展"后手动点一次），让 MV3 生命周期按浏览器默认行为运行。
+
+## 2026-10-29 再续：仍未拿到"点击下载自动接管"的证据
+
+本轮把自动化推进到"真实页面 + 真实链接 + 真实下载"，结果如下：
+
+- 加载扩展后 **service worker 有时会启动**（`/json/list` 出现 `service_worker` 目标），
+  但随后休眠，下一次运行就只剩 popup 页面，行为不稳定；
+- 页面点击确实产生了下载（`downloads.search` 里 `state: complete`，2 MiB 本地文件）；
+- **扩展的 journal 里没有任何记录**，说明 `downloads.onCreated → consider()` 没有走到
+  `observer.match()` 成功那一步（或者 worker 上下文不是运行监听器的那个）。
+
+已排除的原因：native messaging 通道（上一轮已用真实 `connectNative` 证明）、
+租约字段（本轮已修为绝对 `expiresAt`）、清单 BOM、HKCU 注册。
+
+尚未排除的原因（下一轮按序查）：
+
+1. **本地下载完成得太快**：2 MiB 在本地瞬间完成，`onCreated` 之后 `browser.get()` 已是
+   `complete`，交接逻辑会走 release 分支；需要用限速服务端制造"传输中"；
+2. **观察窗口未命中**：`RequestObserver` 依赖 `webRequest` 的请求链，扩展自身 `fetch`
+   与页面 `click` 的 initiator 可能不同，需要抓 `observer.match` 的中间状态；
+3. **上下文不一致**：`installWorker` 在 popup 页安装的监听器与真实 SW 的监听器不是同一个实例。
+
+下一步做法：把测试站点限速到 ~200 KiB/s，让下载持续数秒；同时在 worker 里加
+`console.log`，用 CDP 的 `Runtime.consoleAPICalled` 收集，直接看 `consider()` 的结果。
