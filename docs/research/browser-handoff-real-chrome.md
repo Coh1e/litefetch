@@ -117,3 +117,29 @@ PROBE created 36  http://127.0.0.1:47673/handoff.bin in_progress
 - `scripts/browser-session.ps1`：启动 LiteFetch（临时库）＋ Chrome（CDP）＋ 加载扩展＋限速测试站点；
 - `scripts/browser-session-stop.ps1`：清理上述进程与后台任务；
 - `scripts/browser-diagnose.mjs`：驱动一次真实点击下载，收集扩展日志、journal 与下载列表。
+
+## 2026-10-29 第四轮：`import()` 在 ServiceWorker 里不可用
+
+改完 `worker.mjs` 后重新加载扩展再跑，仍然没有 `handoff: ignored` 日志。继续查下去得到两条硬事实：
+
+1. **`import()` 在 ServiceWorkerGlobalScope 被规范禁止**：
+   `TypeError: import() is disallowed on ServiceWorkerGlobalScope by the HTML specification`
+   （W3C ServiceWorker issue 1356）。这意味着**不能用"在 SW 里动态 import 并手动 installWorker"来验证**，
+   只能依赖 `worker.mjs` 被 Chrome 以模块方式加载时底部自执行的 `installWorker(chrome)`。
+2. **SW 生命周期在 CDP 会话里不稳定**：连续几次运行中，`/json/list` 时而出现 `service_worker`、
+   时而只剩 popup 页面；需要时它已经休眠，无法检查其内部状态。
+
+因此当前无法从外部确认"`installWorker` 是否完整执行过"（计划中的 `chrome.alarms.get('handoff-recovery')`
+自检也因此执行不到：SW 已休眠）。
+
+## 下一轮的做法（已想清楚，不需要再试错）
+
+在 **popup 页面**（普通页面上下文，`import()` 允许）里安装 worker，并打开 console 日志捕获：
+
+- 页面上下文里 `chrome.downloads.onCreated` 同样可用，`installWorker` 会注册监听器；
+- `console.log('handoff: ignored', ...)` 会通过 `Runtime.consoleAPICalled` 直接看到 `result.reason`；
+- 若日志显示 `request_not_replayable`，则说明 `main_frame` 导航转下载时 `onSendHeaders` 的记录
+  不满足观察器要求（每跳都必须有 headers 与 response），需要在扩展侧放宽或改用子资源触发的下载；
+- 若显示 `browser_not_eligible`，则是 `item.state !== 'in_progress'` 一类的时间窗问题，加长 TTL 即可。
+
+这条路径能一次给出答案，不再依赖 SW 的启动时机。

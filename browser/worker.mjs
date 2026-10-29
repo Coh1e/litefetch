@@ -23,7 +23,7 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
     // Say why a download was left to the browser: without it, "the handoff did
     // nothing" and "the handoff is broken" look identical from the outside.
     if (!result.request) {
-      console.debug('handoff: ignored', item.id, result.reason);
+      console.log('handoff: ignored', item.id, result.reason);
       return;
     }
     const record = await controller.run(item.id, result.request);
