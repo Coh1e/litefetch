@@ -3,6 +3,7 @@
 #include "native_frame.h"
 #include "native_host_loop.h"
 #include "pipe_channel.h"
+#include "pipe_stream.h"
 #include "test_support.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -11,6 +12,7 @@
 #include <windows.h>
 
 #include <sstream>
+#include <atomic>
 #include <thread>
 
 using namespace litefetch;
@@ -63,6 +65,94 @@ void loopReportsChannelFailure()
     check(answer.find("app not running") != std::string::npos, "the reason is included");
 }
 
+// A stream that hands out one byte per read, like a pipe with a single short
+// message in it. The first implementation read a fixed 4096 byte block and hung
+// forever here, which only a real browser revealed.
+class TrickleBuf : public std::streambuf {
+public:
+    explicit TrickleBuf(std::string data) : data_(std::move(data)) {}
+
+protected:
+    int_type underflow() override
+    {
+        if (position_ >= data_.size()) return traits_type::eof();
+        current_ = data_[position_];
+        setg(&current_, &current_, &current_ + 1);
+        ++position_;
+        return traits_type::to_int_type(current_);
+    }
+
+private:
+    std::string data_;
+    std::size_t position_ = 0;
+    char current_ = 0;
+};
+
+void theLoopAnswersWhileThePipeStaysOpen()
+{
+    // The shape of a real native messaging pipe: one message is written and the
+    // writing side stays open. A host that waits for a full block never answers.
+    HANDLE read = INVALID_HANDLE_VALUE;
+    HANDLE write = INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES attributes{};
+    attributes.nLength = sizeof(attributes);
+    attributes.bInheritHandle = FALSE;
+    check(CreatePipe(&read, &write, &attributes, 0) != FALSE, "the test pipe is created");
+
+    PipeStreamBuf buffer(read);
+    std::istream input(&buffer);
+    std::ostringstream output;
+    std::atomic<int> handled{0};
+    std::thread worker([&] {
+        runHostLoop(input, output, [&](const std::string&) {
+            ++handled;
+            return std::string(R"({"ok":true})");
+        });
+    });
+
+    const auto framed = frameMessage(R"({"id":"a","method":"query","requestId":"r"})");
+    DWORD written = 0;
+    WriteFile(write, framed.data(), static_cast<DWORD>(framed.size()), &written, nullptr);
+
+    const auto deadline = GetTickCount64() + 5000;
+    while (output.str().empty() && GetTickCount64() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    checkEqual(static_cast<long long>(handled.load()), 1LL, "the message is handled before the pipe closes");
+    check(!output.str().empty(), "the answer is written before the pipe closes");
+
+    CloseHandle(write); // now the host sees end of input
+    worker.join();
+}
+void aByteAtATimeStreamStillWorks()
+{
+    std::string framed = frameMessage(R"({"id":"a","method":"query","requestId":"r"})");
+    TrickleBuf buffer(std::move(framed));
+    std::istream input(&buffer);
+    std::ostringstream output;
+    int handled = 0;
+    const auto code = runHostLoop(input, output, [&](const std::string& request) {
+        ++handled;
+        (void)request;
+        auto answer = JsonValue::makeObject();
+        answer.set("version", JsonValue::makeNumber(1));
+        answer.set("id", JsonValue::makeString("a"));
+        answer.set("ok", JsonValue::makeBool(true));
+        return answer.dump();
+    });
+    checkEqual(static_cast<long long>(code), 0LL, "a trickling stream ends cleanly");
+    checkEqual(static_cast<long long>(handled), 1LL, "one message arrives over a trickling stream");
+    check(!output.str().empty(), "the answer was written");
+}
+
+void aShortFrameIsReported()
+{
+    std::string framed = frameMessage(R"({"id":"b"})");
+    framed.pop_back(); // the payload is one byte short
+    std::istringstream input(framed);
+    std::ostringstream output;
+    const auto code = runHostLoop(input, output, [](const std::string&) { return std::string("{}"); });
+    check(code != 0, "a short frame is an error, not a silent wait");
+}
 void pipeCarriesOneRequestAndAnswer()
 {
     const auto pipeName = defaultPipeName() + "-test";
@@ -120,6 +210,9 @@ int main()
     return run("native-host", [] {
         loopCopiesMessagesThrough();
         loopReportsChannelFailure();
+        theLoopAnswersWhileThePipeStaysOpen();
+        aByteAtATimeStreamStillWorks();
+        aShortFrameIsReported();
         pipeCarriesOneRequestAndAnswer();
         pipeFailsWithoutAServer();
         return 0;
