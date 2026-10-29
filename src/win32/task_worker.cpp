@@ -591,6 +591,12 @@ int TaskWorker::priorityOf(const std::string& taskId) const
     return 0;
 }
 
+void TaskWorker::setLowUsageIdleSeconds(int seconds)
+{
+    std::lock_guard lock(mutex_);
+    lowUsageIdleSeconds_ = seconds < 0 ? 0 : seconds;
+}
+
 void TaskWorker::launchPendingStarts()
 {
     std::vector<PendingStart> ready;

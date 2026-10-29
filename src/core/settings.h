@@ -23,6 +23,8 @@ struct Settings {
     bool saveByCategory = false;
     // How many transfers may run at once; 0 means no limit.
     int maxConcurrentDownloads = 0;
+    // Back off to one transfer when nothing happened for this long; 0 disables.
+    int lowUsageIdleSeconds = 0;
     // ed2k servers, "host:port" each.
     std::vector<std::string> ed2kServers;
 };

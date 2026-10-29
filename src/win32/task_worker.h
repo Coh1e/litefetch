@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include "kad_node.h"
 #include "credentials.h"
 #include "settings.h"
@@ -94,6 +96,8 @@ public:
     // 0 means every task may run at once; a positive value keeps the extra
     // tasks queued until a transfer finishes.
     void setMaxConcurrent(int maxConcurrent);
+    // Low-usage backoff: idle seconds (0 disables) below which nothing changes.
+    void setLowUsageIdleSeconds(int seconds);
     void postRefresh();
 
     // Non-blocking shutdown request; the control thread cancels live tasks and
@@ -200,7 +204,9 @@ private:
     std::atomic_bool shutdownFinished_{false};
     std::vector<StartJob> jobs_;
     std::vector<PendingStart> pendingStarts_;
-    int maxConcurrent_ = 0; // control thread only
+    int maxConcurrent_ = 0;
+    int lowUsageIdleSeconds_ = 0;
+    std::chrono::steady_clock::time_point lastActivity_ = std::chrono::steady_clock::now(); // control thread only
     std::vector<TaskSnapshot> tasks_;
     std::vector<std::string> active_;
     std::map<std::string, int, std::less<>> peers_;
