@@ -555,6 +555,25 @@ void runChecks()
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_VIEW_TOOLBAR, 0), 0);
         check(IsWindowVisible(toolbar), "toolbar can be shown again");
 
+        {
+            // The notification icon keeps LiteFetch reachable while the window is
+            // minimised. The shell may be absent in an automation session, so the
+            // icon install is only reported, while the restore path behind the
+            // same message is checked for real.
+            auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+            check(window != nullptr, "the window object is reachable from the HWND");
+            if (!window->trayIconVisible())
+                std::fprintf(stderr,
+                    "ui-window: notification area unavailable in this session, tray install check skipped\n");
+            ShowWindow(handle, SW_MINIMIZE);
+            pumpUntil([] { return false; }, 100);
+            PostMessageW(handle, WM_APP + 5, 0, WM_LBUTTONDBLCLK);
+            check(pumpUntil([&] { return IsWindowVisible(handle) != FALSE; }, 3000),
+                "the tray double click restores the window");
+            ShowWindow(handle, SW_RESTORE);
+            pumpUntil([] { return false; }, 100);
+        }
+
         // Close: the loop must end with WM_QUIT(0). An abort or a stuck loop
         // fails here instead of in a separate acceptance script.
         PostMessageW(handle, WM_CLOSE, 0, 0);

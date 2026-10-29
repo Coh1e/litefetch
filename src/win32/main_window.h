@@ -47,6 +47,8 @@ public:
 
     bool create(HINSTANCE instance, int showCommand);
     HWND handle() const { return hwnd_; }
+    // Exposed for the window harness: whether the notification icon is up.
+    bool trayIconVisible() const { return trayVisible_; }
     HACCEL accelerators() const { return accelerators_; }
     // Modeless owned dialogs (delete confirmation) are pumped by the main
     // loop so IsDialogMessage can provide native Tab/Esc/Enter behavior.
@@ -78,6 +80,10 @@ private:
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     bool createControls();
+    void addTrayIcon();
+    void removeTrayIcon();
+    void showTrayMenu();
+
     void createFont();
     void createToolbar();
     void createList();
@@ -167,6 +173,7 @@ private:
     HMENU menu_ = nullptr;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr;
+    bool trayVisible_ = false;
     HICON largeIcon_ = nullptr;
     HICON smallIcon_ = nullptr;
     AppOptions options_;

@@ -31,6 +31,8 @@ constexpr wchar_t title[] = L"lite fetch";
 constexpr unsigned int appRefreshColumnsMessage = WM_APP + 2;
 constexpr unsigned int appUpdateActionsMessage = WM_APP + 3;
 constexpr unsigned int appTorrentMetadataMessage = WM_APP + 4;
+constexpr unsigned int appTrayMessage = WM_APP + 5;
+constexpr unsigned int trayIconId = 1;
 
 std::wstring toWide(std::string_view utf8, const wchar_t* fallback = L"")
 {
@@ -1005,6 +1007,10 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_TASK_PAUSE: pauseSelected(); return 0;
         case ID_TASK_DELETE: deleteSelected(); return 0;
         case ID_TASK_OPEN_FILE: openFileSelected(); return 0;
+        case ID_TRAY_SHOW:
+            ShowWindow(hwnd_, SW_RESTORE);
+            SetForegroundWindow(hwnd_);
+            return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
         case ID_TASK_VERIFY: verifySelected(); return 0;
         case ID_TASK_REDOWNLOAD:
@@ -1117,6 +1123,51 @@ bool MainWindow::createControls()
     refreshFromWorker();
     SetTimer(hwnd_, IDT_REFRESH, refreshTimerMillis, nullptr);
     return true;
+}
+
+void MainWindow::addTrayIcon()
+{
+    if (trayVisible_ || !hwnd_) return;
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = hwnd_;
+    data.uID = trayIconId;
+    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    data.uCallbackMessage = appTrayMessage;
+    data.hIcon = largeIcon_ ? largeIcon_ : LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
+    // The tooltip keeps the task count so the window can stay minimised.
+    std::wstring tip = L"LiteFetch";
+    const auto count = model_.rows().size();
+    if (count > 0) tip += L" - " + std::to_wstring(count) + L" 个任务";
+    wcsncpy_s(data.szTip, tip.c_str(), _TRUNCATE);
+    trayVisible_ = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
+}
+
+void MainWindow::removeTrayIcon()
+{
+    if (!trayVisible_) return;
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = hwnd_;
+    data.uID = trayIconId;
+    Shell_NotifyIconW(NIM_DELETE, &data);
+    trayVisible_ = false;
+}
+
+void MainWindow::showTrayMenu()
+{
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示主窗口(&O)");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, ID_FILE_EXIT, L"退出(&X)");
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    SetForegroundWindow(hwnd_);
+    const auto command = static_cast<UINT>(TrackPopupMenu(menu,
+        TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd_, nullptr));
+    DestroyMenu(menu);
+    if (command != 0) PostMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
 void MainWindow::createFont()
