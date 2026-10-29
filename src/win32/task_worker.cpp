@@ -97,11 +97,25 @@ bool TaskWorker::start(std::string& error)
             };
             (void)contactsPath;
         }
+        // BitTorrent reports the bytes it sends while sharing; they belong in the
+        // upload bucket, not in the download total of the file.
+        auto btWithTraffic = [this](const BtDownloadRequest& request,
+                                    const std::atomic_bool& cancelled,
+                                    const std::function<void(const BtProgressInfo&)>& progress) {
+            std::int64_t lastUploaded = 0;
+            return btTransfer_(request, cancelled, [&](const BtProgressInfo& info) {
+                if (service_ && info.uploaded > lastUploaded) {
+                    service_->traffic().add(TrafficCategory::Upload, info.uploaded - lastUploaded);
+                    lastUploaded = info.uploaded;
+                }
+                if (progress) progress(info);
+            });
+        };
         service_ = std::make_unique<TaskService>(*repository_, transferHttp,
             [this](std::string_view taskId, const TransferProgressInfo& progress) {
                 updateProgress(std::string(taskId), progress.received, progress.total, progress.peers);
             },
-            btTransfer_, ed2kWithKad,
+            btWithTraffic, ed2kWithKad,
             [](const std::filesystem::path& path) -> std::int64_t {
                 // Free bytes on the volume that holds the destination.
                 ULARGE_INTEGER available{};

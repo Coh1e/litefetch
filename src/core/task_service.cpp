@@ -386,6 +386,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             request.destination = std::filesystem::path(pathFromUtf8(task.destination)).string();
             // The seed policy applies to ed2k too: a finished download keeps
             // serving for the configured minutes, stop-on-complete means zero.
+            request.traffic = &traffic_;
             request.shareMinutes = task.seedMode == 0 ? 0 : task.seedMinutes;
             // The same shared budget covers ed2k, so a limit is not an
             // HTTP-only promise.

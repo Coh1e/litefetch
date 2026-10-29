@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include "rate_limit.h"
+#include "traffic_meter.h"
 
 #include <functional>
 #include <string>
@@ -25,6 +26,8 @@ struct Ed2kTaskRequest {
     std::function<std::vector<Ed2kSource>(const std::string& fileHash)> lookup;
     // Shared byte budget; ed2k transfers charge every block they receive.
     std::shared_ptr<RateBudget> budget;
+    // Where bytes served to other peers are counted.
+    TrafficMeter* traffic = nullptr;
     int timeoutMillis = 15000;
     // After the file is published, keep serving it for this many minutes
     // (0 stops). Cancelling the task stops the share immediately.

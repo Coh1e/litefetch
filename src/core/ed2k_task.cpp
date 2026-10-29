@@ -174,6 +174,8 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             server.stop();
             result.uploaded = server.uploadedBytes();
+            if (request.traffic && result.uploaded > 0)
+                request.traffic->add(TrafficCategory::Upload, result.uploaded);
         } else {
             result.error = "cannot share the finished file: " + shareError;
             result.ok = false;
