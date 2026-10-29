@@ -33,6 +33,8 @@ add_library(litefetch-core STATIC
     src/core/traffic_meter.cpp src/core/traffic_meter.h
     src/core/schedule.cpp src/core/schedule.h
     src/core/native_frame.cpp src/core/native_frame.h
+    src/core/native_host_loop.cpp src/core/native_host_loop.h
+    src/core/pipe_channel.cpp src/core/pipe_channel.h
     src/core/credentials.cpp src/core/credentials.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/win32/options_dialog.cpp src/win32/options_dialog.h
@@ -137,6 +139,12 @@ if(BUILD_TESTING)
     target_link_libraries(core-credentials-tests PRIVATE litefetch-core crypt32)
     add_test(NAME core-credentials COMMAND core-credentials-tests)
     set_tests_properties(core-credentials PROPERTIES TIMEOUT 60)
+
+    add_executable(core-native-host-tests tests/core/native_host_test.cpp)
+    target_include_directories(core-native-host-tests PRIVATE tests/core)
+    target_link_libraries(core-native-host-tests PRIVATE litefetch-core)
+    add_test(NAME core-native-host COMMAND core-native-host-tests)
+    set_tests_properties(core-native-host PROPERTIES TIMEOUT 60)
 
     add_executable(core-native-frame-tests tests/core/native_frame_test.cpp)
     target_include_directories(core-native-frame-tests PRIVATE tests/core)
