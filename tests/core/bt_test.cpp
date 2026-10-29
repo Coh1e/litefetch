@@ -84,7 +84,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     std::atomic_bool seedingCancelled{false};
     std::atomic_bool seeding{false};
     std::atomic<long long> seedUploaded{0};
-    std::int32_t listenPort = 0;
+    std::atomic<std::int32_t> listenPort{0};
     BtDownloadRequest seedRequest;
     seedRequest.source = torrentPath.string();
     seedRequest.savePath = downloadDirectory.string();
@@ -96,7 +96,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     BtDownloadResult seedResult;
     std::thread seederThread([&] {
         seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {
-            if (update.listenPort != 0) listenPort = update.listenPort;
+            if (update.listenPort != 0) listenPort.store(update.listenPort);
             if (update.seeding) seeding = true;
             if (update.uploaded > seedUploaded.load()) seedUploaded.store(update.uploaded);
         });
@@ -126,7 +126,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
         const auto leechDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (std::chrono::steady_clock::now() < leechDeadline) {
             leechHandle.connect_peer(lt::tcp::endpoint(lt::make_address("127.0.0.1"),
-                static_cast<unsigned short>(listenPort)));
+                static_cast<unsigned short>(listenPort.load())));
             leecher.wait_for_alert(std::chrono::milliseconds(500));
             const auto status = leechHandle.status();
             if (status.total_wanted > 0 && status.total_wanted_done >= status.total_wanted) {
