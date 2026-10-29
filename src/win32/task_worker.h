@@ -116,6 +116,8 @@ public:
     void beginShutdown();
     void stopKad();
     void startBridge();
+    // Where browser handoffs save, since the extension cannot know it.
+    void setDownloadDirectory(std::filesystem::path directory) { downloadDirectory_ = std::move(directory); }
     bool shutdownComplete() const;
     bool hasActiveTasks();
 
@@ -215,6 +217,7 @@ private:
     TaskService::BtTransfer btTransfer_;
     TaskService::Ed2kTransfer ed2kTransfer_;
     std::unique_ptr<KadNode> kad_;
+    std::filesystem::path downloadDirectory_;
     std::unique_ptr<browser::BrowserBridge> bridge_;
     std::unique_ptr<browser::BrowserPipeServer> bridgeServer_;
     mutable std::mutex settingsMutex_;

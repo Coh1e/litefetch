@@ -4,34 +4,50 @@
 
 namespace litefetch::browser {
 namespace {
-std::string okAnswer(std::int64_t id, JsonValue result)
+std::string okAnswer(const JsonValue& id, JsonValue result)
 {
     auto answer = JsonValue::makeObject();
     answer.set("version", JsonValue::makeNumber(1));
-    answer.set("id", JsonValue::makeNumber(id));
+    answer.set("id", id);
     answer.set("ok", JsonValue::makeBool(true));
     answer.set("result", std::move(result));
     return answer.dump();
 }
 
-std::string failAnswer(std::int64_t id, const std::string& reason)
+std::string failAnswer(const JsonValue& id, const std::string& reason)
 {
     auto answer = JsonValue::makeObject();
     answer.set("version", JsonValue::makeNumber(1));
-    answer.set("id", JsonValue::makeNumber(id));
+    answer.set("id", id);
     answer.set("ok", JsonValue::makeBool(false));
     answer.set("error", JsonValue::makeString(reason));
     return answer.dump();
 }
 } // namespace
 
-BrowserBridge::BrowserBridge(TaskService& service) : service_(service) {}
+namespace {
+std::string fileNameOf(const std::string& url)
+{
+    const auto query = url.find_first_of("?#");
+    auto path = url.substr(0, query);
+    const auto slash = path.find_last_of('/');
+    auto name = slash == std::string::npos ? std::string() : path.substr(slash + 1);
+    if (name.empty()) name = "download.bin";
+    return name;
+}
+} // namespace
+
+BrowserBridge::BrowserBridge(TaskService& service, std::filesystem::path downloadDirectory)
+    : service_(service), downloadDirectory_(std::move(downloadDirectory)) {}
 
 std::string BrowserBridge::handle(const std::string& requestJson)
 {
     const auto parsed = JsonValue::parse(requestJson);
-    if (!parsed) return failAnswer(0, "malformed request");
-    const auto id = parsed->numberOr("id", 0);
+    if (!parsed) return failAnswer(JsonValue::makeString(""), "malformed request");
+    // The browser matches answers by id, and it uses strings; the id is echoed
+    // with the type it arrived with rather than converted.
+    JsonValue id = JsonValue::makeString("");
+    if (const auto* given = parsed->find("id")) id = *given;
     const auto method = parsed->stringOr("method", "");
     const auto requestId = parsed->stringOr("requestId", "");
     if (requestId.empty()) return failAnswer(id, "the request has no requestId");
@@ -39,7 +55,10 @@ std::string BrowserBridge::handle(const std::string& requestJson)
     if (method == "prepare") {
         const auto* payload = parsed->find("payload");
         if (!payload) return failAnswer(id, "prepare needs a payload");
-        const auto source = payload->stringOr("source", "");
+        // The extension names the address "url"; "source" is kept for the
+        // tests and for any other caller of this protocol.
+        auto source = payload->stringOr("url", "");
+        if (source.empty()) source = payload->stringOr("source", "");
         const auto destination = payload->stringOr("destination", "");
         if (source.empty()) return failAnswer(id, "prepare needs a source");
         return prepare(id, requestId, source, destination);
@@ -50,7 +69,7 @@ std::string BrowserBridge::handle(const std::string& requestJson)
     return failAnswer(id, "unknown method: " + method);
 }
 
-std::string BrowserBridge::prepare(std::int64_t id, const std::string& requestId,
+std::string BrowserBridge::prepare(const JsonValue& id, const std::string& requestId,
     const std::string& source, const std::string& destination)
 {
     const auto known = leases_.find(requestId);
@@ -64,7 +83,11 @@ std::string BrowserBridge::prepare(std::int64_t id, const std::string& requestId
 
     AddTaskCommand add;
     add.source = source;
-    add.destination = destination;
+    // The extension names no destination: the app decides where its downloads
+    // live, and the file name comes from the address.
+    add.destination = destination.empty()
+        ? (downloadDirectory_ / fileNameOf(source)).string()
+        : destination;
     const auto added = service_.execute(add);
     if (!added.ok) return failAnswer(id, added.error);
 
@@ -82,7 +105,7 @@ std::string BrowserBridge::prepare(std::int64_t id, const std::string& requestId
     return okAnswer(id, std::move(result));
 }
 
-std::string BrowserBridge::query(std::int64_t id, const std::string& requestId)
+std::string BrowserBridge::query(const JsonValue& id, const std::string& requestId)
 {
     const auto known = leases_.find(requestId);
     if (known == leases_.end()) {
@@ -100,7 +123,7 @@ std::string BrowserBridge::query(std::int64_t id, const std::string& requestId)
     return okAnswer(id, std::move(result));
 }
 
-std::string BrowserBridge::commit(std::int64_t id, const std::string& requestId)
+std::string BrowserBridge::commit(const JsonValue& id, const std::string& requestId)
 {
     const auto known = leases_.find(requestId);
     if (known == leases_.end()) return failAnswer(id, "unknown request");
@@ -113,7 +136,7 @@ std::string BrowserBridge::commit(std::int64_t id, const std::string& requestId)
     return okAnswer(id, std::move(result));
 }
 
-std::string BrowserBridge::abort(std::int64_t id, const std::string& requestId)
+std::string BrowserBridge::abort(const JsonValue& id, const std::string& requestId)
 {
     const auto known = leases_.find(requestId);
     if (known == leases_.end()) return failAnswer(id, "unknown request");

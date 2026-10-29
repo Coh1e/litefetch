@@ -1,8 +1,10 @@
 #pragma once
 
+#include "native_frame.h"
 #include "task_service.h"
 
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -14,7 +16,8 @@ namespace litefetch::browser {
 // database itself.
 class BrowserBridge {
 public:
-    explicit BrowserBridge(TaskService& service);
+    // The download directory fills in a destination the extension cannot know.
+    BrowserBridge(TaskService& service, std::filesystem::path downloadDirectory);
 
     // Answers one request. Never throws: a malformed request becomes an error
     // answer with the id kept when it was readable.
@@ -31,13 +34,14 @@ private:
         std::chrono::steady_clock::time_point expiresAt;
     };
 
-    std::string prepare(std::int64_t id, const std::string& requestId, const std::string& source,
-        const std::string& destination);
-    std::string query(std::int64_t id, const std::string& requestId);
-    std::string commit(std::int64_t id, const std::string& requestId);
-    std::string abort(std::int64_t id, const std::string& requestId);
+    std::string prepare(const JsonValue& id, const std::string& requestId,
+        const std::string& source, const std::string& destination);
+    std::string query(const JsonValue& id, const std::string& requestId);
+    std::string commit(const JsonValue& id, const std::string& requestId);
+    std::string abort(const JsonValue& id, const std::string& requestId);
 
     TaskService& service_;
+    std::filesystem::path downloadDirectory_;
     std::map<std::string, Lease, std::less<>> leases_;
     std::chrono::seconds lease_{300};
 };

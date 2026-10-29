@@ -340,7 +340,8 @@ void TaskWorker::forgetCredentials()
 void TaskWorker::startBridge()
 {
     if (!service_) return;
-    bridge_ = std::make_unique<browser::BrowserBridge>(*service_);
+    if (downloadDirectory_.empty()) downloadDirectory_ = databasePath_.parent_path() / "downloads";
+    bridge_ = std::make_unique<browser::BrowserBridge>(*service_, downloadDirectory_);
     bridgeServer_ = std::make_unique<browser::BrowserPipeServer>(browser::defaultPipeName());
     std::string ignored;
     // A channel that cannot bind must not stop the downloader; the user simply

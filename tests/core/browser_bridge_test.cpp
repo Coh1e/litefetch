@@ -44,7 +44,7 @@ void prepareCreatesATaskWithoutStartingIt(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
 
     const auto prepared = answer(bridge.handle(request(1, "prepare", "req-1",
         "https://example.test/file.bin", (root / "file.bin").string())));
@@ -73,7 +73,7 @@ void queryReportsTheLeaseState(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-query.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
 
     const auto unknown = answer(bridge.handle(request(1, "query", "nope")));
     checkEqual(unknown.find("result")->stringOr("state", ""), std::string("unknown"),
@@ -91,7 +91,7 @@ void commitAndAbortFollowTheRules(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-commit.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
 
     const auto prepared = answer(bridge.handle(request(1, "prepare", "req-3",
         "https://example.test/c.bin", (root / "c.bin").string())));
@@ -122,7 +122,7 @@ void anExpiredLeaseIsRefused(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-expiry.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
     bridge.setLeaseDuration(std::chrono::seconds(0));
 
     bridge.handle(request(1, "prepare", "req-5", "https://example.test/e.bin",
@@ -138,7 +138,7 @@ void theServerAnswersOverARealPipe(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-pipe.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
     BrowserPipeServer server("litefetch-bridge-test");
     std::string error;
     check(server.start(bridge, error), ("the server did not start: " + error).c_str());
@@ -170,7 +170,7 @@ void theServerAnswersOverARealPipe(const std::filesystem::path& root)
     // channel -> server -> bridge -> framed stdout.
     TaskRepository repository(root / "bridge-host.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
     const auto pipeName = defaultPipeName() + "-host";
     BrowserPipeServer server(pipeName);
     std::string error;
@@ -195,11 +195,47 @@ void theServerAnswersOverARealPipe(const std::filesystem::path& root)
     const auto taskId = parsed->find("result")->stringOr("taskId", "");
     check(service.snapshot(taskId).has_value(), "the task reached the service");
     server.stop();
-}void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
+}void theExtensionShapeIsUnderstood(const std::filesystem::path& root)
+{
+    // Exactly what browser/adapters.mjs sends: string ids, payload.url, and the
+    // answer must echo the id with the same type or the extension drops it.
+    TaskRepository repository(root / "bridge-ext.db");
+    TaskService service(repository);
+    BrowserBridge bridge(service, root);
+
+    const auto requestJson = [&] {
+        auto root = JsonValue::makeObject();
+        root.set("version", JsonValue::makeNumber(1));
+        root.set("id", JsonValue::makeString("m-9f2"));
+        root.set("method", JsonValue::makeString("prepare"));
+        root.set("requestId", JsonValue::makeString("req-ext"));
+        auto payload = JsonValue::makeObject();
+        payload.set("url", JsonValue::makeString("https://example.test/ext.bin"));
+        payload.set("method", JsonValue::makeString("GET"));
+        payload.set("uniqueMatch", JsonValue::makeBool(true));
+        payload.set("replaySafe", JsonValue::makeBool(true));
+        root.set("payload", std::move(payload));
+        return root.dump();
+    }();
+
+    const auto answered = answer(bridge.handle(requestJson));
+    check(answered.boolOr("ok", false), "the extension's prepare is accepted");
+    const auto* id = answered.find("id");
+    check(id != nullptr, "the answer has an id");
+    check(id->kind() == JsonValue::Kind::String, "the string id is echoed as a string");
+    checkEqual(id->asString(), std::string("m-9f2"), "the id value is unchanged");
+    const auto taskId = answered.find("result")->stringOr("taskId", "");
+    check(!taskId.empty(), "the task was created");
+    const auto stored = service.snapshot(taskId);
+    check(stored.has_value() && stored->source == "https://example.test/ext.bin",
+        "payload.url became the task source");
+    check(stored->state == TaskState::Queued, "the task is not started by prepare");
+}
+void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-bad.db");
     TaskService service(repository);
-    BrowserBridge bridge(service);
+    BrowserBridge bridge(service, root);
 
     const auto broken = answer(bridge.handle("{"));
     check(!broken.boolOr("ok", true), "broken JSON is refused");
@@ -222,6 +258,7 @@ int main()
         malformedRequestsAreAnsweredNotThrown(root.path());
         theServerAnswersOverARealPipe(root.path());
         theHostLoopReachesTheRunningServer(root.path());
+        theExtensionShapeIsUnderstood(root.path());
         return 0;
     });
 }
