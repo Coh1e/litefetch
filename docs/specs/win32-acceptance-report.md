@@ -51,7 +51,7 @@ process: exited with code 0 after 358 ms
 - **#26**：托盘恢复安装（后台线程）、加速键表审计（改坏即红）、高对比通知承受；
 - **#27**：90 个 Qt 源文件删除、MIT 许可、包内 exe 真实启动。
 
-## 五、需要人类决定或提供的事
+## 五、需要人类决定或提供的事\n\n真机上要逐项做什么、看到什么算通过，写在 [human-acceptance-checklist.md](human-acceptance-checklist.md)。
 
 1. **#20**：是否有旧版数据库样本；
 2. **#23/#24**：是否提供 Chrome/Edge 与 HKCU 注册授权（并接受 Qt-free host 重写的工作量）；
