@@ -143,3 +143,25 @@ PROBE created 36  http://127.0.0.1:47673/handoff.bin in_progress
 - 若显示 `browser_not_eligible`，则是 `item.state !== 'in_progress'` 一类的时间窗问题，加长 TTL 即可。
 
 这条路径能一次给出答案，不再依赖 SW 的启动时机。
+
+## 2026-10-29 第五轮：找到 `request_not_replayable` 的真正原因
+
+在 popup 页上下文安装 worker 后，日志给出了确切原因，并且能导出观察器的记录：
+
+```
+log: handoff: ignored 49 request_not_replayable
+observerRecords: /handoff.bin  invalid: true
+                 hops: [{method: GET, headers: true, response: true, statusCode: 200}]
+```
+
+记录本身是完整的（有请求头、有 200 响应），却仍被判为不可重放。逐条比对 `headers()` 的白名单后确认：
+
+1. **`Referer` 不在白名单**：页面上点链接必然带 `Referer`，于是整条记录被判 `invalid`。
+   已在 `request-observer.mjs` 中放行**同源** Referer（`allowReplay(origin) === true` 才放行），
+   跨源 Referer 仍然判为不可重放——原生引擎本来也不会转发该头。
+2. 顺带修了另一处：导航转下载时 Chrome 会对该请求回报 `net::ERR_ABORTED`，
+   旧代码把它当作请求失败，使记录失效。现在只要该跳已经拿到 200 响应，就视为"下载接管"而非失败。
+
+修完后同一次运行的理由变为 **`browser_not_eligible`**，说明匹配已通过，卡在下载项的状态判断上
+（`item.state !== 'in_progress'` 或 `item.paused`）。下一轮在 `onCreated` 的第一次调用上打印
+`item.state / item.paused / item.byExtensionId`，确认是"创建即完成"还是"创建即暂停"。

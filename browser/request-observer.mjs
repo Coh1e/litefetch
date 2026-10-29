@@ -69,9 +69,16 @@ export class RequestObserver {
     // a separate feature requiring support in the native transfer engine.
     for (const header of details.requestHeaders) {
       const name = String(header.name).toLowerCase();
-      if (!ordinaryHeaders.has(name) && !name.startsWith('sec-fetch-') && !name.startsWith('sec-ch-')) {
-        record.invalid = true;
+      if (ordinaryHeaders.has(name) || name.startsWith('sec-fetch-') || name.startsWith('sec-ch-')) continue;
+      // A link click carries a Referer. The native engine fetches without it, so
+      // the replay drops the header; what matters is that the referring origin is
+      // one the user already allowed, which is checked here.
+      if (name === 'referer') {
+        try {
+          if (this.allowReplay(new URL(String(header.value)).origin) === true) continue;
+        } catch { /* an unparsable referer is treated like any other extra header */ }
       }
+      record.invalid = true;
     }
   }
   response(details) {
@@ -91,7 +98,13 @@ export class RequestObserver {
   }
   error(details) {
     const record = this.requests.get(details.requestId);
-    if (record) record.invalid = true;
+    if (!record) return;
+    // When a navigation turns into a download, the browser aborts the navigation
+    // after the response has already arrived; that abort is the download taking
+    // over, not a failed request.
+    const hop = record.hops.at(-1);
+    if (details.error === 'net::ERR_ABORTED' && hop?.response && hop.statusCode === 200) return;
+    record.invalid = true;
   }
   match(item) {
     this.#prune();
