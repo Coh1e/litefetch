@@ -35,9 +35,15 @@ bool isMagnet(const std::string& source)
     return source.rfind("magnet:", 0) == 0;
 }
 
-lt::settings_pack localSettings(const std::string& listenInterface)
+lt::settings_pack localSettings(const std::string& listenInterface,
+    std::int64_t downloadRateLimit, std::int64_t uploadRateLimit)
 {
     lt::settings_pack pack;
+    if (downloadRateLimit > 0)
+        pack.set_int(lt::settings_pack::download_rate_limit,
+            static_cast<int>(downloadRateLimit));
+    if (uploadRateLimit > 0)
+        pack.set_int(lt::settings_pack::upload_rate_limit, static_cast<int>(uploadRateLimit));
     // A first local-only profile: no DHT/LSD/UPnP traffic until the ticket that
     // owns discovery. Peers come from trackers, the torrent or an explicit link.
     pack.set_bool(lt::settings_pack::enable_dht, false);
@@ -136,7 +142,7 @@ BtMetadataResult btFetchMetadata(const std::string& source, const std::string& w
         return result;
     }
     try {
-        lt::session session(lt::session_params(localSettings("127.0.0.1:0")));
+        lt::session session(lt::session_params(localSettings("127.0.0.1:0", 0, 0)));
         lt::add_torrent_params params;
         if (isMagnet(source)) {
             params = lt::parse_magnet_uri(source);
@@ -178,7 +184,8 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
         return result;
     }
     try {
-        lt::session session(lt::session_params(localSettings(request.listenInterface)));
+        lt::session session(lt::session_params(localSettings(request.listenInterface,
+        request.downloadRateLimit, request.uploadRateLimit)));
         lt::add_torrent_params params;
         if (isMagnet(request.source)) {
             params = lt::parse_magnet_uri(request.source);

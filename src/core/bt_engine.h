@@ -58,6 +58,11 @@ struct BtDownloadRequest {
     std::vector<BtFileChoice> choices; // empty means every file at normal priority
     std::vector<std::string> trackers; // extra trackers from the user; refused when private
     std::string listenInterface = "127.0.0.1:0";
+    // Per-session byte limits handed to libtorrent. The shared HTTP/ed2k budget
+    // cannot be enforced inside libtorrent, so the same number is applied here
+    // as its own cap; the service documents that difference.
+    std::int64_t downloadRateLimit = 0;
+    std::int64_t uploadRateLimit = 0;
     // Extra peers ("host:port") to connect immediately, used by the local swarm
     // tests and by the explicit peer entry a later ticket will surface.
     std::vector<std::string> peers;

@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include "rate_limit.h"
+
 #include <functional>
 #include <string>
 #include <vector>
@@ -21,6 +23,8 @@ struct Ed2kTaskRequest {
     std::vector<Ed2kServerEndpoint> peers;
     // Last resort when no peer is known and no server answers: ask Kad.
     std::function<std::vector<Ed2kSource>(const std::string& fileHash)> lookup;
+    // Shared byte budget; ed2k transfers charge every block they receive.
+    std::shared_ptr<RateBudget> budget;
     int timeoutMillis = 15000;
     // After the file is published, keep serving it for this many minutes
     // (0 stops). Cancelling the task stops the share immediately.

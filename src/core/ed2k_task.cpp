@@ -107,6 +107,7 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
     peerRequest.fileSize = link.link.size;
     peerRequest.partPath = partPath;
     peerRequest.timeoutMillis = request.timeoutMillis;
+    peerRequest.budget = request.budget;
     if (progress) {
         try {
             progress(0, link.link.size);

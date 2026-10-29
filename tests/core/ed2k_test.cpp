@@ -589,6 +589,36 @@ void taskSharesAfterDownload(const std::filesystem::path& root)
     check(!downloadFromEd2kPeer(after, stopped).ok, "the share is closed after the task stops");
     upstream.stop();
 }
+void ed2kHonoursTheSharedBudget(const std::filesystem::path& root)
+{
+    // 120 KiB at 60 KiB/s: the bucket starts full, so the transfer must take
+    // noticeably longer than an unthrottled one.
+    const auto payload = litefetch::test::payload(120 * 1024);
+    const auto sharedPath = root / "budget-source.bin";
+    writeFile(sharedPath, payload);
+    const auto hash = ed2kFileHash(sharedPath.string());
+    Ed2kPeerServer server(sharedPath.string(), hash, 0);
+    std::string error;
+    check(server.start(error), ("the seeder did not start: " + error).c_str());
+
+    Ed2kTaskRequest request;
+    request.link = "ed2k://|file|budget.bin|" + std::to_string(payload.size()) + "|" + hash + "|/";
+    request.destination = (root / "budget-downloaded.bin").string();
+    request.peers = {{"127.0.0.1", server.port()}};
+    request.timeoutMillis = 15000;
+    request.budget = std::make_shared<litefetch::RateBudget>();
+    request.budget->setLimit(60 * 1024);
+
+    const std::atomic_bool cancelled{false};
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = downloadEd2kTask(request, cancelled);
+    const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    check(result.ok, ("the throttled download failed: " + result.error).c_str());
+    check(seconds > 0.7, "the budget slowed the ed2k transfer down");
+    check(seconds < 20.0, "the throttled transfer still finishes");
+    check(readFile(root / "budget-downloaded.bin") == payload, "every throttled byte arrived");
+    server.stop();
+}
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(18000);
@@ -850,6 +880,7 @@ int main()
         twoLiteFetchPeers(root.path());
         sourcesFromKad(root.path());
         taskSharesAfterDownload(root.path());
+        ed2kHonoursTheSharedBudget(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;

@@ -504,6 +504,7 @@ Ed2kPeerResult downloadFromEd2kPeer(const Ed2kPeerRequest& request,
                 return result;
             }
             output.write(block.data(), length);
+            if (request.budget) request.budget->spend(length);
             offset += length;
         }
         written += end - start + 1;

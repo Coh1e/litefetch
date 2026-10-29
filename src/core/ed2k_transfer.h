@@ -1,6 +1,9 @@
 #pragma once
 
+#include "rate_limit.h"
+
 #include <atomic>
+#include <memory>
 #include <utility>
 #include <cstdint>
 #include <string>
@@ -26,6 +29,8 @@ struct Ed2kPeerRequest {
     std::int64_t fileSize = 0;
     std::string partPath;   // where the bytes are written
     int timeoutMillis = 30000;
+    // Optional shared budget: received blocks are charged to it.
+    std::shared_ptr<RateBudget> budget;
 };
 
 struct Ed2kPeerResult {

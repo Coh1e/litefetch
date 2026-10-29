@@ -384,6 +384,9 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             // The seed policy applies to ed2k too: a finished download keeps
             // serving for the configured minutes, stop-on-complete means zero.
             request.shareMinutes = task.seedMode == 0 ? 0 : task.seedMinutes;
+            // The same shared budget covers ed2k, so a limit is not an
+            // HTTP-only promise.
+            request.budget = budget_;
             try {
                 const auto result = ed2kTransfer_(request, *active->cancelled,
                     [&](std::int64_t received, std::int64_t total) {
@@ -422,6 +425,10 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             }
             request.trackers = task.trackers;
             request.forceVerify = command.forceVerify;
+            // libtorrent cannot share the HTTP/ed2k bucket, so the same number
+            // becomes its own session cap.
+            request.downloadRateLimit = budget_->limit();
+            request.uploadRateLimit = budget_->limit();
             request.seedPolicy = BtSeedPolicy{task.seedMode,
                 task.seedRatioMilli / 1000.0, task.seedMinutes};
             // Fast resume: the engine keeps its piece map next to the data so a
