@@ -29,11 +29,12 @@ add_library(litefetch-core STATIC
     src/core/kad_node.cpp src/core/kad_node.h
     src/core/rate_limit.cpp src/core/rate_limit.h
     src/core/settings.cpp src/core/settings.h
+    src/core/credentials.cpp src/core/credentials.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/win32/options_dialog.cpp src/win32/options_dialog.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
-target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)
+target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3 crypt32)
 
 # BitTorrent lives in its own library so binaries that never touch torrents do
 # not link libtorrent at all.
@@ -125,6 +126,12 @@ if(BUILD_TESTING)
     target_link_libraries(win32-native-bridge-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME win32-native-bridge COMMAND win32-native-bridge-tests)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
+    add_executable(core-credentials-tests tests/core/credentials_test.cpp)
+    target_include_directories(core-credentials-tests PRIVATE tests/core)
+    target_link_libraries(core-credentials-tests PRIVATE litefetch-core crypt32)
+    add_test(NAME core-credentials COMMAND core-credentials-tests)
+    set_tests_properties(core-credentials PROPERTIES TIMEOUT 60)
+
     add_executable(core-rate-limit-tests tests/core/rate_limit_test.cpp)
     target_include_directories(core-rate-limit-tests PRIVATE tests/core)
     target_link_libraries(core-rate-limit-tests PRIVATE litefetch-core)

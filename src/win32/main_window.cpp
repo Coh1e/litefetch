@@ -36,6 +36,23 @@ constexpr unsigned int appTorrentMetadataMessage = WM_APP + 4;
 constexpr unsigned int appTrayMessage = WM_APP + 5;
 constexpr unsigned int trayIconId = 1;
 
+std::string hostOfUrl(const std::string& url)
+{
+    // "scheme://host:port/path" -> "host". Anything else yields an empty host,
+    // and an empty host means the credential is not remembered.
+    const auto scheme = url.find("://");
+    if (scheme == std::string::npos) return {};
+    const auto start = scheme + 3;
+    auto end = url.find_first_of("/?#", start);
+    if (end == std::string::npos) end = url.size();
+    auto authority = url.substr(start, end - start);
+    const auto at = authority.rfind('@');
+    if (at != std::string::npos) authority = authority.substr(at + 1);
+    const auto colon = authority.rfind(':');
+    if (colon != std::string::npos) authority = authority.substr(0, colon);
+    return authority;
+}
+
 std::wstring toWide(std::string_view utf8, const wchar_t* fallback = L"")
 {
     try {
@@ -223,8 +240,10 @@ bool readTextFile(const std::filesystem::path& path, std::string& text)
 }
 
 struct CredentialPrompt {
+    std::string host;
     std::string username;
     std::string password;
+    bool remember = false;
 };
 
 // The credentials dialog is modal: it runs its own loop and returns the typed
@@ -1493,12 +1512,17 @@ void MainWindow::refreshFromWorker()
     updateStatus();
     updateActions();
 
-    // A 401 means the site wants credentials. Ask once per task and retry with
-    // them; they stay in memory for this run only.
+    // A 401 means the site wants credentials. A remembered credential for that
+    // host is tried first; otherwise the user is asked once per task.
     for (const auto& task : snapshot.tasks) {
         if (task.state != TaskState::Failed) continue;
         if (task.error.find("401") == std::string::npos) continue;
         if (!promptedCredentials_.insert(task.id).second) continue;
+        if (const auto stored = worker_->storedCredential(hostOfUrl(task.source))) {
+            worker_->postStart(task.id, false, stored->username, stored->password);
+            setNotice("已使用记住的凭据重试");
+            continue;
+        }
         promptForCredentials(task.id);
         break;
     }
@@ -1507,12 +1531,21 @@ void MainWindow::refreshFromWorker()
 void MainWindow::promptForCredentials(const std::string& taskId)
 {
     CredentialPrompt prompt;
+    // Only the host of the source is remembered, never the full URL.
+    for (const auto& row : model_.rows()) {
+        if (row.id != taskId) continue;
+        prompt.host = hostOfUrl(row.source);
+        break;
+    }
     if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_CREDENTIALS), hwnd_,
             credentialDialogProc, reinterpret_cast<LPARAM>(&prompt)) != IDOK)
         return;
     if (prompt.username.empty()) return;
+    if (prompt.remember && !prompt.host.empty())
+        worker_->rememberCredential(prompt.host, prompt.username, prompt.password);
     worker_->postStart(taskId, false, prompt.username, prompt.password);
-    setNotice("已使用输入的凭据重试；凭据仅用于本次运行");
+    setNotice(prompt.remember ? "已使用输入的凭据重试，并已记住"
+                              : "已使用输入的凭据重试；凭据仅用于本次运行");
 }
 
 void MainWindow::syncList()

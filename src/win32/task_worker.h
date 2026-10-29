@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kad_node.h"
+#include "credentials.h"
 #include "settings.h"
 #include "task.h"
 #include "task_service.h"
@@ -107,6 +108,10 @@ public:
     // Settings live in the task database; these keep the service and the ed2k
     // server list in step with what the options dialog stored.
     Settings settings() const;
+    // Remembered credentials are protected with DPAPI for this Windows account.
+    void rememberCredential(const std::string& host, const std::string& username,
+        const std::string& password);
+    std::optional<StoredCredential> storedCredential(const std::string& host) const;
     void applySettings(const Settings& settings);
 
 private:

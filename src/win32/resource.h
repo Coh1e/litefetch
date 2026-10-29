@@ -132,6 +132,7 @@
 #define IDC_CRED_HINT 2140
 #define IDC_CRED_USER 2141
 #define IDC_CRED_PASS 2142
+#define IDC_CRED_REMEMBER 2143
 #define IDC_BATCH_RESULT_LIST 2130
 
 // Timers and internal messages
