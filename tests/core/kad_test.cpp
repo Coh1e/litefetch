@@ -1,6 +1,7 @@
 // Kad routing primitives: 128-bit ids, XOR distance, bucket eviction and the
 // contact file that survives a restart.
 #include "kad_routing.h"
+#include "kad_wire.h"
 #include "test_support.h"
 
 #include <string>
@@ -37,7 +38,42 @@ void ids()
     check(!KadId::fromHex("zz", parsed), "a short or bad hex id is rejected");
 }
 
-void table()
+void wire()
+{
+    KadPacket hello;
+    hello.opcode = KadOpcode::HelloRequest;
+    KadContact contact;
+    contact.id = idFrom("0123456789abcdef0123456789abcdef");
+    contact.address = "192.168.0.7";
+    contact.port = 4662;
+    hello.contacts.push_back(contact);
+    const auto bytes = encodeKadPacket(hello);
+    checkEqual(static_cast<long long>(bytes.size()), 3 + 22LL, "hello packet size");
+    check(bytes[0] == 0xE4 && bytes[1] == 0x11, "marker and opcode");
+    KadPacket decoded;
+    check(decodeKadPacket(bytes.data(), bytes.size(), decoded), "hello round trips");
+    checkEqual(static_cast<long long>(decoded.contacts.size()), 1LL, "one contact survives");
+    checkEqual(decoded.contacts[0].address, std::string("192.168.0.7"), "address survives");
+    checkEqual(static_cast<long long>(decoded.contacts[0].port), 4662LL, "port survives");
+
+    KadPacket find;
+    find.opcode = KadOpcode::FindRequest;
+    find.target = idFrom("ffffffffffffffffffffffffffffffff");
+    find.wanted = 4;
+    const auto findBytes = encodeKadPacket(find);
+    KadPacket findDecoded;
+    check(decodeKadPacket(findBytes.data(), findBytes.size(), findDecoded), "find round trips");
+    check(findDecoded.target == find.target, "the target survives");
+    checkEqual(static_cast<long long>(findDecoded.wanted), 4LL, "the wanted count survives");
+
+    check(!decodeKadPacket(bytes.data(), 2, decoded), "a truncated packet is rejected");
+    unsigned char wrongMarker[3] = {0x00, 0x11, 0x00};
+    check(!decodeKadPacket(wrongMarker, 3, decoded), "a foreign datagram is rejected");
+    unsigned char badOpcode[3] = {0xE4, 0x7f, 0x00};
+    check(!decodeKadPacket(badOpcode, 3, decoded), "an unknown opcode is rejected");
+    unsigned char shortContacts[5] = {0xE4, 0x19, 0x01, 0x00, 0x00};
+    check(!decodeKadPacket(shortContacts, 5, decoded), "a cut contact list is rejected");
+}void table()
 {
     const auto self = idFrom("00000000000000000000000000000000");
     KadRoutingTable table(self);
@@ -102,6 +138,7 @@ int main()
     return run("kad", [] {
         ids();
         table();
+        wire();
         return 0;
     });
 }

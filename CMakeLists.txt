@@ -25,6 +25,7 @@ add_library(litefetch-core STATIC
     src/core/ed2k_serve.cpp src/core/ed2k_serve.h
     src/core/kad_id.cpp src/core/kad_id.h
     src/core/kad_routing.cpp src/core/kad_routing.h
+    src/core/kad_wire.cpp src/core/kad_wire.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
