@@ -21,6 +21,26 @@
 
 namespace litefetch {
 namespace {
+// The engines report failures in English with a kind; the list shows them to a
+// Chinese user, so the kind names the failure and the original text is kept in
+// brackets for diagnosis.
+std::string describeFailure(TransferError kind, const std::string& detail)
+{
+    const char* prefix = "下载失败";
+    switch (kind) {
+    case TransferError::InvalidRequest: prefix = "地址无效"; break;
+    case TransferError::Destination: prefix = "无法写入目标文件"; break;
+    case TransferError::Network: prefix = "网络错误"; break;
+    case TransferError::Http: prefix = "服务器返回错误"; break;
+    case TransferError::Disk: prefix = "磁盘错误"; break;
+    case TransferError::Internal: prefix = "内部错误"; break;
+    case TransferError::None: break;
+    }
+    if (detail.empty()) return prefix;
+    return std::string(prefix) + "（" + detail + "）";
+}
+} // namespace
+namespace {
 namespace {
 std::string sha256File(const std::string& path, TrafficMeter* meter = nullptr)
 {
@@ -540,7 +560,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         task.error.clear();
     } else {
         task.state = TaskState::Failed;
-        task.error = transferResult.message.empty() ? "transfer failed" : transferResult.message;
+        task.error = describeFailure(transferResult.error, transferResult.message);
     }
 
     try {

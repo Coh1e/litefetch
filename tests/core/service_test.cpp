@@ -1040,6 +1040,30 @@ void downloadsCountAsDownloadTraffic(const std::filesystem::path& root)
     checkEqual(service.traffic().bytes(TrafficCategory::Verify), 0LL,
         "a task without a checksum counts no verify traffic");
 }
+void failuresAreExplainedInChinese(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "failure-text.db");
+    // A destination the engine cannot create: the folder does not exist.
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/x.bin",
+        (root / "no-such-folder" / "x.bin").string()});
+    const bool refusedAtAdd = !added.ok;
+    if (refusedAtAdd) {
+        check(added.error.find("目录") != std::string::npos
+                || added.error.find("目录不存在") != std::string::npos
+                || added.error.find("space") == std::string::npos,
+            ("the add refusal is explained: " + added.error).c_str());
+        return;
+    }
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Failed, "the transfer should fail");
+    check(run.task.error.find("无法写入目标文件") != std::string::npos,
+        ("the failure is described in Chinese: " + run.task.error).c_str());
+    check(run.task.error.find("cannot") != std::string::npos
+            || run.task.error.find("destination") != std::string::npos,
+        ("the original detail is kept: " + run.task.error).c_str());
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1365,6 +1389,7 @@ int body()
     priorityIsStoredAndChanged(root.path());
     verificationCountsAsItsOwnTraffic(root.path());
     downloadsCountAsDownloadTraffic(root.path());
+    failuresAreExplainedInChinese(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());
