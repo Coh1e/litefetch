@@ -1,6 +1,6 @@
 # #28 全范围总验收结论
 
-更新于第 80 轮（目标预算 90 轮中的第 80 轮）
+更新于第 87 轮（目标预算 90 轮中的第 87 轮）
 对照：`docs/specs/win32-ticket-plan.md`、Issue #29、`docs/specs/win32-delivery-status.md`
 
 ## 一、结论
@@ -12,8 +12,8 @@
 
 ```
 命令: cmd /c test-local.cmd
-结果: 100% tests passed, 0 failed out of 20
-耗时: 约 158 s
+结果: 100% tests passed, 0 failed out of 23
+耗时: 约 160 s
 ```
 
 连续多轮全绿（第 78–79 轮各两次、第 79 轮收尾一次）。
@@ -26,11 +26,11 @@
 | 协议 | `core-bt`、`core-ed2k`、`core-kad`、`core-ftp`(并入 service) |
 | 界面 | `ui-model`、`ui-columns`、`ui-batch`、`ui-worker`、`ui-window`、`win32-native-bridge` |
 
-发布包（`out/package/litefetch-0.1.0`，12 文件 / 16.0 MiB）真实启动：
+发布包（`out/package/litefetch-0.1.0`，13 文件 / 16.1 MiB，含 `litefetch-browser-host.exe`）真实启动：
 
 ```
-window: appeared after 220 ms
-process: exited after 313 ms with code 0
+window: appeared after 233 ms
+process: exited with code 0 after 358 ms
 ```
 
 "干净 Windows"这一条**没有验证**：本会话只有一台装了工具链、依赖与缓存的机器。
@@ -39,7 +39,7 @@ process: exited after 313 ms with code 0
 
 完成（19）：#4–#15、#19、#21、#22、#27。
 部分（5）：#16、#17、#18、#25、#26。
-未开工（4）：#20、#23、#24、#28。
+未开工（4）：#20、#23、#24、#28。其中 #23 的协议层已完成（帧、host、管道、四方法、扩展消息形状对齐），只差真实浏览器加载与 HKCU 注册。
 
 每张票的交付、证据与缺口见 `win32-delivery-status.md` 第二、三节。
 

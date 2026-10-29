@@ -26,6 +26,10 @@ if (Test-Path $packageDir) { Remove-Item $packageDir -Recurse -Force }
 New-Item -ItemType Directory -Force $packageDir | Out-Null
 Copy-Item $exe $packageDir
 Copy-Item (Join-Path $root 'LICENSE') $packageDir
+# The browser handoff needs its host beside the app; it is what the extension's
+# manifest points at once the registration exists.
+$browserHost = Join-Path $buildDir 'litefetch-browser-host.exe'
+if (Test-Path $browserHost) { Copy-Item $browserHost $packageDir }
 
 # Dependency closure: dumpbin reports names, the file is looked up in the
 # project dependency tree first, then beside the exe.
