@@ -53,14 +53,21 @@
 
 ## 4. #23 浏览器接管（本会话只到协议层）
 
+> **先做这一条，一分钟，能省掉很多猜测**：本会话用 DevTools 协议加载扩展时，扩展的下载事件
+> 始终没能驱动交接（详见 `docs/research/browser-handoff-real-chrome.md`）。请人工装一次，看它是否正常：
+> 若手动装的时候也交不出去，问题在扩展逻辑；若手动装正常，那只是自动化方式的问题。
+
 1. 确认本机有 Chrome 或 Edge；
 2. 在 `chrome://extensions` 打开"开发者模式"，"加载已解压的扩展程序"选择 `browser/` 目录；
 3. 注册 native messaging host（**需要先明确授权**）：
-   `HKCU\Software\Google\Chrome\NativeMessagingHosts\<host 名>` 指向一个 JSON 清单，
-   清单的 `path` 指向 `litefetch-browser-host.exe`，`allowed_origins` 填扩展 ID；
-4. 启动 LiteFetch，在允许的站点点一个下载链接：扩展应把请求交给本机，**本机列表出现一个未开始的任务**；
-5. 在扩展弹窗里确认提交：任务进入可调度状态；
-6. 关掉 LiteFetch 后再点下载：扩展应收到"无法连接"的错误，**而不是静默失败**。
+   `HKCU\Software\Google\Chrome\NativeMessagingHosts\org.native_downloader.bridge` 指向
+   `out/browser-connection/org.native_downloader.bridge.json`（该清单 **UTF-8 无 BOM**）；
+4. 启动 LiteFetch，在扩展弹窗里打开开关并允许一个站点；
+5. 在该站点点一个下载链接：扩展应把请求交给本机，**本机列表出现一个未开始的任务**；
+6. 在扩展弹窗里确认提交：任务进入可调度状态；
+7. 关掉 LiteFetch 后再点下载：扩展应收到"无法连接"的错误，**而不是静默失败**。
+
+第 5 步是本会话唯一没跑通的一步，请重点记录它的现象（任务是否出现、扩展弹窗的提示、徽标是否变成 `!`）。
 
 第 3 步的注册键名与清单格式属于需要你确认的部分；扩展 ID 在 `chrome://extensions` 里可见。
 
