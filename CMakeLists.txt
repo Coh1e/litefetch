@@ -30,6 +30,7 @@ add_library(litefetch-core STATIC
     src/core/rate_limit.cpp src/core/rate_limit.h
     src/core/settings.cpp src/core/settings.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
+    src/win32/options_dialog.cpp src/win32/options_dialog.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3)

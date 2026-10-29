@@ -3,6 +3,8 @@
 #include "batch_dialog.h"
 #include "bt_engine.h"
 #include "ed2k_task.h"
+#include "options_dialog.h"
+#include "settings.h"
 #include "column_dialog.h"
 #include "explorer_target.h"
 #include "new_download_dialog.h"
@@ -1723,7 +1725,7 @@ void MainWindow::updateActions()
         enableMenu(ID_TASK_VERIFY,
             interactive && actions.selectedCount == 1 && row && !row->torrentFiles.empty());
     }
-    enableMenu(ID_TOOLS_OPTIONS, false);
+    enableMenu(ID_TOOLS_OPTIONS, interactive);
     enableButton(ID_FILE_NEW, interactive);
     enableButton(ID_TASK_START, interactive && actions.start);
     enableButton(ID_TASK_PAUSE, interactive && actions.pause);

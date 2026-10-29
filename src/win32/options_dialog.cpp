@@ -1,0 +1,110 @@
+#include "options_dialog.h"
+
+#include "resource.h"
+#include "text_utf8.h"
+
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+namespace litefetch::ui {
+namespace {
+std::wstring wideOf(std::string_view utf8)
+{
+    if (utf8.empty()) return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
+        nullptr, 0);
+    if (length <= 0) return {};
+    std::wstring text(static_cast<std::size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), text.data(), length);
+    return text;
+}
+
+struct OptionsContext {
+    Settings current;
+    std::optional<Settings> result;
+};
+
+std::string windowTextUtf8(HWND dialog, int id)
+{
+    wchar_t buffer[4096]{};
+    GetDlgItemTextW(dialog, id, buffer, 4096);
+    return utf8FromUtf16(buffer);
+}
+
+INT_PTR CALLBACK optionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto* context = reinterpret_cast<OptionsContext*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
+    switch (message) {
+    case WM_INITDIALOG: {
+        context = reinterpret_cast<OptionsContext*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
+        if (!context) return FALSE;
+        // The dialog works in KB/s because that is what users type.
+        SetDlgItemInt(dialog, IDC_OPT_SPEED,
+            static_cast<UINT>(context->current.speedLimitBytesPerSecond / 1024), FALSE);
+        SetDlgItemTextW(dialog, IDC_OPT_PROXY, wideOf(context->current.httpProxy).c_str());
+        SetDlgItemInt(dialog, IDC_OPT_TIMEOUT,
+            static_cast<UINT>(context->current.connectTimeoutSeconds), FALSE);
+        std::string servers;
+        for (const auto& server : context->current.ed2kServers) {
+            if (!servers.empty()) servers += "\r\n";
+            servers += server;
+        }
+        SetDlgItemTextW(dialog, IDC_OPT_ED2K, wideOf(servers).c_str());
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            if (context) {
+                Settings settings;
+                BOOL translated = FALSE;
+                const auto speedKb = GetDlgItemInt(dialog, IDC_OPT_SPEED, &translated, FALSE);
+                settings.speedLimitBytesPerSecond = translated
+                    ? static_cast<std::int64_t>(speedKb) * 1024 : 0;
+                settings.httpProxy = windowTextUtf8(dialog, IDC_OPT_PROXY);
+                const auto timeout = GetDlgItemInt(dialog, IDC_OPT_TIMEOUT, &translated, FALSE);
+                settings.connectTimeoutSeconds = translated ? static_cast<int>(timeout) : 30;
+                if (settings.connectTimeoutSeconds < 5) settings.connectTimeoutSeconds = 5;
+                settings.ed2kServers.clear();
+                const auto servers = windowTextUtf8(dialog, IDC_OPT_ED2K);
+                std::size_t start = 0;
+                while (start < servers.size()) {
+                    auto end = servers.find('\n', start);
+                    auto line = servers.substr(start,
+                        end == std::string::npos ? std::string::npos : end - start);
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (!line.empty()) settings.ed2kServers.push_back(line);
+                    if (end == std::string::npos) break;
+                    start = end + 1;
+                }
+                context->result = settings;
+            }
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dialog, IDCANCEL);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+} // namespace
+
+std::optional<Settings> showOptionsDialog(HWND owner, const Settings& current)
+{
+    OptionsContext context;
+    context.current = current;
+    const auto answer = DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_OPTIONS),
+        owner, optionsDialogProc, reinterpret_cast<LPARAM>(&context));
+    if (answer != IDOK) return std::nullopt;
+    return context.result;
+}
+
+} // namespace litefetch::ui

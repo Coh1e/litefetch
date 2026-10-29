@@ -54,6 +54,20 @@ bool TaskWorker::start(std::string& error)
                               const std::atomic_bool& cancelled,
                               const std::function<void(std::int64_t, std::int64_t)>& progress) {
                 auto withLookup = request;
+                // Settings win over the legacy server file when the user filled
+                // the list in the options dialog.
+                {
+                    std::lock_guard lock(settingsMutex_);
+                    if (!settings_.ed2kServers.empty()) {
+                        withLookup.servers.clear();
+                        for (const auto& entry : settings_.ed2kServers) {
+                            std::string host;
+                            std::uint16_t port = 0;
+                            if (parseServerEndpoint(entry, host, port))
+                                withLookup.servers.push_back({host, port});
+                        }
+                    }
+                }
                 withLookup.lookup = [this](const std::string& fileHash) {
                     std::vector<Ed2kSource> sources;
                     KadId id;
@@ -258,6 +272,25 @@ void TaskWorker::beginShutdown()
     }
     condition_.notify_all();
     wakeUi();
+}
+
+Settings TaskWorker::settings() const
+{
+    std::lock_guard lock(settingsMutex_);
+    return settings_;
+}
+
+void TaskWorker::applySettings(const Settings& settings)
+{
+    {
+        std::lock_guard lock(settingsMutex_);
+        settings_ = settings;
+    }
+    if (repository_ && service_) {
+        saveSettings(*repository_, settings);
+        service_->setRateLimit(settings.speedLimitBytesPerSecond);
+        service_->setHttpProxy(settings.httpProxy);
+    }
 }
 
 void TaskWorker::stopKad()

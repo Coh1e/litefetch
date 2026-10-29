@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kad_node.h"
+#include "settings.h"
 #include "task.h"
 #include "task_service.h"
 
@@ -103,6 +104,10 @@ public:
     void shutdown();
 
     WorkerSnapshot snapshot();
+    // Settings live in the task database; these keep the service and the ed2k
+    // server list in step with what the options dialog stored.
+    Settings settings() const;
+    void applySettings(const Settings& settings);
 
 private:
     enum class CommandType { Add, Start, Pause, Cancel, Delete, DeleteFiles, Verify, Refresh, UpdateTorrent };
@@ -158,6 +163,8 @@ private:
     TaskService::BtTransfer btTransfer_;
     TaskService::Ed2kTransfer ed2kTransfer_;
     std::unique_ptr<KadNode> kad_;
+    mutable std::mutex settingsMutex_;
+    Settings settings_;
     std::thread controlThread_;
     std::mutex mutex_;
     std::condition_variable condition_;
