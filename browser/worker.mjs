@@ -20,7 +20,12 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
     await ready;
     if (!settings.enabled) return;
     const result = observer.match(item);
-    if (!result.request) return;
+    // Say why a download was left to the browser: without it, "the handoff did
+    // nothing" and "the handoff is broken" look identical from the outside.
+    if (!result.request) {
+      console.debug('handoff: ignored', item.id, result.reason);
+      return;
+    }
     const record = await controller.run(item.id, result.request);
     if (record.phase === 'attention' || record.phase === 'cancelled') await badge('!');
   }

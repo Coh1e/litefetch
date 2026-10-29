@@ -87,3 +87,33 @@ node scripts\browser-probe.mjs 9334
 
 下一步做法：把测试站点限速到 ~200 KiB/s，让下载持续数秒；同时在 worker 里加
 `console.log`，用 CDP 的 `Runtime.consoleAPICalled` 收集，直接看 `consider()` 的结果。
+
+## 2026-10-29 第三轮：把范围压到"匹配之后"
+
+用限速服务端（约 200 KiB/s）重跑，并在 service worker 里逐阶段打印 `webRequest` 事件：
+
+```
+PROBE begin    6   main_frame
+PROBE headers  6   main_frame
+PROBE response 6 200 main_frame
+PROBE created 36  http://127.0.0.1:47673/handoff.bin in_progress
+```
+
+结论：**观察链完整**（有 requestHeaders、有 200 响应），**下载事件也到达了**（`state: in_progress`），
+但 journal 仍然没有记录。也就是说：问题不在"事件没来"，而在 `consider()` 之后
+（`observer.match()` 的判定或 `controller.run()` 的早期返回）。
+
+下一步（已就位）：在 `worker.mjs` 的 `consider()` 里加了一行
+`console.debug('handoff: ignored', item.id, result.reason)`，它会说出被忽略的确切原因。
+
+**这一轮没能看到这行日志，原因是流程失误**：改的是磁盘上的 `browser/worker.mjs`，
+而 Chrome 里加载的扩展仍是旧代码——必须重新 `Extensions.loadUnpacked`（或
+`chrome.runtime.reload()`）才会生效。下一轮先重载再跑。
+
+## 自动化辅助
+
+新增两个脚本，避免每轮手工拼命令：
+
+- `scripts/browser-session.ps1`：启动 LiteFetch（临时库）＋ Chrome（CDP）＋ 加载扩展＋限速测试站点；
+- `scripts/browser-session-stop.ps1`：清理上述进程与后台任务；
+- `scripts/browser-diagnose.mjs`：驱动一次真实点击下载，收集扩展日志、journal 与下载列表。
