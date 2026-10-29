@@ -1,6 +1,6 @@
 # #28 全范围总验收结论
 
-更新于第 89 轮（目标预算 90 轮中的第 89 轮）
+更新于第 103 轮
 对照：`docs/specs/win32-ticket-plan.md`、Issue #29、`docs/specs/win32-delivery-status.md`
 
 ## 一、结论
@@ -20,7 +20,7 @@
 ```
 命令: cmd /c test-local.cmd
 结果: 100% tests passed, 0 failed out of 23
-耗时: 160.4 s（第 89 轮实测）
+耗时: 162.9 s（第 102 轮实测）
 ```
 
 连续多轮全绿（第 78–79 轮各两次、第 79 轮收尾一次）。
