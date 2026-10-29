@@ -196,6 +196,27 @@ void priorityJumpsTheQueue(const std::filesystem::path& root)
     }, std::chrono::seconds(40)), "the queued task never ran");
     worker.shutdown();
 }
+void lowUsageBacksOffWhenIdle(const std::filesystem::path& root)
+{
+    TaskWorker worker(root / "worker-low-usage.db");
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    worker.setMaxConcurrent(4);
+    worker.setLowUsageIdleSeconds(1);
+
+    check(waitFor([&] { return worker.snapshot().runtimeConcurrency == 4; },
+        std::chrono::seconds(5)), "the user limit is in force at the start");
+
+    // No command, no transfer: after the idle window only one slot may remain.
+    check(waitFor([&] { return worker.snapshot().runtimeConcurrency == 1; },
+        std::chrono::seconds(10)), "idle did not lower the slot budget");
+
+    // Any activity brings the user's limit back.
+    worker.postRefresh();
+    check(waitFor([&] { return worker.snapshot().runtimeConcurrency == 4; },
+        std::chrono::seconds(10)), "activity did not restore the user limit");
+    worker.shutdown();
+}
 void cancelledDownload(const std::filesystem::path& root)
 {
     const auto body = payload(4 * 1024 * 1024);
@@ -361,6 +382,7 @@ int body()
     invalidAddReportsError(root.path());
     extraStartsWaitForASlot(root.path());
     priorityJumpsTheQueue(root.path());
+    lowUsageBacksOffWhenIdle(root.path());
     return 0;
 }
 } // namespace

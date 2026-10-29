@@ -1,6 +1,8 @@
 #include <algorithm>
 #include "task_worker.h"
 
+#include "low_usage.h"
+
 #include "http_engine.h"
 #include "task_service.h"
 #include "task_store.h"
@@ -387,6 +389,7 @@ WorkerSnapshot TaskWorker::snapshot()
     result.addResults = addResults_;
     result.outcomes = outcomes_;
     result.lastError = lastError_;
+    result.runtimeConcurrency = runtimeConcurrency_;
     result.lastErrorSequence = lastErrorSequence_;
     result.addResultSequence = addResultSequence_;
     result.outcomeSequence = outcomeSequence_;
@@ -409,6 +412,7 @@ void TaskWorker::controlLoop()
         {
             std::unique_lock lock(mutex_);
             hasJobs = !jobs_.empty();
+            evaluateLowUsageLocked();
             const auto ready = [this] {
                 return stopping_ || !queue_.empty() || anyJobFinished();
             };
@@ -417,6 +421,10 @@ void TaskWorker::controlLoop()
                 // periodically so the row shows the committed running state
                 // even before the first progress event arrives.
                 condition_.wait_for(lock, std::chrono::milliseconds(250), ready);
+            } else if (lowUsageIdleSeconds_ > 0) {
+                // Without jobs the loop would sleep until a command arrives, but
+                // low-usage mode has to notice that nothing is happening.
+                condition_.wait_for(lock, std::chrono::milliseconds(500), ready);
             } else {
                 condition_.wait(lock, ready);
             }
@@ -430,7 +438,10 @@ void TaskWorker::controlLoop()
                 continue;
             }
         }
-        if (hasCommand) execute(command);
+        if (hasCommand) {
+            noteActivity();
+            execute(command);
+        }
         reapFinished();
         reload();
         wakeUi();
@@ -573,6 +584,27 @@ void TaskWorker::execute(const Command& command)
     }
 }
 
+void TaskWorker::noteActivity()
+{
+    std::lock_guard lock(mutex_);
+    lastActivity_ = std::chrono::steady_clock::now();
+}
+
+void TaskWorker::evaluateLowUsageLocked()
+{
+    if (lowUsageIdleSeconds_ <= 0) {
+        runtimeConcurrency_ = maxConcurrent_;
+        return;
+    }
+    LowUsagePolicy policy;
+    policy.enabled = true;
+    policy.userConcurrency = maxConcurrent_;
+    policy.idleAfter = std::chrono::seconds(lowUsageIdleSeconds_);
+    const auto idle = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - lastActivity_);
+    runtimeConcurrency_ = policy.effectiveConcurrency(static_cast<int>(jobs_.size()), idle);
+}
+
 void TaskWorker::setMaxConcurrent(int maxConcurrent)
 {
     {
@@ -595,6 +627,7 @@ void TaskWorker::setLowUsageIdleSeconds(int seconds)
 {
     std::lock_guard lock(mutex_);
     lowUsageIdleSeconds_ = seconds < 0 ? 0 : seconds;
+    lastActivity_ = std::chrono::steady_clock::now();
 }
 
 void TaskWorker::launchPendingStarts()
@@ -602,7 +635,8 @@ void TaskWorker::launchPendingStarts()
     std::vector<PendingStart> ready;
     {
         std::lock_guard lock(mutex_);
-        if (maxConcurrent_ <= 0) {
+        const int limit = runtimeConcurrency_ > 0 ? runtimeConcurrency_ : maxConcurrent_;
+        if (limit <= 0) {
             ready.swap(pendingStarts_);
         } else {
             // Highest priority first, then oldest: the queue is stable so a
@@ -614,7 +648,7 @@ void TaskWorker::launchPendingStarts()
             // Count the ones already picked in this pass, so no phantom job is
             // added: a placeholder would never finish and would eat the slot.
             while (!pendingStarts_.empty()
-                && static_cast<int>(jobs_.size() + ready.size()) < maxConcurrent_) {
+                && static_cast<int>(jobs_.size() + ready.size()) < limit) {
                 ready.push_back(pendingStarts_.front());
                 pendingStarts_.erase(pendingStarts_.begin());
             }
@@ -637,7 +671,8 @@ void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
         for (const auto& pending : pendingStarts_) {
             if (pending.taskId == taskId) return;
         }
-        if (maxConcurrent_ > 0 && static_cast<int>(jobs_.size()) >= maxConcurrent_) {
+        const int limit = runtimeConcurrency_ > 0 ? runtimeConcurrency_ : maxConcurrent_;
+        if (limit > 0 && static_cast<int>(jobs_.size()) >= limit) {
             PendingStart pending;
             pending.taskId = taskId;
             pending.restartFromZero = restartFromZero;
@@ -661,7 +696,8 @@ void TaskWorker::launchStartNow(const std::string& taskId, bool restartFromZero,
     {
         std::lock_guard lock(mutex_);
         // A slot is full: remember the request instead of running it now.
-        if (maxConcurrent_ > 0 && static_cast<int>(jobs_.size()) >= maxConcurrent_) {
+        const int limit = runtimeConcurrency_ > 0 ? runtimeConcurrency_ : maxConcurrent_;
+        if (limit > 0 && static_cast<int>(jobs_.size()) >= limit) {
             for (const auto& job : jobs_) {
                 if (job.taskId == taskId && !job.finished->load()) return;
             }

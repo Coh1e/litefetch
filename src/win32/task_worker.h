@@ -53,6 +53,8 @@ struct WorkerSnapshot {
     std::vector<AddResult> addResults;
     std::vector<ActionOutcome> outcomes;
     std::string lastError;
+    // The slot limit in force right now (low-usage mode lowers it when idle).
+    int runtimeConcurrency = 0;
     std::uint64_t lastErrorSequence = 0;
     std::uint64_t addResultSequence = 0;
     std::uint64_t outcomeSequence = 0;
@@ -168,6 +170,9 @@ private:
 
     void controlLoop();
     void execute(const Command& command);
+    // Recomputes the slot limit from the low-usage policy; call with the lock held.
+    void evaluateLowUsageLocked();
+    void noteActivity();
     void launchPendingStarts();
     int priorityOf(const std::string& taskId) const;
     void launchStartNow(const std::string& taskId, bool restartFromZero, std::string username,
@@ -206,6 +211,7 @@ private:
     std::vector<PendingStart> pendingStarts_;
     int maxConcurrent_ = 0;
     int lowUsageIdleSeconds_ = 0;
+    int runtimeConcurrency_ = 0;
     std::chrono::steady_clock::time_point lastActivity_ = std::chrono::steady_clock::now(); // control thread only
     std::vector<TaskSnapshot> tasks_;
     std::vector<std::string> active_;
