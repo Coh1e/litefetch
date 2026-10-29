@@ -92,7 +92,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     seedRequest.peers = {"127.0.0.1:" + std::to_string(seedPort)};
     // Keep seeding well past the leecher window so a slow machine cannot end
     // the share before the second peer finishes.
-    seedRequest.seedPolicy = BtSeedPolicy{2, 1.0, 5};
+    seedRequest.seedPolicy = BtSeedPolicy{2, 1.0, 2};
     BtDownloadResult seedResult;
     std::thread seederThread([&] {
         seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {

@@ -168,7 +168,7 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     if (torrent && command.source.rfind("magnet:", 0) != 0
         && !std::filesystem::is_regular_file(pathFromUtf8(command.source)))
         return failure("torrent file does not exist");
-    const std::filesystem::path destination = pathFromUtf8(command.destination);
+    std::filesystem::path destination = pathFromUtf8(command.destination);
     if (command.destination.empty() || !destination.is_absolute())
         return failure("destination must be an absolute path");
 
@@ -205,14 +205,30 @@ CommandResult TaskService::add(const AddTaskCommand& command)
     // A torrent saves into a directory, which normally already exists; the
     // single-file "do not overwrite" rule applies to HTTP/FTP destinations only.
     std::error_code existsError;
-    if (!torrent && std::filesystem::exists(destination, existsError))
-        return failure("destination already exists");
+    if (!torrent && std::filesystem::exists(destination, existsError)) {
+        if (!renameOnConflict_) return failure("destination already exists");
+        // Pick the first free "name (n).ext" beside the requested file.
+        const auto parent = destination.parent_path();
+        const auto stem = destination.stem().string();
+        const auto extension = destination.extension().string();
+        bool placed = false;
+        for (int suffix = 1; suffix <= 999 && !placed; ++suffix) {
+            auto candidate = parent / (stem + " (" + std::to_string(suffix) + ")" + extension);
+            std::error_code candidateError;
+            if (std::filesystem::exists(candidate, candidateError)) continue;
+            destination = candidate;
+            placed = true;
+        }
+        if (!placed) return failure("cannot find a free file name");
+    }
     if (existsError) return failure("cannot inspect destination: " + existsError.message());
 
     TaskSnapshot task;
     task.id = id;
     task.source = command.source;
-    task.destination = command.destination;
+    task.destination = destination == pathFromUtf8(command.destination)
+        ? command.destination
+        : std::string(reinterpret_cast<const char*>(destination.u8string().c_str()));
     task.state = TaskState::Queued;
     task.total = -1;
     task.files = command.files;

@@ -16,6 +16,9 @@ struct Settings {
     std::string httpProxy;
     // Seconds before a stalled transfer is given up.
     int connectTimeoutSeconds = 30;
+    // What to do when the destination already exists: false refuses (default),
+    // true picks "name (1).ext" instead of failing.
+    bool renameOnConflict = false;
     // ed2k servers, "host:port" each.
     std::vector<std::string> ed2kServers;
 };

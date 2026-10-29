@@ -11,6 +11,7 @@ constexpr const char* speedLimitKey = "network.speed_limit";
 constexpr const char* proxyKey = "network.http_proxy";
 constexpr const char* connectTimeoutKey = "network.connect_timeout";
 constexpr const char* ed2kServersKey = "ed2k.servers";
+constexpr const char* renameOnConflictKey = "download.rename_on_conflict";
 
 std::int64_t parseInt64(const std::string& text, std::int64_t fallback)
 {
@@ -60,6 +61,7 @@ Settings loadSettings(const TaskRepository& repository)
         static_cast<int>(parseInt64(repository.metaValue(connectTimeoutKey), 30));
     if (settings.connectTimeoutSeconds < 5) settings.connectTimeoutSeconds = 5;
     settings.ed2kServers = splitLines(repository.metaValue(ed2kServersKey));
+    settings.renameOnConflict = repository.metaValue(renameOnConflictKey) == "1";
     return settings;
 }
 
@@ -74,6 +76,7 @@ void saveSettings(TaskRepository& repository, const Settings& settings)
         servers += server;
     }
     repository.setMetaValue(ed2kServersKey, servers);
+    repository.setMetaValue(renameOnConflictKey, settings.renameOnConflict ? "1" : "0");
 }
 
 } // namespace litefetch

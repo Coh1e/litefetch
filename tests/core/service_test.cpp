@@ -915,6 +915,30 @@ void proxyIsUsedForHttp(const std::filesystem::path& root)
     check(request.find("http://target.invalid/file.bin") != std::string::npos,
         ("the proxy received the absolute URL: " + request).c_str());
 }
+void renameOnConflictPicksAFreeName(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "conflict.db");
+    TaskService service(repository);
+    const auto body = payload(512);
+    HttpFixture fixture(HttpFixture::Options{body});
+    const auto folder = root / "conflicts";
+    std::filesystem::create_directories(folder);
+    const auto taken = folder / "photo.bin";
+    writeFile(taken, body);
+
+    // Default: a taken name is refused, nothing is overwritten.
+    const auto refused = service.execute(AddTaskCommand{fixture.url("/photo.bin"), taken.string()});
+    require(!refused.ok, "a taken destination is refused by default");
+    check(!refused.error.empty(), "the refusal is explained");
+
+    // With the option on, the task gets the next free name.
+    service.setRenameOnConflict(true);
+    const auto renamed = service.execute(AddTaskCommand{fixture.url("/photo.bin"), taken.string()});
+    require(renamed.ok, "the renamed add succeeds: " + renamed.error);
+    checkEqual(std::filesystem::path(renamed.task.destination).filename().string(),
+        std::string("photo (1).bin"), "the first free suffix is used");
+    check(readFile(taken) == body, "the original file is untouched");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1235,6 +1259,7 @@ int body()
     globalRateLimitSlowsTransfers(root.path());
     settingsRoundTrip(root.path());
     proxyIsUsedForHttp(root.path());
+    renameOnConflictPicksAFreeName(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

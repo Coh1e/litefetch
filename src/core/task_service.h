@@ -47,6 +47,8 @@ public:
     void setRateLimit(std::int64_t bytesPerSecond);
     // HTTP proxy applied to every HTTP/FTP transfer this service starts.
     void setHttpProxy(std::string proxy);
+    // When true a taken destination becomes "name (1).ext" instead of an error.
+    void setRenameOnConflict(bool rename) { renameOnConflict_ = rename; }
 
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
         ProgressObserver observer = {}, BtTransfer btTransfer = {},
@@ -89,6 +91,7 @@ private:
     FreeSpaceFn freeSpace_;
     std::shared_ptr<RateBudget> budget_ = std::make_shared<RateBudget>();
     std::string proxy_;
+    bool renameOnConflict_ = false;
     // Starts that are between "decided" and "registered", and stops that arrived
     // in that window. The stop is honoured instead of being overwritten.
     std::set<std::string, std::less<>> starting_;
