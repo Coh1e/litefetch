@@ -187,7 +187,13 @@ void bitTorrentRoundTrip(TorrentFlavour flavour)
     seedParams.save_path = seedDirectory.string();
     seedParams.flags |= lt::torrent_flags::seed_mode;
     const auto seedHandle = seeder.add_torrent(std::move(seedParams));
-    const auto seedPort = seeder.listen_port();
+    // The session binds asynchronously, so asking once right after construction
+    // is a race that shows up on a loaded machine.
+    std::uint16_t seedPort = 0;
+    for (int attempt = 0; attempt < 100 && seedPort == 0; ++attempt) {
+        seedPort = seeder.listen_port();
+        if (seedPort == 0) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     check(seedPort != 0, "seeder listens on a loopback port");
     seeder.wait_for_alert(std::chrono::milliseconds(500));
 

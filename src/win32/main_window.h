@@ -53,6 +53,13 @@ public:
     // Exposed for the window harness: the priority the list currently shows.
     // Exposed for the window harness: the traffic totals the window last saw.
     std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
+    // Exposed for the window harness: the status text the list shows.
+    std::string statusOfTaskNamed(const std::string& name) const
+    {
+        for (const auto& row : model_.rows())
+            if (row.name == name) return row.status;
+        return {};
+    }
     int priorityOfTaskNamed(const std::string& name) const
     {
         for (const auto& row : model_.rows())
@@ -93,6 +100,7 @@ private:
     void addTrayIcon();
     void notifyTaskFinished(const TaskSnapshot& task);
     void setSelectedPriority(int priority);
+    void openDownloadFolder();
     void removeTrayIcon();
     void showTrayMenu();
 
@@ -211,6 +219,8 @@ private:
     std::set<std::string, std::less<>> promptedCredentials_;
     NotificationPolicy notifications_;
     std::array<std::int64_t, 4> traffic_{};
+    std::uint64_t lastCompletionSequence_ = 0;
+    int completionAction_ = 0;
     std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
     bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;

@@ -1063,9 +1063,20 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         case ID_TASK_PROPERTIES:            showProperties();
             return 0;
-        case ID_TOOLS_OPTIONS:
-            setNotice("选项界面将在后续版本提供。");
+        case ID_TOOLS_OPTIONS: {
+            if (!worker_) return 0;
+            const auto updated = showOptionsDialog(hwnd_, worker_->settings());
+            if (!updated) return 0;
+            worker_->applySettings(updated->settings);
+            completionAction_ = updated->settings.onAllComplete;
+            if (updated->forgetCredentials) {
+                worker_->forgetCredentials();
+                setNotice("设置已保存，记住的密码已清除");
+            } else {
+                setNotice("设置已保存");
+            }
             return 0;
+        }
         case ID_HELP_CAPABILITIES: showCapabilities(); return 0;
         case ID_HELP_ABOUT: showAbout(); return 0;
         case IDC_SEARCH:
@@ -1151,8 +1162,10 @@ bool MainWindow::createControls()
             MB_OK | MB_ICONERROR);
         return false;
     }
+    completionAction_ = worker_->settings().onAllComplete;
     refreshFromWorker();
     SetTimer(hwnd_, IDT_REFRESH, refreshTimerMillis, nullptr);
+    addTrayIcon();
     return true;
 }
 
@@ -1528,6 +1541,12 @@ void MainWindow::refreshFromWorker()
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     traffic_ = snapshot.traffic;
+    if (snapshot.allCompleteSequence != lastCompletionSequence_) {
+        lastCompletionSequence_ = snapshot.allCompleteSequence;
+        // The batch ended; the user asked for something to happen now.
+        if (completionAction_ == 1) openDownloadFolder();
+        else if (completionAction_ == 2) PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+    }
     model_.update(snapshot.tasks, snapshot.active, now);
     if (snapshot.lastErrorSequence != lastErrorSequence_) {
         lastErrorSequence_ = snapshot.lastErrorSequence;
@@ -1555,6 +1574,13 @@ void MainWindow::refreshFromWorker()
         promptForCredentials(task.id);
         break;
     }
+}
+
+void MainWindow::openDownloadFolder()
+{
+    // Explorer is launched with the folder, never with a file selection, so a
+    // missing file cannot turn into an error dialog.
+    ShellExecuteW(hwnd_, L"open", options_.downloadDirectory.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 void MainWindow::setSelectedPriority(int priority)
