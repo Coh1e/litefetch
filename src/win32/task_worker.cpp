@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "task_worker.h"
 
 #include "http_engine.h"
@@ -222,6 +223,20 @@ void TaskWorker::postDeleteFiles(std::string taskId)
     Command command;
     command.type = CommandType::DeleteFiles;
     command.taskId = std::move(taskId);
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
+void TaskWorker::postPriority(std::string taskId, int priority)
+{
+    Command command;
+    command.type = CommandType::Priority;
+    command.taskId = std::move(taskId);
+    command.priority = priority;
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
@@ -501,6 +516,12 @@ void TaskWorker::execute(const Command& command)
                 publishError("属性应用失败: " + (result.error.empty() ? "unknown error" : result.error));
             break;
         }
+        case CommandType::Priority: {
+            const auto result = service_->execute(SetPriorityCommand{command.taskId, command.priority});
+            if (!result.ok)
+                publishError("设置优先级失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
         case CommandType::Verify: {
             const auto result = service_->execute(VerifyTaskCommand{command.taskId});
             if (!result.ok)
@@ -560,6 +581,15 @@ void TaskWorker::setMaxConcurrent(int maxConcurrent)
     launchPendingStarts();
 }
 
+int TaskWorker::priorityOf(const std::string& taskId) const
+{
+    if (!service_) return 0;
+    for (const auto& task : service_->snapshots()) {
+        if (task.id == taskId) return task.priority;
+    }
+    return 0;
+}
+
 void TaskWorker::launchPendingStarts()
 {
     std::vector<PendingStart> ready;
@@ -568,6 +598,12 @@ void TaskWorker::launchPendingStarts()
         if (maxConcurrent_ <= 0) {
             ready.swap(pendingStarts_);
         } else {
+            // Highest priority first, then oldest: the queue is stable so a
+            // user does not have to guess which task jumps ahead.
+            std::stable_sort(pendingStarts_.begin(), pendingStarts_.end(),
+                [this](const PendingStart& left, const PendingStart& right) {
+                    return priorityOf(left.taskId) > priorityOf(right.taskId);
+                });
             // Count the ones already picked in this pass, so no phantom job is
             // added: a placeholder would never finish and would eat the slot.
             while (!pendingStarts_.empty()

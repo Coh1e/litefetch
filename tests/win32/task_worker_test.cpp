@@ -96,8 +96,9 @@ void completedDownload(const std::filesystem::path& root)
 void extraStartsWaitForASlot(const std::filesystem::path& root)
 {
     // One slot, two tasks: the second must stay queued until the first finishes.
+    // Slow enough that the first cannot finish before the assertions run.
     const auto body = payload(512 * 1024);
-    HttpFixture server(HttpFixture::Options{body, 200, 64 * 1024, std::chrono::milliseconds(20)});
+    HttpFixture server(HttpFixture::Options{body, 200, 8 * 1024, std::chrono::milliseconds(30)});
     const auto database = root / "worker-slots.db";
     TaskWorker worker(database);
     std::string error;
@@ -136,6 +137,63 @@ void extraStartsWaitForASlot(const std::filesystem::path& root)
 
     check(readFile(root / "first.bin") == body, "the first file is complete");
     check(readFile(root / "second.bin") == body, "the queued file is complete");
+    worker.shutdown();
+}
+void priorityJumpsTheQueue(const std::filesystem::path& root)
+{
+    const auto body = payload(512 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 8 * 1024, std::chrono::milliseconds(30)});
+    TaskWorker worker(root / "worker-priority.db");
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    worker.setMaxConcurrent(1);
+
+    worker.postAdd(server.url("/a.bin"), (root / "a.bin").string(), true);
+    std::string firstId;
+    check(waitFor([&] {
+        const auto tasks = worker.snapshot().tasks;
+        if (tasks.empty()) return false;
+        firstId = tasks.front().id;
+        return tasks.front().received > 0;
+    }, std::chrono::seconds(15)), "the first task did not start");
+
+    // Second task waits behind the first.
+    worker.postAdd(server.url("/b.bin"), (root / "b.bin").string(), true);
+    check(waitFor([&] { return worker.snapshot().tasks.size() == 2; },
+        std::chrono::seconds(10)), "the waiting task was not added");
+
+    // Third task is created paused, raised above the second, then started.
+    worker.postAdd(server.url("/c.bin"), (root / "c.bin").string(), false);
+    std::string thirdId;
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.id != firstId && task.destination.find("c.bin") != std::string::npos)
+                thirdId = task.id;
+        return !thirdId.empty();
+    }, std::chrono::seconds(10)), "the third task was not added");
+    worker.postPriority(thirdId, 10);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    worker.postStart(thirdId);
+
+    // Once the first finishes, the high-priority third task runs before the
+    // second one, which is still waiting.
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.id == thirdId) return task.state == TaskState::Completed;
+        return false;
+    }, std::chrono::seconds(40)), "the high-priority task did not finish");
+    bool secondStillWaiting = false;
+    for (const auto& task : worker.snapshot().tasks) {
+        if (task.id == firstId || task.id == thirdId) continue;
+        secondStillWaiting = task.state != TaskState::Completed;
+    }
+    check(secondStillWaiting, "the low-priority task should still be waiting");
+
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.state != TaskState::Completed) return false;
+        return true;
+    }, std::chrono::seconds(40)), "the queued task never ran");
     worker.shutdown();
 }
 void cancelledDownload(const std::filesystem::path& root)
@@ -301,6 +359,8 @@ int body()
     shutdownDuringDownload(root.path());
     batchResultsAndRecordDelete(root.path());
     invalidAddReportsError(root.path());
+    extraStartsWaitForASlot(root.path());
+    priorityJumpsTheQueue(root.path());
     return 0;
 }
 } // namespace

@@ -80,6 +80,7 @@ private:
     CommandResult remove(const DeleteTaskCommand& command);
     CommandResult removeWithFiles(const DeleteTaskFilesCommand& command);
     CommandResult verify(const VerifyTaskCommand& command);
+    CommandResult setPriority(const SetPriorityCommand& command);
     CommandResult updateTorrent(const UpdateTorrentOptionsCommand& command);
     void unregister(std::string_view id, const std::shared_ptr<std::atomic_bool>& flag);
     // Shared implementation for Cancel and Pause: both stop the transfer, the

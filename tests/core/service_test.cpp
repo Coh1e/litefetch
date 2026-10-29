@@ -981,6 +981,23 @@ void categorizedSavingSortsFiles(const std::filesystem::path& root)
         "the file sits in the video folder");
     check(readFile(written) == body, "the bytes landed in the category folder");
 }
+void priorityIsStoredAndChanged(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "priority.db");
+    TaskService service(repository);
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/prio.bin",
+        (root / "prio.bin").string()});
+    require(added.ok, "add failed: " + added.error);
+    checkEqual(static_cast<long long>(added.task.priority), 0LL, "tasks start at normal priority");
+
+    const auto raised = service.execute(SetPriorityCommand{added.task.id, 5});
+    require(raised.ok, "raising the priority failed: " + raised.error);
+    checkEqual(static_cast<long long>(raised.task.priority), 5LL, "the new priority is reported");
+
+    const auto reloaded = repository.find(added.task.id);
+    require(reloaded.has_value(), "the task disappeared");
+    checkEqual(static_cast<long long>(reloaded->priority), 5LL, "the priority is durable");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1303,6 +1320,7 @@ int body()
     proxyIsUsedForHttp(root.path());
     renameOnConflictPicksAFreeName(root.path());
     categorizedSavingSortsFiles(root.path());
+    priorityIsStoredAndChanged(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

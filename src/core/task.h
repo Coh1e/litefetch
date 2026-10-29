@@ -56,6 +56,8 @@ struct TaskSnapshot {
     // finished download without a checksum is never reported as verified.
     std::string sha256;
     bool verified = false;
+    // Higher runs sooner when the slot budget is limited.
+    int priority = 0;
     std::int64_t createdAt = 0;
     std::int64_t updatedAt = 0;
 };
@@ -109,6 +111,12 @@ struct CancelTaskCommand {
 struct DeleteTaskCommand {
     std::string taskId;
 };
+// Changes where a task sits in the slot queue.
+struct SetPriorityCommand {
+    std::string taskId;
+    int priority = 0;
+};
+
 // Recomputes the checksum of a finished file and records the result.
 struct VerifyTaskCommand {
     std::string taskId;
@@ -136,7 +144,7 @@ struct UpdateTorrentOptionsCommand {
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,
     CancelTaskCommand, DeleteTaskCommand, DeleteTaskFilesCommand, UpdateTorrentOptionsCommand,
-    VerifyTaskCommand>;
+    VerifyTaskCommand, SetPriorityCommand>;
 
 struct CommandResult {
     // True only when the requested transition was validated and committed (for

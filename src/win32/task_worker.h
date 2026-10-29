@@ -90,6 +90,7 @@ public:
     void postDelete(std::string taskId);
     void postDeleteFiles(std::string taskId);
     void postVerify(std::string taskId);
+    void postPriority(std::string taskId, int priority);
     // 0 means every task may run at once; a positive value keeps the extra
     // tasks queued until a transfer finishes.
     void setMaxConcurrent(int maxConcurrent);
@@ -119,7 +120,7 @@ public:
     void applySettings(const Settings& settings);
 
 private:
-    enum class CommandType { Add, Start, Pause, Cancel, Delete, DeleteFiles, Verify, Refresh, UpdateTorrent };
+    enum class CommandType { Add, Start, Pause, Cancel, Delete, DeleteFiles, Verify, Priority, Refresh, UpdateTorrent };
     struct Command {
         CommandType type = CommandType::Refresh;
         std::string source;
@@ -140,6 +141,7 @@ private:
         std::vector<std::string> trackers;
         bool torrentPrivate = false;
         std::string sha256;
+        int priority = 0;
         int seedMode = 0;
         int seedRatioMilli = 1000;
         int seedMinutes = 30;
@@ -163,6 +165,7 @@ private:
     void controlLoop();
     void execute(const Command& command);
     void launchPendingStarts();
+    int priorityOf(const std::string& taskId) const;
     void launchStartNow(const std::string& taskId, bool restartFromZero, std::string username,
         std::string password, bool forceVerify);
     void launchStart(const std::string& taskId, bool restartFromZero = false,

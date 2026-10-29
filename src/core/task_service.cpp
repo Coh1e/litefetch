@@ -133,6 +133,8 @@ CommandResult TaskService::execute(const TaskCommand& command)
         if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
         if (const auto* deleteFiles = std::get_if<DeleteTaskFilesCommand>(&command))
             return removeWithFiles(*deleteFiles);
+        if (const auto* priorityCommand = std::get_if<SetPriorityCommand>(&command))
+            return setPriority(*priorityCommand);
         if (const auto* verifyCommand = std::get_if<VerifyTaskCommand>(&command))
             return verify(*verifyCommand);
         if (const auto* updateCommand = std::get_if<UpdateTorrentOptionsCommand>(&command))
@@ -662,6 +664,24 @@ void TaskService::setRateLimit(std::int64_t bytesPerSecond)
 void TaskService::setHttpProxy(std::string proxy)
 {
     proxy_ = std::move(proxy);
+}
+
+CommandResult TaskService::setPriority(const SetPriorityCommand& command)
+{
+    const auto task = repository_.find(command.taskId);
+    if (!task) return failure("unknown task");
+    auto updated = *task;
+    updated.priority = command.priority;
+    updated.updatedAt = nowMillis();
+    try {
+        repository_.update(updated);
+    } catch (const StorageError& storageError) {
+        return storageFailure(storageError);
+    }
+    CommandResult result;
+    result.ok = true;
+    result.task = updated;
+    return result;
 }
 
 CommandResult TaskService::verify(const VerifyTaskCommand& command)
