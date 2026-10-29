@@ -55,9 +55,26 @@ lt::settings_pack localSettings(const std::string& listenInterface,
     return pack;
 }
 
+template <typename Digest>
+std::string hexOf(const Digest& digest)
+{
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(static_cast<std::size_t>(digest.size()) * 2);
+    for (int index = 0; index < digest.size(); ++index) {
+        const auto byte = static_cast<unsigned char>(digest[index]);
+        out.push_back(digits[byte >> 4]);
+        out.push_back(digits[byte & 0x0f]);
+    }
+    return out;
+}
+
 std::string infoHashHex(const lt::info_hash_t& hash)
 {
-    return hash.has_v1() ? hash.v1.to_string() : hash.v2.to_string();
+    // The digest's own string form is the raw 20/32 bytes; a magnet link and the
+    // property window both need hex, which is also what the torrent file holds.
+    if (hash.has_v1()) return hexOf(hash.v1);
+    return hexOf(hash.v2);
 }
 
 std::vector<BtFile> filesOf(const lt::torrent_info& info)
@@ -110,14 +127,16 @@ void saveResumeData(lt::session& session, lt::torrent_handle& handle, const std:
     }
 }
 
-// Waits until libtorrent reports metadata or the deadline passes.
+// Waits until libtorrent reports metadata or the deadline passes. The bytes the
+// session pulled in getting there are handed back: they were spent before any
+// piece existed, and they belong to the metadata bucket.
 bool waitForMetadata(lt::session& session, lt::torrent_handle& handle, int timeoutMillis,
-    const std::atomic_bool& cancelled)
+    const std::atomic_bool& cancelled, std::int64_t* bytesSpent = nullptr)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMillis);
     while (std::chrono::steady_clock::now() < deadline) {
         if (cancelled.load()) return false;
-        if (handle.is_valid() && handle.status().has_metadata) return true;
+        if (handle.is_valid() && handle.status().has_metadata) break;
         session.wait_for_alert(std::chrono::milliseconds(100));
         std::vector<lt::alert*> alerts;
         session.pop_alerts(&alerts);
@@ -125,7 +144,9 @@ bool waitForMetadata(lt::session& session, lt::torrent_handle& handle, int timeo
             if (alert->type() == lt::torrent_error_alert::alert_type) return false;
         }
     }
-    return handle.is_valid() && handle.status().has_metadata;
+    const bool ready = handle.is_valid() && handle.status().has_metadata;
+    if (ready && bytesSpent) *bytesSpent = handle.status().total_download;
+    return ready;
 }
 } // namespace
 
@@ -211,7 +232,30 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
             params = std::move(resumed);
         }
         auto handle = session.add_torrent(std::move(params));
-        if (!waitForMetadata(session, handle, 60000, cancelled)) {
+        // Explicit peers are dialled before anything else: a magnet link has no
+        // file list, and the peer that has it is the only way to get one. Waiting
+        // for metadata first would sit until the timeout with a peer list unused.
+        const auto connectPeers = [&](lt::torrent_handle& target) {
+            for (const auto& peer : request.peers) {
+                const auto colon = peer.rfind(':');
+                if (colon == std::string::npos) continue;
+                const auto portText = peer.substr(colon + 1);
+                if (portText.empty()) continue;
+                int port = 0;
+                try {
+                    port = std::stoi(portText);
+                } catch (...) {
+                    continue;
+                }
+                lt::error_code endpointError;
+                const auto address = lt::make_address(peer.substr(0, colon), endpointError);
+                if (endpointError) continue;
+                target.connect_peer(lt::tcp::endpoint(address, static_cast<unsigned short>(port)));
+            }
+        };
+        connectPeers(handle);
+        std::int64_t metadataSoFar = 0;
+        if (!waitForMetadata(session, handle, 60000, cancelled, &metadataSoFar)) {
             if (cancelled.load()) {
                 result.cancelled = true;
                 return result;
@@ -226,6 +270,21 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
         if (!info) {
             result.error = "torrent metadata is unavailable";
             return result;
+        }
+        // A magnet link carries no description, so the info dictionary arrived
+        // over the wire. The session's counters update on their own thread, so
+        // they are polled briefly while no piece exists yet; if the first piece
+        // beats the poll, the metadata stays uncounted rather than guessed.
+        if (isMagnet(request.source) && metadataSoFar == 0) {
+            for (int attempt = 0; attempt < 40; ++attempt) {
+                const auto sample = handle.status();
+                if (sample.total_payload_download > 0) break;
+                if (sample.total_download > 0) {
+                    metadataSoFar = sample.total_download;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            }
         }
         const int fileCount = info->num_files();
         std::vector<lt::download_priority_t> priorities(static_cast<std::size_t>(fileCount),
@@ -324,6 +383,13 @@ BtDownloadResult btDownload(const BtDownloadRequest& request, const std::atomic_
                 BtProgressInfo update;
                 update.received = status.total_wanted_done;
                 update.total = status.total_wanted;
+                // While no piece has completed, everything downloaded belongs to
+                // the torrent's description; after that the count freezes so the
+                // two buckets never overlap. These counters update asynchronously,
+                // so they are sampled here rather than trusted once.
+                if (status.total_wanted_done == 0 && status.total_download > metadataSoFar)
+                    metadataSoFar = status.total_download;
+                update.metadataBytes = metadataSoFar;
                 update.peers = status.num_peers;
                 update.seeds = status.num_seeds;
                 update.rateBytesPerSecond = static_cast<double>(status.download_rate);

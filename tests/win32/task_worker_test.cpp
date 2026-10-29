@@ -217,6 +217,41 @@ void lowUsageBacksOffWhenIdle(const std::filesystem::path& root)
         std::chrono::seconds(10)), "activity did not restore the user limit");
     worker.shutdown();
 }
+// Metadata bytes belong in their own bucket: they arrive before any piece exists
+// and would otherwise inflate the file's total. The transfer is injected so the
+// accounting is checked without a real swarm.
+void magnetMetadataCountsInItsOwnBucket(const std::filesystem::path& root)
+{
+    TaskWorker worker(root / "worker-metadata.db", nullptr,
+        [](const BtDownloadRequest&, const std::atomic_bool&,
+            const std::function<void(const BtProgressInfo&)>& progress) {
+            BtProgressInfo info;
+            info.metadataBytes = 4096;
+            info.total = 2048;
+            progress(info);
+            info.received = 2048;
+            progress(info);
+            BtDownloadResult result;
+            result.ok = true;
+            result.received = 2048;
+            return result;
+        });
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    worker.postAdd("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        (root / "magnet.bin").string(), true);
+    check(waitFor([&] {
+        const auto tasks = worker.snapshot().tasks;
+        return !tasks.empty() && tasks.front().state == TaskState::Completed;
+    }, std::chrono::seconds(20)), "the magnet task did not finish");
+    const auto traffic = worker.snapshot().traffic;
+    check(traffic[2] >= 4096, "metadata bytes land in the metadata bucket");
+    // The file's own bytes stay in the download bucket, and the metadata does not
+    // inflate them.
+    check(traffic[0] == 2048, ("the file bytes are counted once: "
+        + std::to_string(traffic[0])).c_str());
+    worker.shutdown();
+}
 void theLastFinishedTransferIsAnnounced(const std::filesystem::path& root)
 {
     const auto body = payload(256 * 1024);
@@ -473,6 +508,7 @@ int body()
     extraStartsWaitForASlot(root.path());
     priorityJumpsTheQueue(root.path());
     lowUsageBacksOffWhenIdle(root.path());
+    magnetMetadataCountsInItsOwnBucket(root.path());
     theLastFinishedTransferIsAnnounced(root.path());
     theScheduleStartsQueuedTasks(root.path());
     return 0;

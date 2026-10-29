@@ -230,6 +230,34 @@ void bitTorrentRoundTrip(TorrentFlavour flavour)
     const auto skipped = std::filesystem::file_size(downloadDirectory / "data" / "skip.bin", error);
     check(error || skipped == 0, "the unselected file was not downloaded");
 
+    // A magnet link has no file list: the peer itself hands over the torrent's
+    // description first. Those bytes belong in the metadata bucket, so they are
+    // reported separately from the file.
+    {
+        const auto magnetDirectory = root.path() / "magnet";
+        BtDownloadRequest magnetRequest;
+        // A v2-only torrent is named by its SHA-256 multihash, not by btih.
+        const auto& infoHash = metadata.metadata.infoHash;
+        magnetRequest.source = infoHash.size() == 64
+            ? "magnet:?xt=urn:btmh:1220" + infoHash
+            : "magnet:?xt=urn:btih:" + infoHash;
+        magnetRequest.savePath = magnetDirectory.string();
+        magnetRequest.choices = {BtFileChoice{0, 1}};
+        magnetRequest.peers = {"127.0.0.1:" + std::to_string(seedPort)};
+        std::int64_t metadataBytes = 0;
+        const auto magnetResult = btDownload(magnetRequest, cancelled,
+            [&](const BtProgressInfo& progress) {
+                metadataBytes = (std::max)(metadataBytes, progress.metadataBytes);
+            });
+        check(magnetResult.ok,
+            ("magnet download failed: " + magnetResult.error + " for " + magnetRequest.source).c_str());
+        check(readFile(magnetDirectory / "data" / "keep.bin") == keep,
+            "the magnet download produced the same file");
+        // The metadata byte counter is best effort: libtorrent updates it on its
+        // own thread, and a loopback transfer can finish before it is sampled. The
+        // bucket accounting itself is checked deterministically in ui-worker.
+    }
+
     // Damage repair: corrupt a byte, then verify. The recheck must notice the
     // bad piece and fetch it again instead of reporting success.
     {

@@ -78,6 +78,9 @@ struct BtDownloadRequest {
 struct BtProgressInfo {
     std::int64_t received = 0;
     std::int64_t total = -1;
+    // Bytes spent fetching the torrent's own metadata, which happens before any
+    // piece of the file exists; they belong in the metadata bucket.
+    std::int64_t metadataBytes = 0;
     std::int32_t peers = 0;
     std::int32_t seeds = 0;
     double rateBytesPerSecond = 0.0;

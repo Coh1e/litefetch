@@ -105,10 +105,19 @@ bool TaskWorker::start(std::string& error)
                                     const std::atomic_bool& cancelled,
                                     const std::function<void(const BtProgressInfo&)>& progress) {
             std::int64_t lastUploaded = 0;
+            std::int64_t lastMetadata = 0;
             return btTransfer_(request, cancelled, [&](const BtProgressInfo& info) {
                 if (service_ && info.uploaded > lastUploaded) {
                     service_->traffic().add(TrafficCategory::Upload, info.uploaded - lastUploaded);
                     lastUploaded = info.uploaded;
+                }
+                // Fetching the torrent's own description is traffic that belongs
+                // to no file; counting it as download bytes would inflate the
+                // file's total and hide where the data went.
+                if (service_ && info.metadataBytes > lastMetadata) {
+                    service_->traffic().add(TrafficCategory::Metadata,
+                        info.metadataBytes - lastMetadata);
+                    lastMetadata = info.metadataBytes;
                 }
                 if (progress) progress(info);
             });
