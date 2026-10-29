@@ -645,9 +645,16 @@ void TaskWorker::runSchedule()
         schedule = schedule_;
     }
     if (schedule.empty()) return;
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
-    const int minute = static_cast<int>(now.wHour) * 60 + static_cast<int>(now.wMinute);
+    int minute = 0;
+    {
+        std::lock_guard lock(settingsMutex_);
+        if (clockMinute_) minute = clockMinute_();
+        else {
+            SYSTEMTIME now{};
+            GetLocalTime(&now);
+            minute = static_cast<int>(now.wHour) * 60 + static_cast<int>(now.wMinute);
+        }
+    }
     const auto due = actionAtMinute(schedule, minute);
     if (!due) return;
     {
@@ -670,6 +677,17 @@ void TaskWorker::runSchedule()
     for (const auto& id : pauses_) postPause(id);
     launches_.clear();
     pauses_.clear();
+}
+
+void TaskWorker::setScheduleClockForTest(std::function<int()> minuteOfDay)
+{
+    std::lock_guard lock(settingsMutex_);
+    clockMinute_ = std::move(minuteOfDay);
+}
+
+void TaskWorker::tickScheduleForTest()
+{
+    runSchedule();
 }
 
 void TaskWorker::noteActivity()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <chrono>
 
 #include "kad_node.h"
@@ -121,6 +122,10 @@ public:
     void shutdown();
 
     WorkerSnapshot snapshot();
+    // Test seams: replace the clock and tick the schedule without waiting for a
+    // real minute to arrive.
+    void setScheduleClockForTest(std::function<int()> minuteOfDay);
+    void tickScheduleForTest();
     // Settings live in the task database; these keep the service and the ed2k
     // server list in step with what the options dialog stored.
     Settings settings() const;
@@ -211,6 +216,7 @@ private:
     std::vector<RateBand> rateBands_;
     std::vector<ScheduledAction> schedule_;
     int lastFiredMinute_ = -1;
+    std::function<int()> clockMinute_;
     std::vector<std::string> launches_;
     std::vector<std::string> pauses_;
     int onAllComplete_ = 0;

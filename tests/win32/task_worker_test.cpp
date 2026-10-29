@@ -254,6 +254,59 @@ void theLastFinishedTransferIsAnnounced(const std::filesystem::path& root)
         "a disabled completion action announces nothing");
     worker.shutdown();
 }
+void theScheduleStartsQueuedTasks(const std::filesystem::path& root)
+{
+    const auto body = payload(64 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 32 * 1024, std::chrono::milliseconds(2)});
+    TaskWorker worker(root / "worker-schedule.db");
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+
+    Settings settings;
+    settings.scheduledActions = {ScheduledAction{480, true}};
+    worker.applySettings(settings);
+    int minute = 480;
+    worker.setScheduleClockForTest([&] { return minute; });
+
+    // Added without starting: the schedule is the only thing that starts it.
+    worker.postAdd(server.url("/sched-a.bin"), (root / "sched-a.bin").string(), false);
+    check(waitFor([&] { return worker.snapshot().tasks.size() == 1; },
+        std::chrono::seconds(10)), "the scheduled task was not added");
+    worker.tickScheduleForTest();
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.destination.find("sched-a.bin") != std::string::npos)
+                return task.state == TaskState::Completed;
+        return false;
+    }, std::chrono::seconds(20)), "the schedule did not start the queued task");
+
+    // The same minute must not fire again.
+    worker.postAdd(server.url("/sched-b.bin"), (root / "sched-b.bin").string(), false);
+    check(waitFor([&] { return worker.snapshot().tasks.size() == 2; },
+        std::chrono::seconds(10)), "the second task was not added");
+    worker.tickScheduleForTest();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    for (const auto& task : worker.snapshot().tasks) {
+        if (task.destination.find("sched-b.bin") == std::string::npos) continue;
+        check(task.state != TaskState::Completed, "the schedule fired twice in the same minute");
+    }
+
+    // A different minute fires again.
+    minute = 481;
+    worker.applySettings([&] {
+        Settings again;
+        again.scheduledActions = {ScheduledAction{481, true}};
+        return again;
+    }());
+    worker.tickScheduleForTest();
+    check(waitFor([&] {
+        for (const auto& task : worker.snapshot().tasks)
+            if (task.destination.find("sched-b.bin") != std::string::npos)
+                return task.state == TaskState::Completed;
+        return false;
+    }, std::chrono::seconds(20)), "the schedule did not fire at the next minute");
+    worker.shutdown();
+}
 void cancelledDownload(const std::filesystem::path& root)
 {
     const auto body = payload(4 * 1024 * 1024);
@@ -421,6 +474,7 @@ int body()
     priorityJumpsTheQueue(root.path());
     lowUsageBacksOffWhenIdle(root.path());
     theLastFinishedTransferIsAnnounced(root.path());
+    theScheduleStartsQueuedTasks(root.path());
     return 0;
 }
 } // namespace
