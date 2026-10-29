@@ -21,6 +21,8 @@ struct Settings {
     bool renameOnConflict = false;
     // Save single-file downloads into a per-category subfolder (视频/音频/...).
     bool saveByCategory = false;
+    // How many transfers may run at once; 0 means no limit.
+    int maxConcurrentDownloads = 0;
     // ed2k servers, "host:port" each.
     std::vector<std::string> ed2kServers;
 };

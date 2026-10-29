@@ -336,6 +336,7 @@ void TaskWorker::applySettings(const Settings& settings)
         service_->setHttpProxy(settings.httpProxy);
         service_->setRenameOnConflict(settings.renameOnConflict);
         service_->setSaveByCategory(settings.saveByCategory);
+        setMaxConcurrent(settings.maxConcurrentDownloads);
     }
 }
 

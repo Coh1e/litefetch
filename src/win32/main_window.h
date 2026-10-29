@@ -50,6 +50,13 @@ public:
     HWND handle() const { return hwnd_; }
     // Exposed for the window harness: whether the notification icon is up.
     bool trayIconVisible() const { return trayVisible_; }
+    // Exposed for the window harness: the priority the list currently shows.
+    int priorityOfTaskNamed(const std::string& name) const
+    {
+        for (const auto& row : model_.rows())
+            if (row.name == name) return row.priority;
+        return -999;
+    }
     HACCEL accelerators() const { return accelerators_; }
     // Modeless owned dialogs (delete confirmation) are pumped by the main
     // loop so IsDialogMessage can provide native Tab/Esc/Enter behavior.
@@ -83,6 +90,7 @@ private:
     bool createControls();
     void addTrayIcon();
     void notifyTaskFinished(const TaskSnapshot& task);
+    void setSelectedPriority(int priority);
     void removeTrayIcon();
     void showTrayMenu();
 

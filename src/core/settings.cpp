@@ -15,6 +15,7 @@ constexpr const char* connectTimeoutKey = "network.connect_timeout";
 constexpr const char* ed2kServersKey = "ed2k.servers";
 constexpr const char* renameOnConflictKey = "download.rename_on_conflict";
 constexpr const char* saveByCategoryKey = "download.save_by_category";
+constexpr const char* maxConcurrentKey = "download.max_concurrent";
 
 std::int64_t parseInt64(const std::string& text, std::int64_t fallback)
 {
@@ -92,6 +93,8 @@ Settings loadSettings(const TaskRepository& repository)
     settings.ed2kServers = splitLines(repository.metaValue(ed2kServersKey));
     settings.renameOnConflict = repository.metaValue(renameOnConflictKey) == "1";
     settings.saveByCategory = repository.metaValue(saveByCategoryKey) == "1";
+    settings.maxConcurrentDownloads =
+        static_cast<int>(parseInt64(repository.metaValue(maxConcurrentKey), 0));
     return settings;
 }
 
@@ -108,6 +111,7 @@ void saveSettings(TaskRepository& repository, const Settings& settings)
     repository.setMetaValue(ed2kServersKey, servers);
     repository.setMetaValue(renameOnConflictKey, settings.renameOnConflict ? "1" : "0");
     repository.setMetaValue(saveByCategoryKey, settings.saveByCategory ? "1" : "0");
+    repository.setMetaValue(maxConcurrentKey, std::to_string(settings.maxConcurrentDownloads));
 }
 
 } // namespace litefetch

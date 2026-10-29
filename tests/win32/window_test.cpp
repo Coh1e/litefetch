@@ -410,6 +410,19 @@ void runChecks()
         check(statusText(status, 0).find(L"任务: 4") != std::wstring::npos,
             "status reports the queue total without a filter");
 
+        // Priority is a task property with no dialog in the way: the menu
+        // command is enough to prove the path from menu to stored task.
+        {
+            auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+            selectRow(list, rowOf(list, L"payload.bin"));
+            SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PRIORITY_HIGH, 0), 0);
+            check(pumpUntil([&] { return window->priorityOfTaskNamed("payload.bin") == 10; }, 5000),
+                "raising the priority did not reach the task");
+            SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_PRIORITY_NORMAL, 0), 0);
+            check(pumpUntil([&] { return window->priorityOfTaskNamed("payload.bin") == 0; }, 5000),
+                "resetting the priority did not reach the task");
+        }
+
         // A single selection enables the properties command (FTP connection
         // facts live in that dialog).
         selectRow(list, 0);

@@ -1033,6 +1033,15 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             SetForegroundWindow(hwnd_);
             return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
+        case ID_TASK_PRIORITY_HIGH:
+            setSelectedPriority(10);
+            return 0;
+        case ID_TASK_PRIORITY_NORMAL:
+            setSelectedPriority(0);
+            return 0;
+        case ID_TASK_PRIORITY_LOW:
+            setSelectedPriority(-10);
+            return 0;
         case ID_TASK_VERIFY: verifySelected(); return 0;
         case ID_TASK_REDOWNLOAD:
             setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
@@ -1544,6 +1553,15 @@ void MainWindow::refreshFromWorker()
         promptForCredentials(task.id);
         break;
     }
+}
+
+void MainWindow::setSelectedPriority(int priority)
+{
+    if (!worker_ || isClosing()) return;
+    const auto row = rowForId(focusedId());
+    if (!row) return;
+    worker_->postPriority(row->id, priority);
+    setNotice(priority > 0 ? "已提高优先级" : (priority < 0 ? "已降低优先级" : "已恢复普通优先级"));
 }
 
 void MainWindow::promptForCredentials(const std::string& taskId)
