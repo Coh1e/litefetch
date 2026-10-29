@@ -37,6 +37,11 @@ bool writeAll(HANDLE pipe, const std::string& bytes)
 
 std::string defaultPipeName()
 {
+    // Tests and side-by-side installs can point at another channel without a
+    // rebuild; the shipped app uses the fixed name the manifest expects.
+    char buffer[256]{};
+    const auto length = GetEnvironmentVariableA("LITEFETCH_BRIDGE_PIPE", buffer, sizeof(buffer));
+    if (length > 0 && length < sizeof(buffer)) return std::string(buffer, length);
     return "litefetch-browser";
 }
 

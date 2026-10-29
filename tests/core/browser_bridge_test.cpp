@@ -2,11 +2,13 @@
 // commit and abort, including the lease rules.
 #include "browser_bridge.h"
 #include "browser_pipe_server.h"
+#include "native_host_loop.h"
 #include "pipe_channel.h"
 #include "native_frame.h"
 #include "test_support.h"
 
 #include <chrono>
+#include <sstream>
 #include <thread>
 
 using namespace litefetch;
@@ -162,6 +164,37 @@ void theServerAnswersOverARealPipe(const std::filesystem::path& root)
         "the lease survives between connections");
 
     server.stop();
+}void theHostLoopReachesTheRunningServer(const std::filesystem::path& root)
+{
+    // The whole chain the browser uses, minus the browser: framed stdin ->
+    // channel -> server -> bridge -> framed stdout.
+    TaskRepository repository(root / "bridge-host.db");
+    TaskService service(repository);
+    BrowserBridge bridge(service);
+    const auto pipeName = defaultPipeName() + "-host";
+    BrowserPipeServer server(pipeName);
+    std::string error;
+    check(server.start(bridge, error), ("the server did not start: " + error).c_str());
+
+    std::istringstream input(frameMessage(request(21, "prepare", "req-host",
+        "https://example.test/host.bin", (root / "host.bin").string())));
+    std::ostringstream output;
+    const auto code = runHostLoop(input, output, [&](const std::string& message) {
+        std::string channelError;
+        const auto answer = pipeRoundTrip(pipeName, message, 5000, channelError);
+        if (answer.empty()) throw std::runtime_error(channelError);
+        return answer;
+    });
+    checkEqual(static_cast<long long>(code), 0LL, "the host loop exits cleanly");
+    std::string buffer = output.str();
+    std::string answerJson;
+    check(popMessage(buffer, answerJson), "the host wrote one framed answer");
+    const auto parsed = JsonValue::parse(answerJson);
+    check(parsed.has_value(), "the answer is JSON");
+    check(parsed->boolOr("ok", false), "the answer says the prepare worked");
+    const auto taskId = parsed->find("result")->stringOr("taskId", "");
+    check(service.snapshot(taskId).has_value(), "the task reached the service");
+    server.stop();
 }void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "bridge-bad.db");
@@ -188,6 +221,7 @@ int main()
         anExpiredLeaseIsRefused(root.path());
         malformedRequestsAreAnsweredNotThrown(root.path());
         theServerAnswersOverARealPipe(root.path());
+        theHostLoopReachesTheRunningServer(root.path());
         return 0;
     });
 }

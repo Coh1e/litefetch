@@ -5,6 +5,8 @@
 #include <chrono>
 
 #include "kad_node.h"
+#include "browser_bridge.h"
+#include "browser_pipe_server.h"
 #include "credentials.h"
 #include "schedule.h"
 #include "settings.h"
@@ -113,6 +115,7 @@ public:
     // joins the start threads, then sets shutdownComplete().
     void beginShutdown();
     void stopKad();
+    void startBridge();
     bool shutdownComplete() const;
     bool hasActiveTasks();
 
@@ -212,6 +215,8 @@ private:
     TaskService::BtTransfer btTransfer_;
     TaskService::Ed2kTransfer ed2kTransfer_;
     std::unique_ptr<KadNode> kad_;
+    std::unique_ptr<browser::BrowserBridge> bridge_;
+    std::unique_ptr<browser::BrowserPipeServer> bridgeServer_;
     mutable std::mutex settingsMutex_;
     std::vector<RateBand> rateBands_;
     std::vector<ScheduledAction> schedule_;

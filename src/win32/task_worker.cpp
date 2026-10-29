@@ -2,6 +2,7 @@
 #include "task_worker.h"
 
 #include "low_usage.h"
+#include "pipe_channel.h"
 #include "schedule.h"
 
 #include "http_engine.h"
@@ -132,6 +133,7 @@ bool TaskWorker::start(std::string& error)
     }
     started_ = true;
     controlThread_ = std::thread([this] { controlLoop(); });
+    startBridge();
     return true;
 }
 
@@ -335,6 +337,17 @@ void TaskWorker::forgetCredentials()
     std::filesystem::remove(databasePath_.parent_path() / "credentials.dat", error);
 }
 
+void TaskWorker::startBridge()
+{
+    if (!service_) return;
+    bridge_ = std::make_unique<browser::BrowserBridge>(*service_);
+    bridgeServer_ = std::make_unique<browser::BrowserPipeServer>(browser::defaultPipeName());
+    std::string ignored;
+    // A channel that cannot bind must not stop the downloader; the user simply
+    // gets no browser handoff.
+    bridgeServer_->start(*bridge_, ignored);
+}
+
 Settings TaskWorker::settings() const
 {
     std::lock_guard lock(settingsMutex_);
@@ -367,6 +380,11 @@ void TaskWorker::applySettings(const Settings& settings)
 
 void TaskWorker::stopKad()
 {
+    if (bridgeServer_) {
+        bridgeServer_->stop();
+        bridgeServer_.reset();
+    }
+    bridge_.reset();
     if (!kad_) return;
     const auto contactsPath = (databasePath_.parent_path() / "kad-contacts.dat").string();
     kad_->saveContacts(contactsPath);
