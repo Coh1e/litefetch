@@ -2,6 +2,7 @@
 // enablement, status parts and source/destination parsing are the contract the
 // Win32 controls display, so they are verified directly.
 #include "notification_policy.h"
+#include "traffic_text.h"
 #include "task_list_model.h"
 #include "ui_text.h"
 #include "url_filename.h"
@@ -363,6 +364,23 @@ void explorerTarget()
 
 } // namespace
 
+void trafficSummaryReadsClearly()
+{
+    std::array<std::int64_t, 4> totals{};
+    auto text = litefetch::ui::trafficSummary(totals);
+    check(text.find("下载 0 B") != std::string::npos, "a zero download reads as zero");
+    check(text.find("元数据未统计") != std::string::npos, "unmeasured metadata says so");
+
+    totals = {8 * 1024, 2 * 1024 * 1024, 0, 512};
+    text = litefetch::ui::trafficSummary(totals);
+    check(text.find("下载 8.0 KiB") != std::string::npos, "kilobytes are shown in KiB");
+    check(text.find("上传 2.0 MiB") != std::string::npos, "megabytes are shown in MiB");
+    check(text.find("校验 512 B") != std::string::npos, "small values stay in bytes");
+
+    totals[2] = 4096;
+    text = litefetch::ui::trafficSummary(totals);
+    check(text.find("元数据 4.0 KiB") != std::string::npos, "measured metadata is shown");
+}
 void notificationsOnlyOncePerTask()
 {
     using litefetch::TaskState;
@@ -383,6 +401,7 @@ int main()
     try {
         formatting();
         notificationsOnlyOncePerTask();
+        trafficSummaryReadsClearly();
         sourceParsing();
         listLayout();
         startupOptions();

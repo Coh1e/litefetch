@@ -35,6 +35,7 @@ add_library(litefetch-core STATIC
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/win32/options_dialog.cpp src/win32/options_dialog.h
     src/win32/notification_policy.cpp src/win32/notification_policy.h
+    src/win32/traffic_text.cpp src/win32/traffic_text.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3 crypt32)

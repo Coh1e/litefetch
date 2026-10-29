@@ -4,6 +4,7 @@
 #include "bt_engine.h"
 #include "ed2k_task.h"
 #include "options_dialog.h"
+#include "traffic_text.h"
 #include "settings.h"
 #include "column_dialog.h"
 #include "explorer_target.h"
@@ -2413,7 +2414,7 @@ void MainWindow::showProperties()
     const std::string connection = ftp
         ? "控制连接：" + host + "\n数据连接：被动模式（服务器分配端口）\n认证：本次运行输入，未保存"
         : "连接：" + host + "\n每个请求一条连接；分段下载时按站点上限并行";
-    fields.connection = toWide(connection);
+    fields.connection = toWide(connection + "\n" + trafficSummary(traffic_));
 
     DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_PROPERTIES), hwnd_,
         propertiesDialogProc, reinterpret_cast<LPARAM>(&fields));
