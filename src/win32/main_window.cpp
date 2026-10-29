@@ -1146,6 +1146,24 @@ bool MainWindow::createControls()
     return true;
 }
 
+void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
+{
+    if (!trayVisible_) return; // the shell is not reachable in this session
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = hwnd_;
+    data.uID = trayIconId;
+    data.uFlags = NIF_INFO;
+    const auto name = task.destination.empty() ? task.source : task.destination;
+    const auto fileName = name.substr(name.find_last_of("\\\\/") + 1);
+    const auto title = toWide(fileName);
+    wcsncpy_s(data.szInfoTitle, title.c_str(), _TRUNCATE);
+    const auto body = task.state == TaskState::Completed ? L"下载完成" : L"下载失败";
+    wcsncpy_s(data.szInfo, body, _TRUNCATE);
+    data.dwInfoFlags = task.state == TaskState::Completed ? NIIF_INFO : NIIF_ERROR;
+    Shell_NotifyIconW(NIM_MODIFY, &data);
+}
+
 void MainWindow::addTrayIcon()
 {
     if (trayVisible_ || !hwnd_) return;

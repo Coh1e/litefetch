@@ -18,6 +18,7 @@
 #include "startup.h"
 #include "task_list_model.h"
 #include "task_view.h"
+#include "notification_policy.h"
 #include "task_worker.h"
 
 #include <atomic>
@@ -81,6 +82,7 @@ private:
 
     bool createControls();
     void addTrayIcon();
+    void notifyTaskFinished(const TaskSnapshot& task);
     void removeTrayIcon();
     void showTrayMenu();
 
@@ -197,6 +199,7 @@ private:
     std::uint64_t lastOutcomeSequence_ = 0;
     std::set<std::string, std::less<>> pendingDeleteIds_;
     std::set<std::string, std::less<>> promptedCredentials_;
+    NotificationPolicy notifications_;
     std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
     bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;

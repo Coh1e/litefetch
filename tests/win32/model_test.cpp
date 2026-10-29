@@ -1,6 +1,7 @@
 // UI boundary tests that do not need a window: column formatting, action
 // enablement, status parts and source/destination parsing are the contract the
 // Win32 controls display, so they are verified directly.
+#include "notification_policy.h"
 #include "task_list_model.h"
 #include "ui_text.h"
 #include "url_filename.h"
@@ -362,10 +363,26 @@ void explorerTarget()
 
 } // namespace
 
+void notificationsOnlyOncePerTask()
+{
+    using litefetch::TaskState;
+    litefetch::ui::NotificationPolicy policy;
+    check(policy.shouldNotify("a", TaskState::Completed), "a completed task notifies");
+    check(!policy.shouldNotify("a", TaskState::Completed), "the same completion does not repeat");
+    check(policy.shouldNotify("b", TaskState::Failed), "a failed task notifies");
+    check(!policy.shouldNotify("b", TaskState::Failed), "the same failure does not repeat");
+    check(!policy.shouldNotify("c", TaskState::Running), "a running task is silent");
+    check(!policy.shouldNotify("c", TaskState::Paused), "a paused task is silent");
+    check(!policy.shouldNotify("c", TaskState::Cancelled), "a cancelled task is silent");
+    check(policy.shouldNotify("d", TaskState::Completed), "another task notifies again");
+    policy.forget("d");
+    check(policy.shouldNotify("d", TaskState::Completed), "a forgotten task may notify again");
+}
 int main()
 {
     try {
         formatting();
+        notificationsOnlyOncePerTask();
         sourceParsing();
         listLayout();
         startupOptions();
