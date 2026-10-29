@@ -18,6 +18,10 @@ enum class KadOpcode : std::uint8_t {
     HelloResponse = 0x19,
     FindRequest = 0x21,
     FindResponse = 0x29,
+    PublishRequest = 0x31,
+    PublishResponse = 0x39,
+    SourcesRequest = 0x33,
+    SourcesResponse = 0x3B,
 };
 
 struct KadPacket {
@@ -27,6 +31,9 @@ struct KadPacket {
     // Find requests carry the target and how many contacts are wanted.
     KadId target;
     std::uint8_t wanted = 0;
+    // Publish and sources packets name the file they are about.
+    KadId fileHash;
+    bool hasFileHash = false;
 };
 
 // 0xE4 + opcode + 1-byte contact count + 22 bytes per contact, then the

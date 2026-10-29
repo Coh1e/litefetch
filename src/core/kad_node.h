@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <string>
@@ -40,6 +41,11 @@ public:
     std::vector<KadContact> findNode(const KadId& target, std::uint8_t wanted,
         int timeoutMillis);
 
+    // Announces that `contact` has the file with `fileHash`: stored locally and
+    // sent to the closest known nodes. Returns how many nodes acknowledged.
+    int publishSource(const KadId& fileHash, const KadContact& contact, int timeoutMillis);
+    // Asks the known nodes for sources of `fileHash`; local entries included.
+    std::vector<KadContact> findSources(const KadId& fileHash, int timeoutMillis);
     bool saveContacts(const std::string& path) const;
     bool loadContacts(const std::string& path);
 
@@ -58,6 +64,8 @@ private:
     std::uint16_t port_ = 0;
     std::atomic_bool stopping_{false};
     std::thread receiver_;
+    std::mutex storeMutex_;
+    std::map<std::string, std::vector<KadContact>> sources_;
     std::mutex responseMutex_;
     std::deque<KadPacket> responses_;
 };

@@ -60,7 +60,7 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
     for (const auto& source : link.sources)
         candidates.push_back({source.address, source.port});
     if (candidates.empty()) {
-        if (request.servers.empty()) {
+        if (request.servers.empty() && !request.lookup) {
             result.error = "no ed2k server is configured";
             return result;
         }
@@ -77,6 +77,10 @@ Ed2kTaskResult downloadEd2kTask(const Ed2kTaskRequest& request,
             for (const auto& source : query.sources)
                 candidates.push_back({source.address, source.port});
             break;
+        }
+        if (candidates.empty() && request.lookup) {
+            for (const auto& source : request.lookup(link.link.hash))
+                candidates.push_back({source.address, source.port});
         }
         if (candidates.empty()) {
             result.noSources = anyServerAnswered;

@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
 #include <fstream>
 
 namespace litefetch {
@@ -200,9 +201,42 @@ void KadNode::handle(const KadPacket& packet, const std::string& fromAddress,
         send(answer, fromAddress, fromPort);
         break;
     }
+    case KadOpcode::PublishRequest: {
+        if (packet.hasFileHash) {
+            std::lock_guard lock(storeMutex_);
+            auto& list = sources_[packet.fileHash.toHex()];
+            for (const auto& contact : packet.contacts) {
+                const auto known = std::find_if(list.begin(), list.end(),
+                    [&](const KadContact& existing) { return existing.id == contact.id; });
+                if (known == list.end()) list.push_back(contact);
+            }
+            if (list.size() > 32) list.resize(32);
+        }
+        KadPacket answer;
+        answer.opcode = KadOpcode::PublishResponse;
+        answer.hasFileHash = packet.hasFileHash;
+        answer.fileHash = packet.fileHash;
+        send(answer, fromAddress, fromPort);
+        break;
+    }
+    case KadOpcode::SourcesRequest: {
+        KadPacket answer;
+        answer.opcode = KadOpcode::SourcesResponse;
+        answer.hasFileHash = packet.hasFileHash;
+        answer.fileHash = packet.fileHash;
+        {
+            std::lock_guard lock(storeMutex_);
+            const auto found = sources_.find(packet.fileHash.toHex());
+            if (found != sources_.end()) answer.contacts = found->second;
+        }
+        send(answer, fromAddress, fromPort);
+        break;
+    }
     case KadOpcode::BootstrapResponse:
     case KadOpcode::HelloResponse:
-    case KadOpcode::FindResponse: {
+    case KadOpcode::FindResponse:
+    case KadOpcode::PublishResponse:
+    case KadOpcode::SourcesResponse: {
         // The contacts were already merged above; hand the packet to whoever is
         // waiting for it.
         std::lock_guard lock(responseMutex_);
@@ -280,6 +314,54 @@ std::vector<KadContact> KadNode::findNode(const KadId& target, std::uint8_t want
         for (const auto& candidate : answer.contacts) found.push_back(candidate);
     }
     return found;
+}
+
+int KadNode::publishSource(const KadId& fileHash, const KadContact& contact, int timeoutMillis)
+{
+    {
+        std::lock_guard lock(storeMutex_);
+        auto& list = sources_[fileHash.toHex()];
+        const auto known = std::find_if(list.begin(), list.end(),
+            [&](const KadContact& existing) { return existing.id == contact.id; });
+        if (known == list.end()) list.push_back(contact);
+    }
+    int acknowledged = 0;
+    for (const auto& known : table_.closest(fileHash, 4)) {
+        KadPacket request;
+        request.opcode = KadOpcode::PublishRequest;
+        request.hasFileHash = true;
+        request.fileHash = fileHash;
+        request.contacts.push_back(contact);
+        if (!send(request, known.address, known.port)) continue;
+        KadPacket answer;
+        if (takeResponse(KadOpcode::PublishResponse, answer, timeoutMillis)) ++acknowledged;
+    }
+    return acknowledged;
+}
+
+std::vector<KadContact> KadNode::findSources(const KadId& fileHash, int timeoutMillis)
+{
+    std::vector<KadContact> sources;
+    {
+        std::lock_guard lock(storeMutex_);
+        const auto found = sources_.find(fileHash.toHex());
+        if (found != sources_.end()) sources = found->second;
+    }
+    for (const auto& known : table_.closest(fileHash, 4)) {
+        KadPacket request;
+        request.opcode = KadOpcode::SourcesRequest;
+        request.hasFileHash = true;
+        request.fileHash = fileHash;
+        if (!send(request, known.address, known.port)) continue;
+        KadPacket answer;
+        if (!takeResponse(KadOpcode::SourcesResponse, answer, timeoutMillis)) continue;
+        for (const auto& candidate : answer.contacts) {
+            const auto existing = std::find_if(sources.begin(), sources.end(),
+                [&](const KadContact& entry) { return entry.id == candidate.id; });
+            if (existing == sources.end()) sources.push_back(candidate);
+        }
+    }
+    return sources;
 }
 
 bool KadNode::saveContacts(const std::string& path) const

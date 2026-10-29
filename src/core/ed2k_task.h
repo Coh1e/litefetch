@@ -19,6 +19,8 @@ struct Ed2kTaskRequest {
     // Peers to try in order without asking a server: manual entry, and the only
     // way a test can point at scripted peers. The first one that serves wins.
     std::vector<Ed2kServerEndpoint> peers;
+    // Last resort when no peer is known and no server answers: ask Kad.
+    std::function<std::vector<Ed2kSource>(const std::string& fileHash)> lookup;
     int timeoutMillis = 15000;
 };
 

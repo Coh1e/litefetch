@@ -16,6 +16,10 @@ bool opcodeFromByte(std::uint8_t value, KadOpcode& opcode)
     case 0x19: opcode = KadOpcode::HelloResponse; return true;
     case 0x21: opcode = KadOpcode::FindRequest; return true;
     case 0x29: opcode = KadOpcode::FindResponse; return true;
+    case 0x31: opcode = KadOpcode::PublishRequest; return true;
+    case 0x39: opcode = KadOpcode::PublishResponse; return true;
+    case 0x33: opcode = KadOpcode::SourcesRequest; return true;
+    case 0x3B: opcode = KadOpcode::SourcesResponse; return true;
     default: return false;
     }
 }
@@ -62,6 +66,13 @@ std::vector<std::uint8_t> encodeKadPacket(const KadPacket& packet)
         out.insert(out.end(), packet.target.bytes.begin(), packet.target.bytes.end());
         out.push_back(packet.wanted);
     }
+    if (packet.hasFileHash
+        && (packet.opcode == KadOpcode::PublishRequest
+            || packet.opcode == KadOpcode::PublishResponse
+            || packet.opcode == KadOpcode::SourcesRequest
+            || packet.opcode == KadOpcode::SourcesResponse)) {
+        out.insert(out.end(), packet.fileHash.bytes.begin(), packet.fileHash.bytes.end());
+    }
     return out;
 }
 
@@ -85,6 +96,14 @@ bool decodeKadPacket(const std::uint8_t* data, std::size_t size, KadPacket& pack
         if (size < offset + 17) return false;
         std::memcpy(packet.target.bytes.data(), data + offset, 16);
         packet.wanted = data[offset + 16];
+        offset += 17;
+    }
+    if (packet.opcode == KadOpcode::PublishRequest || packet.opcode == KadOpcode::PublishResponse
+        || packet.opcode == KadOpcode::SourcesRequest
+        || packet.opcode == KadOpcode::SourcesResponse) {
+        if (size < offset + 16) return false;
+        std::memcpy(packet.fileHash.bytes.data(), data + offset, 16);
+        packet.hasFileHash = true;
     }
     return true;
 }
@@ -98,6 +117,10 @@ std::string describeKadOpcode(KadOpcode opcode)
     case KadOpcode::HelloResponse: return "hello response";
     case KadOpcode::FindRequest: return "find request";
     case KadOpcode::FindResponse: return "find response";
+    case KadOpcode::PublishRequest: return "publish request";
+    case KadOpcode::PublishResponse: return "publish response";
+    case KadOpcode::SourcesRequest: return "sources request";
+    case KadOpcode::SourcesResponse: return "sources response";
     }
     return "unknown";
 }

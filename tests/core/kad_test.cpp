@@ -73,6 +73,35 @@ void twoNodes(const std::filesystem::path& root)
         "the dead contact is dropped from the table");
 
     first.stop();
+}void sourcePublishing(const std::filesystem::path& root)
+{
+    (void)root;
+    KadNode owner(idFrom("33333333333333333333333333333333"));
+    KadNode querier(idFrom("44444444444444444444444444444444"));
+    std::string error;
+    check(owner.start(0, error), "the owner node starts");
+    check(querier.start(0, error), "the querying node starts");
+    const bool bootstrapped = querier.bootstrap("127.0.0.1", owner.port(), 2000, error);
+    check(bootstrapped, ("bootstrap failed: " + error).c_str());
+
+    const auto fileHash = idFrom("abcdefabcdefabcdefabcdefabcdefab");
+    KadContact peer;
+    peer.id = idFrom("55555555555555555555555555555555");
+    peer.address = "10.2.3.4";
+    peer.port = 4662;
+    const int acked = owner.publishSource(fileHash, peer, 800);
+    check(acked >= 1, "the publish is acknowledged");
+
+    const auto sources = querier.findSources(fileHash, 1000);
+    check(!sources.empty(), "the querying node learned about the source");
+    checkEqual(sources.front().address, std::string("10.2.3.4"), "the source address survives");
+    checkEqual(static_cast<long long>(sources.front().port), 4662LL, "the source port survives");
+
+    const auto missing = querier.findSources(idFrom("0000000000000000000000000000beef"), 500);
+    check(missing.empty(), "an unknown file has no sources");
+
+    owner.stop();
+    querier.stop();
 }void wire()
 {
     KadPacket hello;
@@ -176,6 +205,7 @@ int main()
         wire();
         TempDir root;
         twoNodes(root.path());
+        sourcePublishing(root.path());
         return 0;
     });
 }

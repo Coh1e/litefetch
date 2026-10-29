@@ -8,6 +8,7 @@
 
 #include "ed2k_client.h"
 #include "ed2k_serve.h"
+#include "kad_node.h"
 #include "ed2k_task.h"
 #include "ed2k_transfer.h"
 #include "ed2k_link.h"
@@ -475,6 +476,59 @@ void twoLiteFetchPeers(const std::filesystem::path& root)
     const auto gone = downloadFromEd2kPeer(afterStop, stopped);
     check(!gone.ok, "a stopped seeder refuses connections");
 }
+void sourcesFromKad(const std::filesystem::path& root)
+{
+    // A seeder publishes itself through Kad; a task with no peer and no server
+    // finds it through a lookup.
+    const auto payload = litefetch::test::payload(12000);
+    const auto sharedPath = root / "kad-seeded.bin";
+    writeFile(sharedPath, payload);
+    const auto hash = ed2kFileHash(sharedPath.string());
+    Ed2kPeerServer server(sharedPath.string(), hash, 0);
+    std::string error;
+    check(server.start(error), ("the seeder did not start: " + error).c_str());
+
+    KadId ownerId;
+    KadId finderId;
+    check(KadId::fromHex("66666666666666666666666666666666", ownerId), "owner id");
+    check(KadId::fromHex("77777777777777777777777777777777", finderId), "finder id");
+    KadNode owner(ownerId);
+    KadNode finder(finderId);
+    check(owner.start(0, error), "the owning Kad node starts");
+    check(finder.start(0, error), "the finding Kad node starts");
+    const bool bootstrapped = finder.bootstrap("127.0.0.1", owner.port(), 2000, error);
+    check(bootstrapped, ("Kad bootstrap failed: " + error).c_str());
+
+    KadId fileId;
+    check(KadId::fromHex(hash, fileId), "the file hash parses as a Kad id");
+    KadContact self;
+    self.id = owner.id();
+    self.address = "127.0.0.1";
+    self.port = server.port();
+    check(owner.publishSource(fileId, self, 800) >= 1, "the source is published");
+
+    Ed2kTaskRequest request;
+    request.link = "ed2k://|file|kad-seeded.bin|" + std::to_string(payload.size()) + "|" + hash + "|/";
+    request.destination = (root / "kad-downloaded.bin").string();
+    request.timeoutMillis = 5000;
+    request.lookup = [&](const std::string& fileHash) {
+        std::vector<Ed2kSource> sources;
+        for (const auto& contact : finder.findSources(fileId, 800)) {
+            Ed2kSource source;
+            source.address = contact.address;
+            source.port = contact.port;
+            sources.push_back(source);
+        }
+        return sources;
+    };
+    const std::atomic_bool cancelled{false};
+    const auto result = downloadEd2kTask(request, cancelled);
+    check(result.ok, ("the Kad-sourced download failed: " + result.error).c_str());
+    check(readFile(root / "kad-downloaded.bin") == payload, "the Kad-sourced file matches");
+    finder.stop();
+    owner.stop();
+    server.stop();
+}
 void multiSourceAndPublish(const std::filesystem::path& root)
 {
     const auto payload = litefetch::test::payload(18000);
@@ -734,6 +788,7 @@ int main()
         publishAfterInterruption(root.path());
         manyPartsTransfer(root.path());
         twoLiteFetchPeers(root.path());
+        sourcesFromKad(root.path());
         largeFileRanges();
         sourceQuery();
         return 0;
