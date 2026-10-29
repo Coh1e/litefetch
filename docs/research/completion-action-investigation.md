@@ -70,3 +70,24 @@ the worker reported the end of the batch: 0
 1. 确认 `refreshFromWorker()` 是否调用 `worker_->reapFinished()`（若刷新路径不回收，单任务跑完后 jobs_ 永远非空）；
 2. 若是，则完成动作在任何场景下都不会触发，属于真实缺陷，需要在 worker 侧修；
 3. 修好后用同一用例（句柄消失 + 计数 > 0）验证，并用"去掉完成动作"做有牙检查。
+## 2026-10-29 第四轮：排除了设置读取
+
+新增两个读取口（窗口的 `completionAction_`、worker 的批次计数），用例断言：
+
+```
+the completion action is saved          → 通过（库里读到 2）
+the window reads the completion action  → 通过（窗口侧是 2）
+```
+
+"设置没传到窗口"被排除。窗口侧动作值正确、分支代码也在，但 worker 的 `allCompleteSequence_` 仍为 0——
+说明 **worker 的 `onAllComplete_` 没拿到这个值**，或 `noteBatchProgress()` 从未在"jobs 空且 batchActive 为真"时执行。
+
+`onAllComplete_` 只在 `applySettings()` 里赋值；若构造后只读了 settings 而未调用它，该成员恒为 0，
+`finished = onAllComplete_ != 0` 恒假——与观测吻合。
+
+## 下一步（一步可验证）
+
+给 worker 加只读访问器返回 `onAllComplete_`，在同一用例里断言为 2：
+
+- 为 0 → 确认构造期漏赋值，补上；
+- 为 2 → 继续查 `noteBatchProgress()` 的实际执行路径（加计数即可）。
