@@ -49,6 +49,14 @@ std::string BrowserBridge::handle(const std::string& requestJson)
     JsonValue id = JsonValue::makeString("");
     if (const auto* given = parsed->find("id")) id = *given;
     const auto method = parsed->stringOr("method", "");
+    // A ping answers whether the application is there at all; it carries no
+    // request, so it must not require one.
+    if (method == "ping") {
+        auto result = JsonValue::makeObject();
+        result.set("state", JsonValue::makeString("ok"));
+        result.set("version", JsonValue::makeNumber(1));
+        return okAnswer(id, std::move(result));
+    }
     const auto requestId = parsed->stringOr("requestId", "");
     if (requestId.empty()) return failAnswer(id, "the request has no requestId");
 

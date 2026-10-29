@@ -248,6 +248,11 @@ void malformedRequestsAreAnsweredNotThrown(const std::filesystem::path& root)
     check(!broken.boolOr("ok", true), "broken JSON is refused");
     const auto noMethod = answer(bridge.handle(request(9, "dance", "req-6")));
     check(!noMethod.boolOr("ok", true), "an unknown method is refused");
+    // The popup asks whether the application is there before blaming the site
+    // allowlist; that question carries no request.
+    const auto ping = answer(bridge.handle(R"({"version":1,"id":"p1","method":"ping"})"));
+    check(ping.boolOr("ok", false), "ping is accepted without a request");
+    check(ping.find("result")->stringOr("state", "") == "ok", "ping says the bridge is up");
     checkEqual(static_cast<long long>(noMethod.numberOr("id", 0)), 9LL, "the id is kept");
     const auto noRequestId = answer(bridge.handle(R"({"version":1,"id":5,"method":"query"})"));
     check(!noRequestId.boolOr("ok", true), "a missing requestId is refused");

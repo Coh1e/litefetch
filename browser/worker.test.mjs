@@ -70,6 +70,7 @@ function fixture({enabled = true, missingHost = false, records = {}} = {}) {
   const worker = installWorker(api, {now: () => now, makeId: () => `id-${++sequence}`});
   return {api, worker, values, operations, item, ports, get starts() { return starts; },
     get held() { return held; }, hold() { holdPrepare = true; },
+    lastIgnore() { return values['handoff.lastIgnore.v1']; },
     observe() {
       const details = {requestId: 'request', url: item.url, method: 'GET', timeStamp: now};
       api.webRequest.onBeforeRequest.emit(details);
@@ -115,6 +116,16 @@ test('worker without observed request history leaves existing download alone', a
   const f = fixture(); await f.worker.ready;
   f.api.downloads.onCreated.emit({...f.item}); await f.worker.recover();
   assert.deepEqual(f.operations, []); f.worker.close();
+});
+test('an ignored download records why, for the popup to show', async () => {
+  const f = fixture(); await f.worker.ready;
+  f.api.downloads.onCreated.emit({...f.item});
+  await waitFor(() => f.lastIgnore()?.reason);
+  // Nothing was observed for this download, so it stays with the browser and the
+  // reason is kept where a person can read it instead of failing silently.
+  assert.equal(f.lastIgnore().reason, 'request_not_observed');
+  assert.deepEqual(f.operations, []);
+  f.worker.close();
 });
 test('recovery releases pre-cancel reservation even when capture is disabled', async () => {
   const record = {downloadId: 1, requestId: 'old', taskId: 'task', expiresAt: 9999999999999,

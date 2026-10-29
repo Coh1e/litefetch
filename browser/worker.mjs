@@ -3,6 +3,9 @@ import {storageJournal, downloadsAdapter, NativeClient} from './adapters.mjs';
 import {RequestObserver} from './request-observer.mjs';
 import {SETTINGS_KEY, normalizeSettings} from './settings.mjs';
 
+// Where the popup reads the reason the last download was left alone.
+export const IGNORE_KEY = 'handoff.lastIgnore.v1';
+
 // Exported for event-driven integration tests; importing does not require Chrome.
 export function installWorker(api, {now = Date.now, makeId = () => crypto.randomUUID()} = {}) {
   let settings = normalizeSettings(undefined), recovery, settingsRevision = 0;
@@ -15,6 +18,12 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
     canTakeOver: request => settings.enabled && request.origins?.every(allowed) === true});
   const badge = text => api.action.setBadgeText({text}).catch(() => {});
   const reportFailure = () => badge('!');
+  // A download that the handoff leaves alone is invisible otherwise: the user
+  // sees "nothing happened" and has no way to tell why. The last reason is kept
+  // where the popup can show it.
+  const noteIgnore = (reason, item) => api.storage.local.set({[IGNORE_KEY]:
+    {reason, url: String(item?.url ?? ''), state: item?.state ?? '', paused: item?.paused === true,
+      at: now()}}).catch(() => {});
   let ready;
   async function consider(item) {
     await ready;
@@ -30,6 +39,7 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
       console.log('handoff: ignored', item.id, result.reason, JSON.stringify({
         state: item.state, paused: item.paused, byExtensionId: item.byExtensionId ?? null,
         incognito: item.incognito, id: item.id, exists: item.exists}));
+      await noteIgnore(result.reason, item);
       return;
     }
     const record = await controller.run(item.id, result.request);
