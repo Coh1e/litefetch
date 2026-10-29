@@ -236,6 +236,58 @@ void captureWindow(HWND handle, const std::string& name)
 // Semantic probe: exactly the surface a UI Automation client (FlaUI, pywinauto,
 // WinAppDriver) sees. Asserting through it keeps the checks off raw messages and
 // exercises the accessibility contract ticket #26 must ship anyway.
+// Every command a keyboard user needs must be in the accelerator table; a menu
+// entry without a key is a dead end for anyone who cannot use the mouse.
+void checkAcceleratorCoverage()
+{
+    const auto table = LoadAcceleratorsW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDR_ACCELERATORS));
+    check(table != nullptr, "the window has an accelerator table");
+    const int count = CopyAcceleratorTableW(table, nullptr, 0);
+    check(count > 0, "the accelerator table is not empty");
+    std::vector<ACCEL> entries(static_cast<std::size_t>(count));
+    CopyAcceleratorTableW(table, entries.data(), count);
+
+    const auto has = [&](WORD command) {
+        for (const auto& entry : entries)
+            if (entry.cmd == command) return true;
+        return false;
+    };
+    const auto hasKey = [&](BYTE key, WORD command) {
+        for (const auto& entry : entries)
+            if (entry.key == key && entry.cmd == command) return true;
+        return false;
+    };
+
+    check(hasKey('N', ID_FILE_NEW), "Ctrl+N opens a new download");
+    check(hasKey('O', ID_FILE_OPEN_TORRENT), "Ctrl+O opens a torrent file");
+    check(hasKey('F', ID_EDIT_FIND), "Ctrl+F starts a search");
+    check(hasKey('A', ID_EDIT_SELECT_ALL), "Ctrl+A selects every row");
+    check(hasKey('C', ID_EDIT_COPY_LINK), "Ctrl+C copies the link");
+    check(hasKey(VK_F5, ID_VIEW_REFRESH), "F5 refreshes the list");
+    check(hasKey(VK_DELETE, ID_TASK_DELETE), "Delete removes the selected task");
+    check(hasKey(VK_F2, ID_TASK_PROPERTIES), "F2 opens the properties");
+    for (const WORD command : {ID_FILE_NEW, ID_EDIT_FIND, ID_EDIT_SELECT_ALL,
+             ID_EDIT_COPY_LINK, ID_VIEW_REFRESH, ID_TASK_DELETE, ID_TASK_PROPERTIES}) {
+        check(has(command), "a menu command is reachable from the keyboard");
+    }
+}
+
+// High contrast is a system setting this session cannot change, so the check is
+// that the window survives being told about it and still shows its rows.
+void checkHighContrastNotification(HWND handle, HWND list)
+{
+    SendMessageW(handle, WM_SETTINGCHANGE, SPI_SETHIGHCONTRAST, 0);
+    pumpUntil([] { return false; }, 200);
+    check(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) > 0,
+        "the list survives a high contrast notification");
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0)) {
+        std::fprintf(stderr, "ui-window: high contrast currently %s\n",
+            (contrast.dwFlags & HCF_HIGHCONTRASTON) ? "on" : "off");
+    }
+}
+
 void checkAutomationSurface(HWND handle, int expectedRows)
 {
     IUIAutomation* automation = nullptr;
@@ -371,6 +423,8 @@ void runChecks()
         check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
         check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4; }, 5000),
             "seeded tasks reach the list");
+        checkAcceleratorCoverage();
+        checkHighContrastNotification(handle, list);
         checkAutomationSurface(handle, 4);
         checkColumnGeometry(handle, list, "default window");
         captureWindow(handle, "ui-window-default");
