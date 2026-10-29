@@ -36,7 +36,7 @@ async function connect(wsUrl) {
       socket.send(JSON.stringify({ id, method, params }));
     });
   };
-  return { socket, send, logs };
+  return { socket, send, logs, takeId: () => nextId++, pending };
 }
 
 const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
@@ -47,19 +47,36 @@ if (!loaded.result?.id) {
   process.exit(2);
 }
 
-// Attach to the worker as soon as it exists; an attached worker stays alive.
-let workerTarget = null;
-for (let attempt = 0; attempt < 50 && !workerTarget; ++attempt) {
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  workerTarget = targets.find((entry) => entry.type === 'service_worker'
-    && entry.url.includes(extensionId)) ?? null;
-  if (!workerTarget) await new Promise((resolve) => setTimeout(resolve, 200));
+// Attach through the browser endpoint with a flat session: connecting to a
+// target's own URL can land on a stale target after the worker restarts.
+await browser.send('Target.setDiscoverTargets', {discover: true});
+let workerSession = null;
+for (let attempt = 0; attempt < 60 && !workerSession; ++attempt) {
+  const targets = await browser.send('Target.getTargets');
+  const target = (targets.result?.targetInfos ?? []).find((entry) =>
+    entry.type === 'service_worker' && entry.url.includes(extensionId));
+  if (target) {
+    const attached = await browser.send('Target.attachToTarget',
+      {targetId: target.targetId, flatten: true});
+    workerSession = attached.result?.sessionId ?? null;
+  }
+  if (!workerSession) await new Promise((resolve) => setTimeout(resolve, 200));
 }
-if (!workerTarget) {
+if (!workerSession) {
   console.error('the extension worker never appeared');
   process.exit(3);
 }
-const worker = await connect(workerTarget.webSocketDebuggerUrl);
+const worker = {
+  // Console events arrive on the browser socket, tagged with the session id.
+  get logs() { return browser.logs.filter((line) => line.sessionId === workerSession); },
+  send: async (method, params) => {
+    const id = browser.takeId();
+    return new Promise((resolve) => {
+      browser.pending.set(id, resolve);
+      browser.socket.send(JSON.stringify({id, method, params, sessionId: workerSession}));
+    });
+  },
+};
 await worker.send('Runtime.enable');
 
 const evaluate = async (expression) => {
@@ -120,10 +137,10 @@ const recentExpression = "chrome.downloads.search({limit: 3}).then(list => JSON.
   + " byExtensionId: item.byExtensionId ?? null, incognito: item.incognito,"
   + " url: item.url, bytes: item.bytesReceived}))))";
 const recent = await evaluate(recentExpression);
-const report = { clickResult, record, listenerCheck, recent, logs: worker.logs.slice(-20) };
+const report = { clickResult, record, listenerCheck, recent, logs: worker.logs.map((line) => line.text).slice(-20) };
 writeFileSync(outFile, JSON.stringify(report, null, 2), 'utf8');
 console.log(JSON.stringify(report, null, 2));
 
 page.socket.close();
-worker.socket.close();
+
 browser.socket.close();

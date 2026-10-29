@@ -209,3 +209,33 @@ service worker 会休眠、`import()` 被规范禁止、下载事件时有时无
 `browser/` 代码；同时把 `worker.mjs` 的日志保留为默认行为（它本身对用户也有价值）。
 若 `browser_not_eligible` 仍在"字段全部合格"时出现，那就是判定逻辑与 Chrome 实际字段不符，
 届时应打印 `JSON.stringify(item)` 全文比对，而不是继续猜。
+
+## 2026-10-29 收口：到这里的结论与停止理由
+
+我用七轮尝试了真实浏览器点击 → 接管的自动化，结论如下，并在此停止这条线（不是放弃，而是按"两三轮无结果就收口"的规则）。
+
+**已确证（真机）**
+
+1. 扩展能被 Chrome 加载（ID 与 manifest key 推导一致）；
+2. 扩展 → native host → 命名管道 → LiteFetch → 任务创建（`prepare` 返回 `ok:true`）全链路可用；
+3. 请求观察器对真实点击的请求记录为**有效**（`invalid:false`，有请求头与 200 响应）——这依赖本轮修的两处：
+   同源 Referer 放行、`ERR_ABORTED` 视为下载接管而非失败。
+
+**未确证**
+
+从"浏览器下载事件"到"扩展发起交接"这一步没跑通。当前状态下匹配器给出 `browser_not_eligible`，
+而同一时刻通过 CDP 读到的下载项是 `in_progress / paused:false / byExtensionId:null / incognito:false`——
+按判定条件应当合格。两者的矛盾无法用现有观测解释。
+
+**尝试过但不可行的自动化手段**
+
+- 在 SW 里 `import()` 手动安装：被规范禁止；
+- 接管 SW 生命周期：`ServiceWorker.startWorker` 在 Chrome 155 的端点已移除（-32601）；
+- 用 `--load-extension` 正常加载：开关在 137+ 被特性关闭，`--disable-features=DisableLoadExtensionCommandLineSwitch` 未生效；
+- 换新 profile 每次运行、flat CDP session：能稳定拿到 `hasListeners()==true`，但拿不到 console 事件。
+
+**给下一轮接手者的最短路径**
+
+不通过 CDP 加载扩展，而是**人工用"加载已解压的扩展程序"装一次**，然后手动点一次下载链接，
+观察 LiteFetch 是否出现任务。这一步只要 1 分钟，能立刻区分"扩展逻辑问题"与"CDP 环境问题"，
+比继续在自动化上耗费轮次更有效。
