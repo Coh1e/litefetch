@@ -797,6 +797,48 @@ void transientFailuresAreRetried(const std::filesystem::path& root)
     require(stuckRun.task.state == TaskState::Failed, "a permanent failure fails the task");
     checkEqual(static_cast<long long>(calls), -94LL, "the retry budget is three attempts");
 }
+void reverifyOnDemand(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "reverify.db");
+    TaskService service(repository);
+    const auto destination = root / "reverify.bin";
+    const auto body = payload(2048);
+    const auto checksum = sha256OfBytes(body);
+
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/reverify.bin",
+        destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    writeFile(destination, body);
+    auto task = repository.find(added.task.id);
+    task->sha256 = checksum;
+    task->state = TaskState::Completed;
+    repository.update(*task);
+
+    const auto checked = service.execute(VerifyTaskCommand{added.task.id});
+    require(checked.ok, "verify failed: " + checked.error);
+    require(checked.task.verified, "a matching file verifies");
+    require(checked.task.state == TaskState::Completed, "a verified task stays completed");
+
+    // Corrupt the file and verify again: the task must fail and say why.
+    auto damaged = body;
+    damaged[10] = static_cast<unsigned char>(damaged[10] ^ 0xff);
+    writeFile(destination, damaged);
+    const auto again = service.execute(VerifyTaskCommand{added.task.id});
+    require(again.ok, "the second verify call itself succeeds");
+    require(!again.task.verified, "a corrupt file is not verified");
+    require(again.task.state == TaskState::Failed, "a corrupt file fails the task");
+    require(again.task.error.find("checksum") != std::string::npos,
+        "the mismatch is explained: " + again.task.error);
+
+    // A task without a checksum cannot be verified.
+    const auto plain = service.execute(AddTaskCommand{"http://example.invalid/plain2.bin",
+        (root / "plain2.bin").string()});
+    require(plain.ok, "third add failed: " + plain.error);
+    const auto noChecksum = service.execute(VerifyTaskCommand{plain.task.id});
+    require(!noChecksum.ok, "verifying without a checksum is refused");
+    require(noChecksum.error.find("checksum") != std::string::npos,
+        "the refusal explains why: " + noChecksum.error);
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1113,6 +1155,7 @@ int body()
     refusesWhenTheVolumeIsFull(root.path());
     sha256Verification(root.path());
     transientFailuresAreRetried(root.path());
+    reverifyOnDemand(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

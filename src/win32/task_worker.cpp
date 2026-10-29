@@ -207,6 +207,19 @@ void TaskWorker::postDeleteFiles(std::string taskId)
     condition_.notify_all();
 }
 
+void TaskWorker::postVerify(std::string taskId)
+{
+    Command command;
+    command.type = CommandType::Verify;
+    command.taskId = std::move(taskId);
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        queue_.push_back(std::move(command));
+    }
+    condition_.notify_all();
+}
+
 void TaskWorker::postDelete(std::string taskId)
 {
     Command command;
@@ -422,6 +435,16 @@ void TaskWorker::execute(const Command& command)
             const auto result = service_->execute(update);
             if (!result.ok)
                 publishError("属性应用失败: " + (result.error.empty() ? "unknown error" : result.error));
+            break;
+        }
+        case CommandType::Verify: {
+            const auto result = service_->execute(VerifyTaskCommand{command.taskId});
+            if (!result.ok)
+                publishError("校验失败: " + (result.error.empty() ? "unknown error" : result.error));
+            else if (result.task.verified)
+                publishError("校验通过: " + result.task.id);
+            else
+                publishError("校验未通过: " + result.task.error);
             break;
         }
         case CommandType::DeleteFiles: {

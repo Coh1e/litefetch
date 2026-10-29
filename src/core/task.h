@@ -104,6 +104,10 @@ struct CancelTaskCommand {
 struct DeleteTaskCommand {
     std::string taskId;
 };
+// Recomputes the checksum of a finished file and records the result.
+struct VerifyTaskCommand {
+    std::string taskId;
+};
 // Removes the task and every file it created: the destination, the resume
 // files and the ed2k part records. Anything that cannot be removed is
 // reported per path and the record stays so the user can retry.
@@ -126,7 +130,8 @@ struct UpdateTorrentOptionsCommand {
 };
 
 using TaskCommand = std::variant<AddTaskCommand, StartTaskCommand, PauseTaskCommand,
-    CancelTaskCommand, DeleteTaskCommand, DeleteTaskFilesCommand, UpdateTorrentOptionsCommand>;
+    CancelTaskCommand, DeleteTaskCommand, DeleteTaskFilesCommand, UpdateTorrentOptionsCommand,
+    VerifyTaskCommand>;
 
 struct CommandResult {
     // True only when the requested transition was validated and committed (for

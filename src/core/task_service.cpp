@@ -132,6 +132,8 @@ CommandResult TaskService::execute(const TaskCommand& command)
         if (const auto* deleteCommand = std::get_if<DeleteTaskCommand>(&command)) return remove(*deleteCommand);
         if (const auto* deleteFiles = std::get_if<DeleteTaskFilesCommand>(&command))
             return removeWithFiles(*deleteFiles);
+        if (const auto* verifyCommand = std::get_if<VerifyTaskCommand>(&command))
+            return verify(*verifyCommand);
         if (const auto* updateCommand = std::get_if<UpdateTorrentOptionsCommand>(&command))
             return updateTorrent(*updateCommand);
         return cancel(std::get<CancelTaskCommand>(command));
@@ -595,6 +597,47 @@ int TaskService::pauseInterrupted()
         ++changed;
     }
     return changed;
+}
+
+CommandResult TaskService::verify(const VerifyTaskCommand& command)
+{
+    {
+        std::lock_guard lock(activeMutex_);
+        if (active_.contains(command.taskId))
+            return failure("task is running; stop it before verifying");
+    }
+    const auto task = repository_.find(command.taskId);
+    if (!task) return failure("unknown task");
+    if (task->sha256.empty()) return failure("this task has no checksum to verify against");
+    std::error_code error;
+    if (!std::filesystem::exists(std::filesystem::path(pathFromUtf8(task->destination)), error))
+        return failure("the finished file is not on disk");
+
+    auto updated = *task;
+    const auto actual = sha256File(updated.destination);
+    if (actual.empty()) {
+        updated.state = TaskState::Failed;
+        updated.error = "cannot read the finished file to verify it";
+        updated.verified = false;
+    } else if (!equalsNoCase(actual, updated.sha256)) {
+        updated.state = TaskState::Failed;
+        updated.error = "checksum mismatch: expected " + updated.sha256 + ", got " + actual;
+        updated.verified = false;
+    } else {
+        updated.state = TaskState::Completed;
+        updated.error.clear();
+        updated.verified = true;
+    }
+    updated.updatedAt = nowMillis();
+    try {
+        repository_.update(updated);
+    } catch (const StorageError& storageError) {
+        return storageFailure(storageError);
+    }
+    CommandResult result;
+    result.ok = true;
+    result.task = updated;
+    return result;
 }
 
 CommandResult TaskService::removeWithFiles(const DeleteTaskFilesCommand& command)

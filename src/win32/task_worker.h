@@ -87,6 +87,7 @@ public:
     void postCancel(std::string taskId);
     void postDelete(std::string taskId);
     void postDeleteFiles(std::string taskId);
+    void postVerify(std::string taskId);
     void postRefresh();
 
     // Non-blocking shutdown request; the control thread cancels live tasks and
@@ -104,7 +105,7 @@ public:
     WorkerSnapshot snapshot();
 
 private:
-    enum class CommandType { Add, Start, Pause, Cancel, Delete, DeleteFiles, Refresh, UpdateTorrent };
+    enum class CommandType { Add, Start, Pause, Cancel, Delete, DeleteFiles, Verify, Refresh, UpdateTorrent };
     struct Command {
         CommandType type = CommandType::Refresh;
         std::string source;
