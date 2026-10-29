@@ -31,6 +31,11 @@ async function checkHost() {
   try { port.disconnect(); } catch {}
   if (answer?.ok && answer.result?.state === 'ok') {
     host.textContent = '本机下载器：已连接。';
+  } else if (answer && answer.ok === false) {
+    // The component answered, so it is running; a refusal means the application
+    // is an older build or does not accept this request.
+    host.textContent =
+      `本机下载器：已连接，但应用拒绝了这个请求（${answer.error ?? '未知原因'}），请更新到同一版本。`;
   } else {
     host.textContent = '本机下载器：未运行（请先启动 LiteFetch），接管不会发生。';
   }

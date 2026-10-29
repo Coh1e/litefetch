@@ -63,6 +63,39 @@ void enablePerMonitorDpi()
     if (setContext) setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
+// A folder the process can actually write to, proven by creating and removing a
+// file: attributes and ACLs alone lie often enough on a locked-down desktop.
+bool writable(const std::filesystem::path& directory, std::error_code& error)
+{
+    std::filesystem::create_directories(directory, error);
+    if (error) return false;
+    const auto probe = directory / L".litefetch-write-probe";
+    {
+        std::ofstream file(probe, std::ios::binary);
+        if (!file) return false;
+        file << "probe";
+        if (!file.good()) return false;
+    }
+    std::filesystem::remove(probe, error);
+    error.clear();
+    return true;
+}
+
+std::filesystem::path executableDirectory()
+{
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const auto length = GetModuleFileNameW(nullptr, buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (length == 0) return std::filesystem::current_path();
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
 // The product fills the defaults from the user's known folders; the shared
 // parser (and its unit test) owns everything after the executable name.
 litefetch::ui::StartupOptions parseArguments(const std::vector<std::wstring>& arguments)
@@ -72,7 +105,20 @@ litefetch::ui::StartupOptions parseArguments(const std::vector<std::wstring>& ar
     defaults.downloadDirectory = knownFolder(FOLDERID_Downloads);
     if (defaults.downloadDirectory.empty())
         defaults.downloadDirectory = std::filesystem::current_path();
-    return litefetch::ui::parseStartupOptions(defaults, arguments);
+    auto options = litefetch::ui::parseStartupOptions(defaults, arguments);
+    // A restricted desktop cannot create the profile folder, and an error box on
+    // first launch helps nobody. Fall back to a portable folder beside the
+    // executable and keep going; the same rule the launch script uses.
+    std::error_code error;
+    if (options.error.empty()
+        && !writable(options.window.databasePath.parent_path(), error)) {
+        const auto portable = executableDirectory() / L"data";
+        if (writable(portable, error)) {
+            options.window.databasePath = portable / L"tasks.db";
+            options.window.downloadDirectory = executableDirectory() / L"downloads";
+        }
+    }
+    return options;
 }
 } // namespace
 
