@@ -25,6 +25,7 @@ if (-not (Test-Path $exe)) { throw "missing $exe" }
 if (Test-Path $packageDir) { Remove-Item $packageDir -Recurse -Force }
 New-Item -ItemType Directory -Force $packageDir | Out-Null
 Copy-Item $exe $packageDir
+Copy-Item (Join-Path $root 'LICENSE') $packageDir
 
 # Dependency closure: dumpbin reports names, the file is looked up in the
 # project dependency tree first, then beside the exe.
@@ -84,6 +85,7 @@ libtorrent     https://libtorrent.org/     BSD-3-Clause
 OpenSSL        https://www.openssl.org/    Apache-2.0
 zlib           https://zlib.net/           Zlib
 
+LiteFetch itself is MIT licensed; see LICENSE in this folder.
 No Qt components and no closed-source download engine are part of this package.
 '@ | Set-Content -LiteralPath (Join-Path $packageDir 'THIRD-PARTY.txt') -Encoding UTF8
 

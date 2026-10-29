@@ -52,4 +52,4 @@ out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
 
 ## 许可证
 
-开源方向已确认；项目许可证及依赖分发材料仍待核对和确定。
+MIT，见 [LICENSE](LICENSE)。第三方依赖的许可清单随发布包提供（`THIRD-PARTY.txt`）。
