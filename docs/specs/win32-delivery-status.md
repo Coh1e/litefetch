@@ -87,3 +87,12 @@
 6. **错误文案混语言**：引擎英文错误直接显示在中文界面。
 
 其中 4 与 5 是从"完成后动作不触发"一条线索挖出来的，影响面远超该功能本身。
+## 六、交付物与最后一轮证据（第 116 轮）
+
+- **发布包**：`out/package/litefetch-0.1.0`，13 个文件 / 16.2 MiB（含 `litefetch-browser-host.exe`、
+  `LICENSE`、`THIRD-PARTY.txt`），由 `scripts/package-release.ps1` 生成；
+- **包内 smoke**：`scripts/win32-smoke.ps1 -AppPath … -EvidenceRoot .pi/evidence/final`
+  → 窗口 219 ms 出现、退出码 0，证据在 `.pi/evidence/final/run-*/smoke.log`；
+- **测试**：`cmd /c test-local.cmd` → 23/23 通过；
+- **遗留进程**：检查过项目内启动的 Chrome（`--user-data-dir` 指向 `.deps\chrome-*`）与
+  `litefetch-*` 进程，均已结束；仓库工作区干净（`git status` 无输出），`tmp/`、`out/`、`.deps/`、`.pi/` 均在忽略之列。
