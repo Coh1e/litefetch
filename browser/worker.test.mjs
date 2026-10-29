@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installWorker} from './worker.mjs';
-import {SETTINGS_KEY, normalizeSettings} from './settings.mjs';
+import {SETTINGS_KEY, normalizeSettings, allowsOrigin} from './settings.mjs';
 function event() {
   const listeners = [];
   return {listeners, addListener(fn, ...args) { listeners.push({fn, args}); },
@@ -135,12 +135,20 @@ test('recovery releases pre-cancel reservation even when capture is disabled', a
   assert.equal(f.values['handoff.v1.regular.1'].phase, 'released');
   assert.equal(f.item.paused, false); f.worker.close();
 });
-test('origin settings reject malformed input and normalize explicit origins', () => {
+test('settings keep one switch and ignore unusable site entries', () => {
   assert.deepEqual(normalizeSettings({enabled: true, origins: ['https://example.test:443']}),
     {enabled: true, origins: ['https://example.test']});
-  for (const origin of ['https://example.test/path', 'https://user:pass@example.test', 'file:///tmp/a', '*.example.test']) {
-    assert.deepEqual(normalizeSettings({enabled: true, origins: [origin]}), {enabled: false, origins: []});
+  // A malformed entry no longer turns capture off; it is simply not an
+  // exclusion. Turning capture on must stay a single decision.
+  for (const origin of ['https://example.test/path', 'file:///tmp/a', '*.example.test']) {
+    assert.deepEqual(normalizeSettings({enabled: true, origins: [origin]}),
+      {enabled: true, origins: []});
   }
+  // With no exclusions every ordinary download is eligible.
+  assert.equal(allowsOrigin({enabled: true, origins: []}, 'https://anything.test'), true);
+  assert.equal(allowsOrigin({enabled: true, origins: ['https://only.test']}, 'https://only.test'), true);
+  assert.equal(allowsOrigin({enabled: true, origins: ['https://only.test']}, 'https://other.test'), false);
+  assert.equal(allowsOrigin({enabled: false, origins: []}, 'https://anything.test'), false);
 });
 test('a malformed transaction cannot block recovery of another prepared download', async () => {
   const record = {downloadId: 1, requestId: 'old', taskId: 'task', expiresAt: 9999999999999,

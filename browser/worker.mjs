@@ -1,7 +1,7 @@
 import {Handoff} from './handoff.mjs';
 import {storageJournal, downloadsAdapter, NativeClient} from './adapters.mjs';
 import {RequestObserver} from './request-observer.mjs';
-import {SETTINGS_KEY, normalizeSettings} from './settings.mjs';
+import {SETTINGS_KEY, normalizeSettings, allowsOrigin} from './settings.mjs';
 
 // Where the popup reads the reason the last download was left alone.
 export const IGNORE_KEY = 'handoff.lastIgnore.v1';
@@ -12,7 +12,7 @@ export function installWorker(api, {now = Date.now, makeId = () => crypto.random
   const journal = storageJournal(api.storage.local);
   const browser = downloadsAdapter(api.downloads);
   const native = new NativeClient(api.runtime, {makeId});
-  const allowed = origin => settings.enabled && settings.origins.includes(origin);
+  const allowed = origin => allowsOrigin(settings, origin);
   const observer = new RequestObserver({now, allowReplay: allowed});
   const controller = new Handoff({journal, browser, native, now, makeId,
     canTakeOver: request => settings.enabled && request.origins?.every(allowed) === true});

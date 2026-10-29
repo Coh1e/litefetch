@@ -56,6 +56,24 @@ const explain = reason => ({
   observation_overflow: '短时间内请求过多，扩展主动暂停了接管。',
 }[reason] ?? `下载仍由浏览器处理（原因：${reason}）。`);
 
+const phaseText = phase => ({
+  prepared: '已在本机建好任务，等待提交',
+  committing: '正在提交',
+  committed: '已接管，任务已交给本机',
+  released: '已放回浏览器',
+  cancelled: '已取消',
+  attention: '需要处理',
+}[phase] ?? phase);
+
+const failureText = reason => ({
+  browser_cancel_not_confirmed: '浏览器没有确认取消原来的下载，任务留在本机未提交',
+  browser_resume_failed: '取消原下载失败，且无法恢复浏览器的下载',
+  native_task_not_prepared: '本机没有准备好任务',
+  native_lease_invalid: '本机的准备已过期',
+  native_status_unavailable: '连不上本机下载器',
+  native_task_mismatch: '本机任务与这条接管记录不一致',
+}[reason] ?? reason ?? '');
+
 try {
   const values = await chrome.storage.local.get([SETTINGS_KEY, IGNORE_KEY]);
   const settings = normalizeSettings(values[SETTINGS_KEY]);
@@ -63,20 +81,33 @@ try {
   origins.value = settings.origins.join('\n');
   form.querySelector('button').disabled = false;
   const last = values[IGNORE_KEY];
+  const all = await chrome.storage.local.get(null);
+  // The journal says what actually happened to each takeover, which is the
+  // difference between "the browser kept the file" and "we paused it and then
+  // failed to finish".
+  const records = Object.entries(all)
+    .filter(([key]) => key.startsWith('handoff.journal.'))
+    .map(([, record]) => record)
+    .filter(record => record && typeof record === 'object')
+    .sort((left, right) => (right.at ?? right.downloadId ?? 0) - (left.at ?? left.downloadId ?? 0))
+    .slice(0, 3)
+    .map(record => `${phaseText(record.phase)}${record.reason ? `：${failureText(record.reason)}` : ''}`);
+  const lines = [];
   if (last && last.reason) {
     const at = last.at ? new Date(last.at).toLocaleTimeString() : '';
-    ignored.textContent = `上次未接管：${explain(last.reason)}${at ? `（${at}）` : ''}`;
+    lines.push(`上次未接管：${explain(last.reason)}${at ? `（${at}）` : ''}`);
   }
+  if (records.length) lines.push(`最近接管：${records.join('；')}`);
+  ignored.textContent = lines.join('\n');
 } catch { status.textContent = '设置读取失败，请重新打开。'; }
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const lines = origins.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const settings = normalizeSettings({enabled: enabled.checked, origins: lines});
-  if ((lines.length && !settings.origins.length) || (enabled.checked && !settings.origins.length)) {
-    status.textContent = '请输入有效的网站地址，不包含路径或账号。'; return;
-  }
   try {
     await chrome.storage.local.set({[SETTINGS_KEY]: settings});
-    status.textContent = '已保存。';
+    status.textContent = settings.origins.length
+      ? `已保存：只在 ${settings.origins.length} 个站点接管。`
+      : '已保存：所有站点的下载都会交给 LiteFetch。';
   } catch { status.textContent = '保存失败，原设置保留。'; }
 });
