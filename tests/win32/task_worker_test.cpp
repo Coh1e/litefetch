@@ -93,6 +93,51 @@ void completedDownload(const std::filesystem::path& root)
     check(persisted.has_value() && persisted->state == TaskState::Completed, "completed state is not durable");
 }
 
+void extraStartsWaitForASlot(const std::filesystem::path& root)
+{
+    // One slot, two tasks: the second must stay queued until the first finishes.
+    const auto body = payload(512 * 1024);
+    HttpFixture server(HttpFixture::Options{body, 200, 64 * 1024, std::chrono::milliseconds(20)});
+    const auto database = root / "worker-slots.db";
+    TaskWorker worker(database);
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    worker.setMaxConcurrent(1);
+
+    worker.postAdd(server.url("/first.bin"), (root / "first.bin").string(), true);
+    std::string firstId;
+    check(waitFor([&] {
+        const auto tasks = worker.snapshot().tasks;
+        if (tasks.empty()) return false;
+        firstId = tasks.front().id;
+        return tasks.front().received > 0;
+    }, std::chrono::seconds(15)), "the first task did not start");
+
+    worker.postAdd(server.url("/second.bin"), (root / "second.bin").string(), true);
+    // The second add lands while the first still occupies the slot.
+    check(waitFor([&] { return worker.snapshot().tasks.size() == 2; },
+        std::chrono::seconds(10)), "the second task was not added");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (const auto& task : worker.snapshot().tasks) {
+        if (task.id == firstId) continue;
+        check(task.state == TaskState::Queued || task.state == TaskState::Paused,
+            "the second task must wait for a free slot");
+        check(worker.snapshot().active.size() == 1,
+            "only one transfer may be active under a single slot");
+    }
+
+    check(waitFor([&] {
+        const auto tasks = worker.snapshot().tasks;
+        if (tasks.size() != 2) return false;
+        for (const auto& task : tasks)
+            if (task.state != TaskState::Completed) return false;
+        return true;
+    }, std::chrono::seconds(40)), "both tasks did not finish through the queue");
+
+    check(readFile(root / "first.bin") == body, "the first file is complete");
+    check(readFile(root / "second.bin") == body, "the queued file is complete");
+    worker.shutdown();
+}
 void cancelledDownload(const std::filesystem::path& root)
 {
     const auto body = payload(4 * 1024 * 1024);

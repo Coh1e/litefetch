@@ -551,12 +551,89 @@ void TaskWorker::execute(const Command& command)
     }
 }
 
+void TaskWorker::setMaxConcurrent(int maxConcurrent)
+{
+    {
+        std::lock_guard lock(mutex_);
+        maxConcurrent_ = maxConcurrent < 0 ? 0 : maxConcurrent;
+    }
+    launchPendingStarts();
+}
+
+void TaskWorker::launchPendingStarts()
+{
+    std::vector<PendingStart> ready;
+    {
+        std::lock_guard lock(mutex_);
+        if (maxConcurrent_ <= 0) {
+            ready.swap(pendingStarts_);
+        } else {
+            // Count the ones already picked in this pass, so no phantom job is
+            // added: a placeholder would never finish and would eat the slot.
+            while (!pendingStarts_.empty()
+                && static_cast<int>(jobs_.size() + ready.size()) < maxConcurrent_) {
+                ready.push_back(pendingStarts_.front());
+                pendingStarts_.erase(pendingStarts_.begin());
+            }
+        }
+    }
+    for (const auto& item : ready)
+        launchStartNow(item.taskId, item.restartFromZero, item.username, item.password,
+            item.forceVerify);
+}
+
 void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
+    std::string username, std::string password, bool forceVerify)
+{
+    if (!service_) return;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& job : jobs_) {
+            if (job.taskId == taskId && !job.finished->load()) return;
+        }
+        for (const auto& pending : pendingStarts_) {
+            if (pending.taskId == taskId) return;
+        }
+        if (maxConcurrent_ > 0 && static_cast<int>(jobs_.size()) >= maxConcurrent_) {
+            PendingStart pending;
+            pending.taskId = taskId;
+            pending.restartFromZero = restartFromZero;
+            pending.username = std::move(username);
+            pending.password = std::move(password);
+            pending.forceVerify = forceVerify;
+            pendingStarts_.push_back(std::move(pending));
+            return;
+        }
+    }
+    launchStartNow(taskId, restartFromZero, std::move(username), std::move(password), forceVerify);
+}
+
+void TaskWorker::launchStartNow(const std::string& taskId, bool restartFromZero,
     std::string username, std::string password, bool forceVerify)
 {
     if (!service_) return;
     for (const auto& job : jobs_) {
         if (job.taskId == taskId && !job.finished->load()) return; // already running
+    }
+    {
+        std::lock_guard lock(mutex_);
+        // A slot is full: remember the request instead of running it now.
+        if (maxConcurrent_ > 0 && static_cast<int>(jobs_.size()) >= maxConcurrent_) {
+            for (const auto& job : jobs_) {
+                if (job.taskId == taskId && !job.finished->load()) return;
+            }
+            for (const auto& pending : pendingStarts_) {
+                if (pending.taskId == taskId) return;
+            }
+            PendingStart pending;
+            pending.taskId = taskId;
+            pending.restartFromZero = restartFromZero;
+            pending.username = username;
+            pending.password = password;
+            pending.forceVerify = forceVerify;
+            pendingStarts_.push_back(std::move(pending));
+            return;
+        }
     }
     auto finished = std::make_shared<std::atomic_bool>(false);
     auto cancelFlag = std::make_shared<std::atomic_bool>(false);
@@ -614,6 +691,7 @@ void TaskWorker::reapFinished()
         if (it->thread.joinable()) it->thread.join();
         it = jobs_.erase(it);
     }
+    launchPendingStarts();
 }
 
 void TaskWorker::reload()

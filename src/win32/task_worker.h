@@ -90,6 +90,9 @@ public:
     void postDelete(std::string taskId);
     void postDeleteFiles(std::string taskId);
     void postVerify(std::string taskId);
+    // 0 means every task may run at once; a positive value keeps the extra
+    // tasks queued until a transfer finishes.
+    void setMaxConcurrent(int maxConcurrent);
     void postRefresh();
 
     // Non-blocking shutdown request; the control thread cancels live tasks and
@@ -141,6 +144,14 @@ private:
         int seedRatioMilli = 1000;
         int seedMinutes = 30;
     };
+    struct PendingStart {
+        std::string taskId;
+        bool restartFromZero = false;
+        std::string username;
+        std::string password;
+        bool forceVerify = false;
+    };
+
     struct StartJob {
         std::string taskId;
         std::thread thread;
@@ -151,6 +162,9 @@ private:
 
     void controlLoop();
     void execute(const Command& command);
+    void launchPendingStarts();
+    void launchStartNow(const std::string& taskId, bool restartFromZero, std::string username,
+        std::string password, bool forceVerify);
     void launchStart(const std::string& taskId, bool restartFromZero = false,
         std::string username = {}, std::string password = {}, bool forceVerify = false);
     void reapFinished();
@@ -181,7 +195,9 @@ private:
     bool stopping_ = false;
     bool joined_ = false;
     std::atomic_bool shutdownFinished_{false};
-    std::vector<StartJob> jobs_; // control thread only
+    std::vector<StartJob> jobs_;
+    std::vector<PendingStart> pendingStarts_;
+    int maxConcurrent_ = 0; // control thread only
     std::vector<TaskSnapshot> tasks_;
     std::vector<std::string> active_;
     std::map<std::string, int, std::less<>> peers_;
