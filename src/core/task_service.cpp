@@ -22,7 +22,7 @@
 namespace litefetch {
 namespace {
 namespace {
-std::string sha256File(const std::string& path)
+std::string sha256File(const std::string& path, TrafficMeter* meter = nullptr)
 {
     // Hex SHA-256 of the finished file, empty when it cannot be read.
     std::ifstream input(path, std::ios::binary);
@@ -37,6 +37,7 @@ std::string sha256File(const std::string& path)
         while (input) {
             input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
             const auto read = input.gcount();
+            if (meter && read > 0) meter->add(TrafficCategory::Verify, read);
             if (read > 0
                 && BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()),
                        static_cast<ULONG>(read), 0) < 0) {
@@ -507,7 +508,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         // A checksum turns "finished" into "verified"; without one the task is
         // complete but never claims to be verified.
         if (!task.sha256.empty()) {
-            const auto actual = sha256File(task.destination);
+            const auto actual = sha256File(task.destination, &traffic_);
             if (actual.empty()) {
                 task.state = TaskState::Failed;
                 task.error = "cannot read the finished file to verify it";
@@ -699,7 +700,7 @@ CommandResult TaskService::verify(const VerifyTaskCommand& command)
         return failure("the finished file is not on disk");
 
     auto updated = *task;
-    const auto actual = sha256File(updated.destination);
+    const auto actual = sha256File(updated.destination, &traffic_);
     if (actual.empty()) {
         updated.state = TaskState::Failed;
         updated.error = "cannot read the finished file to verify it";

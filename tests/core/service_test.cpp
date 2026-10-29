@@ -5,6 +5,7 @@
 #include <bcrypt.h>
 
 #include "settings.h"
+#include "traffic_meter.h"
 
 #include "ftp_fixture.h"
 #include "http_fixture.h"
@@ -998,6 +999,30 @@ void priorityIsStoredAndChanged(const std::filesystem::path& root)
     require(reloaded.has_value(), "the task disappeared");
     checkEqual(static_cast<long long>(reloaded->priority), 5LL, "the priority is durable");
 }
+void verificationCountsAsItsOwnTraffic(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "traffic-verify.db");
+    TaskService service(repository);
+    const auto destination = root / "traffic.bin";
+    const auto body = payload(4096);
+    const auto added = service.execute(AddTaskCommand{"http://example.invalid/traffic.bin",
+        destination.string()});
+    require(added.ok, "add failed: " + added.error);
+    writeFile(destination, body);
+    auto task = repository.find(added.task.id);
+    task->sha256 = sha256OfBytes(body);
+    task->state = TaskState::Completed;
+    repository.update(*task);
+
+    checkEqual(service.traffic().bytes(TrafficCategory::Verify), 0LL,
+        "nothing is counted before a check runs");
+    const auto checked = service.execute(VerifyTaskCommand{added.task.id});
+    require(checked.ok, "verify failed: " + checked.error);
+    checkEqual(service.traffic().bytes(TrafficCategory::Verify),
+        static_cast<std::int64_t>(body.size()), "the verified bytes are counted as verify traffic");
+    checkEqual(service.traffic().bytes(TrafficCategory::Download), 0LL,
+        "verification is not counted as a download");
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1321,6 +1346,7 @@ int body()
     renameOnConflictPicksAFreeName(root.path());
     categorizedSavingSortsFiles(root.path());
     priorityIsStoredAndChanged(root.path());
+    verificationCountsAsItsOwnTraffic(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

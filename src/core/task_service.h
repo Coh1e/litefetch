@@ -2,6 +2,7 @@
 
 #include "bt_engine.h"
 #include "rate_limit.h"
+#include "traffic_meter.h"
 #include "ed2k_task.h"
 #include "http_engine.h"
 #include "task.h"
@@ -45,6 +46,8 @@ public:
     // Global byte budget shared by every transfer this service starts. Zero
     // means unlimited.
     void setRateLimit(std::int64_t bytesPerSecond);
+    // Bytes counted per category: the UI shows them apart from the file size.
+    TrafficMeter& traffic() { return traffic_; }
     // HTTP proxy applied to every HTTP/FTP transfer this service starts.
     void setHttpProxy(std::string proxy);
     // When true a taken destination becomes "name (1).ext" instead of an error.
@@ -93,6 +96,7 @@ private:
     Ed2kTransfer ed2kTransfer_;
     FreeSpaceFn freeSpace_;
     std::shared_ptr<RateBudget> budget_ = std::make_shared<RateBudget>();
+    TrafficMeter traffic_;
     std::string proxy_;
     bool renameOnConflict_ = false;
     bool saveByCategory_ = false;
