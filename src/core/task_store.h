@@ -37,6 +37,9 @@ public:
     // Deletes the record only. Callers are responsible for stopping writers
     // first; owned files are never removed here.
     void remove(std::string_view id);
+    // Key/value area of the same database; used for user settings.
+    std::string metaValue(std::string_view key) const;
+    void setMetaValue(std::string_view key, std::string value);
     std::optional<TaskSnapshot> find(std::string_view id);
     std::vector<TaskSnapshot> all();
 

@@ -24,6 +24,8 @@ struct TransferRequest {
     // written to the resume sidecar and never sent to another host.
     std::string username;
     std::string password;
+    // HTTP proxy for this transfer, empty = direct.
+    std::string proxy;
     // Optional shared budget: every byte this transfer receives is charged to
     // it, so the limit applies across engines instead of per transfer.
     std::shared_ptr<RateBudget> budget;

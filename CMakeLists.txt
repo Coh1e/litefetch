@@ -28,6 +28,7 @@ add_library(litefetch-core STATIC
     src/core/kad_wire.cpp src/core/kad_wire.h
     src/core/kad_node.cpp src/core/kad_node.h
     src/core/rate_limit.cpp src/core/rate_limit.h
+    src/core/settings.cpp src/core/settings.h
     src/win32/native_bridge.cpp src/win32/native_bridge.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)

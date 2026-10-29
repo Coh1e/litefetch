@@ -251,12 +251,22 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         if (task.state == TaskState::Cancelled)
             return failure("task was cancelled; use an explicit retry command");
         if (active_.contains(command.taskId)) return failure("task is already running");
+        if (pendingStop_.erase(command.taskId) > 0) {
+            // A stop landed between the decision to start and this registration;
+            // honour it instead of resurrecting the transfer.
+            CommandResult result;
+            result.ok = true;
+            result.task = task;
+            return result;
+        }
+        starting_.insert(command.taskId);
         active = std::make_shared<ActiveTransfer>();
         active->cancelled = std::make_shared<std::atomic_bool>(false);
         active_.emplace(command.taskId, active);
 
         // Progress survives a pause: the engine resumes from the partial file,
         // so the row keeps the bytes it already has instead of dropping to zero.
+        starting_.erase(command.taskId);
         task.state = TaskState::Running;
         task.error.clear();
         task.restartRequired = false;
@@ -419,7 +429,7 @@ CommandResult TaskService::start(const StartTaskCommand& command)
             for (int attempt = 1; attempt <= 3; ++attempt) {
                 const auto startedAt = std::chrono::steady_clock::now();
                 transferResult = transfer_(TransferRequest{task.source, task.destination,
-                    command.restartFromZero, command.username, command.password, budget_},
+                    command.restartFromZero, command.username, command.password, proxy_, budget_},
                     *active->cancelled, progress);
                 const auto elapsed = std::chrono::steady_clock::now() - startedAt;
                 // A slow failure is usually a real timeout, not a blip; retrying
@@ -529,6 +539,9 @@ CommandResult TaskService::stop(const std::string& taskId, bool pauseTransfer)
                 result.task = *task;
                 return result;
             }
+            // Remember the stop only if a start is already in flight; a plain
+            // queued cancel must not block a later, explicit start.
+            if (starting_.contains(taskId)) pendingStop_.insert(taskId);
             const bool stoppable = task->state == TaskState::Queued
                 || task->state == TaskState::Running
                 || (pauseTransfer && task->state == TaskState::Failed);
@@ -602,6 +615,11 @@ int TaskService::pauseInterrupted()
 void TaskService::setRateLimit(std::int64_t bytesPerSecond)
 {
     budget_->setLimit(bytesPerSecond);
+}
+
+void TaskService::setHttpProxy(std::string proxy)
+{
+    proxy_ = std::move(proxy);
 }
 
 CommandResult TaskService::verify(const VerifyTaskCommand& command)

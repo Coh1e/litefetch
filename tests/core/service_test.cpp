@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <bcrypt.h>
 
+#include "settings.h"
+
 #include "ftp_fixture.h"
 #include "http_fixture.h"
 #include "task_identity.h"
@@ -862,6 +864,57 @@ void globalRateLimitSlowsTransfers(const std::filesystem::path& root)
     checkEqual(static_cast<long long>(std::filesystem::file_size(root / "limited.bin")),
         static_cast<long long>(body.size()), "the limited transfer wrote every byte");
 }
+void settingsRoundTrip(const std::filesystem::path& root)
+{
+    TaskRepository repository(root / "settings.db");
+    const auto defaults = loadSettings(repository);
+    checkEqual(defaults.speedLimitBytesPerSecond, 0LL, "speed limit defaults to unlimited");
+    check(defaults.httpProxy.empty(), "proxy defaults to direct");
+    check(defaults.ed2kServers.empty(), "no ed2k servers by default");
+
+    Settings settings;
+    settings.speedLimitBytesPerSecond = 262144;
+    settings.httpProxy = "http://127.0.0.1:3128";
+    settings.connectTimeoutSeconds = 45;
+    settings.ed2kServers = {"ed2k.example:4661", "backup.example:4661"};
+    saveSettings(repository, settings);
+
+    const auto reloaded = loadSettings(repository);
+    checkEqual(reloaded.speedLimitBytesPerSecond, 262144LL, "the speed limit persists");
+    checkEqual(reloaded.httpProxy, std::string("http://127.0.0.1:3128"), "the proxy persists");
+    checkEqual(static_cast<long long>(reloaded.connectTimeoutSeconds), 45LL, "the timeout persists");
+    checkEqual(static_cast<long long>(reloaded.ed2kServers.size()), 2LL, "the servers persist");
+
+    std::string host;
+    std::uint16_t port = 0;
+    check(parseServerEndpoint("ed2k.example:4661", host, port), "a server endpoint parses");
+    checkEqual(host, std::string("ed2k.example"), "the host is kept");
+    checkEqual(static_cast<long long>(port), 4661LL, "the port is kept");
+    check(!parseServerEndpoint("no-port", host, port), "a missing port is rejected");
+    check(!parseServerEndpoint("host:0", host, port), "port zero is rejected");
+}
+
+void proxyIsUsedForHttp(const std::filesystem::path& root)
+{
+    // The fixture plays the proxy: it must receive an absolute request line.
+    const auto body = payload(1024);
+    HttpFixture proxy(HttpFixture::Options{body});
+    TaskRepository repository(root / "proxy.db");
+    TaskService service(repository);
+    service.setHttpProxy(proxy.url(""));
+
+    const auto added = service.execute(AddTaskCommand{"http://target.invalid/file.bin",
+        (root / "proxied.bin").string()});
+    require(added.ok, "add failed: " + added.error);
+    const auto run = service.execute(StartTaskCommand{added.task.id});
+    require(run.ok, "start failed: " + run.error);
+    require(run.task.state == TaskState::Completed, "the proxied transfer completes");
+    checkEqual(static_cast<long long>(std::filesystem::file_size(root / "proxied.bin")),
+        static_cast<long long>(body.size()), "the proxy delivered the bytes");
+    const auto request = proxy.lastRequestLine();
+    check(request.find("http://target.invalid/file.bin") != std::string::npos,
+        ("the proxy received the absolute URL: " + request).c_str());
+}
 void sameDestinationRace(const std::filesystem::path& root)
 {
     const auto bodyA = payload(1024 * 1024);
@@ -1180,6 +1233,8 @@ int body()
     transientFailuresAreRetried(root.path());
     reverifyOnDemand(root.path());
     globalRateLimitSlowsTransfers(root.path());
+    settingsRoundTrip(root.path());
+    proxyIsUsedForHttp(root.path());
     httpFailure(root.path());
     sameDestinationRace(root.path());
     cancelThenStart(root.path());

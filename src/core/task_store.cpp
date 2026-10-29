@@ -465,6 +465,24 @@ void TaskRepository::update(const TaskSnapshot& task)
     if (sqlite3_changes(database_) != 1) throw StorageError("Task row was not updated");
 }
 
+std::string TaskRepository::metaValue(std::string_view key) const
+{
+    Statement statement(database_, "SELECT value FROM native_meta WHERE key=?");
+    statement.text(1, std::string(key));
+    if (!statement.row()) return {};
+    return statement.text(0);
+}
+
+void TaskRepository::setMetaValue(std::string_view key, std::string value)
+{
+    Statement statement(database_,
+        "INSERT INTO native_meta(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    statement.text(1, std::string(key));
+    statement.text(2, std::move(value));
+    statement.done();
+}
+
 void TaskRepository::remove(std::string_view id)
 {
     std::lock_guard lock(mutex_);

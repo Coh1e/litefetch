@@ -634,6 +634,7 @@ TransferResult transferHttp(const TransferRequest& request, const std::atomic_bo
     set(CURLOPT_HEADERFUNCTION, &readHeader);
     set(CURLOPT_HEADERDATA, &context);
     set(CURLOPT_NOPROGRESS, 0L);
+    if (!request.proxy.empty()) set(CURLOPT_PROXY, request.proxy.c_str());
     set(CURLOPT_XFERINFOFUNCTION, &reportProgress);
     set(CURLOPT_XFERINFODATA, &context);
 

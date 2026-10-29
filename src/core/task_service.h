@@ -8,6 +8,8 @@
 #include "task_store.h"
 
 #include <atomic>
+#include <functional>
+#include <set>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -43,6 +45,8 @@ public:
     // Global byte budget shared by every transfer this service starts. Zero
     // means unlimited.
     void setRateLimit(std::int64_t bytesPerSecond);
+    // HTTP proxy applied to every HTTP/FTP transfer this service starts.
+    void setHttpProxy(std::string proxy);
 
     explicit TaskService(TaskRepository& repository, TransferFunction transfer = transferHttp,
         ProgressObserver observer = {}, BtTransfer btTransfer = {},
@@ -84,6 +88,11 @@ private:
     Ed2kTransfer ed2kTransfer_;
     FreeSpaceFn freeSpace_;
     std::shared_ptr<RateBudget> budget_ = std::make_shared<RateBudget>();
+    std::string proxy_;
+    // Starts that are between "decided" and "registered", and stops that arrived
+    // in that window. The stop is honoured instead of being overwritten.
+    std::set<std::string, std::less<>> starting_;
+    std::set<std::string, std::less<>> pendingStop_;
     ProgressObserver observer_;
     std::mutex activeMutex_;
     std::map<std::string, std::shared_ptr<ActiveTransfer>, std::less<>> active_;

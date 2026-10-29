@@ -11,6 +11,7 @@
 #include <charconv>
 #include <chrono>
 #include <mutex>
+#include <mutex>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -77,6 +78,12 @@ public:
         return "http://127.0.0.1:" + std::to_string(port_) + path;
     }
     unsigned short port() const { return port_; }
+    // The first request line seen, for tests that exercise a proxy.
+    std::string lastRequestLine() const
+    {
+        std::lock_guard lock(requestMutex_);
+        return lastRequestLine_;
+    }
 
     // The last request seen, for credential-boundary assertions.
     std::string lastAuthorization()
@@ -124,9 +131,13 @@ private:
         std::string request;
         char buffer[2048];
         while (request.find("\r\n\r\n") == std::string::npos && request.size() < 16384) {
-            const int received = recv(client, buffer, sizeof(buffer), 0);
+            const int received = ::recv(client, buffer, sizeof(buffer), 0);
             if (received <= 0) return;
             request.append(buffer, static_cast<std::size_t>(received));
+        }
+        {
+            std::lock_guard lock(requestMutex_);
+            lastRequestLine_ = request.substr(0, request.find("\r\n"));
         }
         const auto lineEnd = request.find("\r\n");
         const auto firstSpace = request.find(' ');
@@ -256,6 +267,8 @@ private:
 
     Options options_;
     std::mutex stateMutex_;
+    mutable std::mutex requestMutex_;
+    std::string lastRequestLine_;
     std::string lastAuthorization_;
     std::string lastPath_;
     int requests_ = 0;
