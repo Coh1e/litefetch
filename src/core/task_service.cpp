@@ -251,6 +251,14 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         if (task.state == TaskState::Cancelled)
             return failure("task was cancelled; use an explicit retry command");
         if (active_.contains(command.taskId)) return failure("task is already running");
+        if (command.cancelBeforeStart && command.cancelBeforeStart->load()) {
+            // The caller stopped this task before the start got here; leave the
+            // stored state alone (the stop already wrote it) and report it.
+            CommandResult result;
+            result.ok = true;
+            result.task = task;
+            return result;
+        }
         if (pendingStop_.erase(command.taskId) > 0) {
             // A stop landed between the decision to start and this registration;
             // honour it instead of resurrecting the transfer.

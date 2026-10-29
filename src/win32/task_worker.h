@@ -139,6 +139,8 @@ private:
         std::string taskId;
         std::thread thread;
         std::shared_ptr<std::atomic_bool> finished;
+        // Set when a pause or stop arrives before the job reaches the service.
+        std::shared_ptr<std::atomic_bool> cancelBeforeStart;
     };
 
     void controlLoop();

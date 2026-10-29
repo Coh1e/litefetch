@@ -169,6 +169,11 @@ void TaskWorker::postPause(std::string taskId)
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
+        // A start that has not reached the service yet must not run at all.
+        for (auto& job : jobs_) {
+            if (job.taskId == command.taskId && job.cancelBeforeStart)
+                job.cancelBeforeStart->store(true);
+        }
         queue_.push_back(std::move(command));
     }
     condition_.notify_all();
@@ -203,6 +208,10 @@ void TaskWorker::postCancel(std::string taskId)
     {
         std::lock_guard lock(mutex_);
         if (stopping_) return;
+        for (auto& job : jobs_) {
+            if (job.taskId == command.taskId && job.cancelBeforeStart)
+                job.cancelBeforeStart->store(true);
+        }
         queue_.push_back(std::move(command));
     }
     condition_.notify_all();
@@ -528,11 +537,14 @@ void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
         if (job.taskId == taskId && !job.finished->load()) return; // already running
     }
     auto finished = std::make_shared<std::atomic_bool>(false);
+    auto cancelFlag = std::make_shared<std::atomic_bool>(false);
     StartJob job;
     job.taskId = taskId;
     job.finished = finished;
+    job.cancelBeforeStart = cancelFlag;
     try {
-        job.thread = std::thread([this, taskId, restartFromZero, username, password, forceVerify, finished] {
+        job.thread = std::thread([this, taskId, restartFromZero, username, password, forceVerify,
+                                      finished, cancelFlag] {
             SetThreadDescription(GetCurrentThread(), L"litefetch-transfer");
             try {
                 StartTaskCommand start;
@@ -541,6 +553,7 @@ void TaskWorker::launchStart(const std::string& taskId, bool restartFromZero,
                 start.username = username;
                 start.password = password;
                 start.forceVerify = forceVerify;
+                start.cancelBeforeStart = cancelFlag;
                 const auto result = service_->execute(start);
                 if (!result.ok && !result.error.empty()) publishError("任务失败: " + result.error);
             } catch (const std::exception& error) {

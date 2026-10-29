@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <atomic>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -82,6 +84,9 @@ struct AddTaskCommand {
 };
 struct StartTaskCommand {
     std::string taskId;
+    // Set by a caller that may stop the task before the start reaches the
+    // service: the start then returns without running anything.
+    std::shared_ptr<std::atomic_bool> cancelBeforeStart;
     // The user confirmed starting over after the server refused to resume or
     // the resource changed. Otherwise the stored partial bytes are kept.
     bool restartFromZero = false;
