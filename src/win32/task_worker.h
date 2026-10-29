@@ -127,6 +127,8 @@ public:
     void shutdown();
 
     WorkerSnapshot snapshot();
+    // The completion action the worker itself is holding.
+    int onAllCompleteForTest() const { return onAllComplete_; }
     // Test seams: replace the clock and tick the schedule without waiting for a
     // real minute to arrive.
     void setScheduleClockForTest(std::function<int()> minuteOfDay);

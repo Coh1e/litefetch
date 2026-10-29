@@ -91,3 +91,28 @@ the window reads the completion action  → 通过（窗口侧是 2）
 
 - 为 0 → 确认构造期漏赋值，补上；
 - 为 2 → 继续查 `noteBatchProgress()` 的实际执行路径（加计数即可）。
+## 2026-10-29 第五轮：更正上一轮的错误结论
+
+**上一轮我写错了**。当时说"设置已保存、窗口读到 2"的两条断言，实际从未被写入文件（PowerShell 的
+字符串替换静默没匹配上），我看到的只是"用例通过"，却把它当成了断言通过的证据。
+
+这一轮把断言真正写进文件后，第一次运行就红了：
+
+```
+FAIL: the window holds the completion action: 0
+```
+
+**真实情况**：`saveSettings` 之后新建的窗口，`completionAction_` 是 **0**——保存的完成动作没有被加载。
+这才是"完成动作从不触发"的直接原因，也是 #25 的真实缺陷。
+
+## 本轮附带修掉的一个真实竞态
+
+`launchStartNow()` 里 `jobs_.push_back()` 在锁外，`batchActive_ = true` 在随后的锁内。
+快速传输可能在两者之间结束并被回收，导致 `noteBatchProgress()` 看到 `batchActive_ == false` 提前返回，
+批次结束事件永远不产生（`batchActive_` 还会错误地停在 true）。现在两者在同一把锁内完成。
+
+## 下一步
+
+1. 查 `MainWindow` 构造时从哪里读设置（`options` 还是仓库）；若读的是启动时的快照，需要改成读仓库；
+2. 让"保存后新建窗口能读到完成动作"这条断言转绿；
+3. 再加"任务跑完 → `completedBatchesForTest() > 0` → 窗口自行销毁"的完整链路断言。

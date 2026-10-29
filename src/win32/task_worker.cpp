@@ -872,10 +872,13 @@ void TaskWorker::launchStartNow(const std::string& taskId, bool restartFromZero,
         publishError(std::string("无法启动任务线程: ") + error.what());
         return;
     }
-    jobs_.push_back(std::move(job));
+    // The job and the "a batch is in flight" flag go in together: a fast
+    // transfer can finish before the next line, and a reap that saw the job
+    // without the flag would end the batch before it was ever recorded, leaving
+    // the completion action with nothing to fire on.
     {
         std::lock_guard lock(mutex_);
-        // A batch is in flight; its end is what the completion action waits for.
+        jobs_.push_back(std::move(job));
         batchActive_ = true;
     }
     reload();
