@@ -7,11 +7,11 @@
 ```
 cmd /c test-local.cmd
 → 100% tests passed, 0 tests failed out of 23
-→ Total Test time (real) = 166.20 s   (2026-10-30 复核)
+→ Total Test time (real) = 163.75 s   (2026-10-30 收尾复跑)
 ```
 
 - 23 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
-- 测试与票面的对应关系见 `docs/specs/verification-index.md`；
+- 测试与票面的对应关系见 `docs/specs/verification-index.md`，已知偶发见 `docs/specs/known-flakes.md`；
 - 发布包：`out/package/litefetch-0.1.0`，13 个文件 / 16.2 MiB；
 - 包内 smoke：窗口 219 ms 出现、退出码 0（`.pi/evidence/final/`）。
 

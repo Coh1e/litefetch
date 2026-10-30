@@ -8,8 +8,8 @@
 | 测试 | 症状 | 实测频率 | 已做的处理 | 下一步 |
 |---|---|---|---|---|
 | `core-bt` | 早前：`seeder listens on a loopback port` / 端口报 0 / 30 s 没传完。**根因已定位**：Windows 保留整段 UDP 端口（`netsh int ipv4 show excludedportrange protocol=udp`），libtorrent 要在同一号上同时监听 TCP 与 uTP，落在保留段就 `[sock_bind] [uTP] access denied` | 修复前 8 轮 1 次、6 轮 1 次；修复后 **10 轮 1 次（且为 120 s 挂死而非断言）** | 预留端口时同时探测 TCP 与 UDP；两处端口检查有界等待并读 listen alert；失败信息带 `peers/wanted/done/rate`；`core-bt` 的 TIMEOUT 提到 180 s（挂死护栏） | 那一次挂死未定位。**已加阶段日志**：`%TEMP%\core-bt-trace.log` 记录 `seeder started / leech loop entered / stopping seeder / seeder joined`，挂死时最后一次被杀进程写下的是哪一行就是卡点。之后 12 轮全绿（2026-10-30） |
-| `core-bt`（早前） | `seeder listens on a loopback port` 5.9 s 失败 | 偶发 | 端口从 5 s 有界等待改为 15 s，并改读 alert | 同上 |
-| `ui-window` | `download did not publish`（30 s 内文件没落地） | 2026-10-28 约 1/3；2026-10-30 连续 12 次整套运行 0 次 | 选行落在别的任务上的竞态已修（确认目标任务离开"等待中"，否则重选一次）；超时信息补已写/期望字节与 worker 任务状态 | 复现时看失败信息里的 `task=` 与 `wrote=/expected=`，区分"没启动"与"peer 卡住" |
+
+| `ui-window` | `download did not publish`（30 s 内文件没落地） | 2026-10-28 约 1/3；**2026-10-30 共 19 次整套运行 0 次** | 选行落在别的任务上的竞态已修；超时信息补已写/期望字节与 worker 任务状态 | 已按此结论关闭 #32（`.pi/evidence/32/`）；再出现时看 `task=` 与 `wrote=/expected=` 直接重开 |
 
 ## 遇到偶发时的做法
 
