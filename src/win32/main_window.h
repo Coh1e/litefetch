@@ -8,6 +8,8 @@
 #endif
 #include <windows.h>
 
+#include <functional>
+
 #include <commctrl.h>
 #include <shellapi.h>
 
@@ -60,6 +62,12 @@ public:
     int completedBatchesForTest() { return worker_ ? worker_->snapshot().allCompleteSequence : 0; }
     // What the worker itself holds, as opposed to what the window shows.
     int workerCompletionActionForTest() const { return worker_ ? worker_->onAllCompleteForTest() : -1; }
+    // The folder action ends in Explorer, which a test cannot observe; replacing
+    // the launcher makes the decision itself observable.
+    void setFolderOpenerForTest(std::function<void(const std::filesystem::path&)> opener)
+    {
+        folderOpener_ = std::move(opener);
+    }
     // Exposed for the window harness: the status text the list shows.
     std::string errorOfTaskNamed(const std::string& name) const
     {
@@ -116,6 +124,7 @@ private:
     void setSelectedPriority(int priority);
     void openDownloadFolder();
     void removeTrayIcon();
+
     void showTrayMenu();
 
     void createFont();
@@ -235,6 +244,8 @@ private:
     std::array<std::int64_t, 4> traffic_{};
     std::uint64_t lastCompletionSequence_ = 0;
     int completionAction_ = 0;
+    // Replaced by the test harness so the folder decision can be observed.
+    std::function<void(const std::filesystem::path&)> folderOpener_;
     std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
     bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;

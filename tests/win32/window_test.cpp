@@ -713,6 +713,42 @@ void runChecks()
         check(quit, "second window closes cleanly");
     }
 
+    // "Open the folder when everything finishes" ends in Explorer, which no test
+    // can watch; replacing the launcher makes the decision observable, and that
+    // decision is the part the user configured.
+    {
+        {
+            std::filesystem::create_directories(options.downloadDirectory);
+            TaskRepository repository(options.databasePath);
+            TaskService service(repository);
+            const auto added = service.execute(AddTaskCommand{fixture.url("/folder-src.bin"),
+                (options.downloadDirectory / "folder.bin").string()});
+            check(added.ok, ("a task is queued for the folder action: " + added.error).c_str());
+            Settings settings = loadSettings(repository);
+            settings.onAllComplete = 1; // open the download folder
+            saveSettings(repository, settings);
+        }
+        MainWindow window(options);
+        std::filesystem::path opened;
+        window.setFolderOpenerForTest([&](const std::filesystem::path& path) { opened = path; });
+        check(window.create(instance, SW_SHOWNORMAL), "window opens with the folder action");
+        const HWND handle = window.handle();
+        const HWND list = childOfClass(handle, L"SysListView32");
+        check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) > 0; }, 5000),
+            "the window lists the tasks");
+        selectRow(list, rowOf(list, L"folder.bin"));
+        SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        check(pumpUntil([&] { return window.statusOfTaskNamed("folder.bin") == "已完成"; }, 20000),
+            ("the task completes: " + window.statusOfTaskNamed("folder.bin")
+                + " | " + window.errorOfTaskNamed("folder.bin")).c_str());
+        check(pumpUntil([&] { return !opened.empty(); }, 5000),
+            "the download folder is opened when the last transfer ends");
+        check(std::filesystem::equivalent(opened, options.downloadDirectory),
+            "the opened folder is the download folder");
+        SendMessageW(handle, WM_CLOSE, 0, 0);
+        pumpUntil([] { return false; }, 1000);
+    }
+
     // A saved completion action must survive the next start, and a finished
     // transfer must be reported as the end of a batch: that report is what the
     // action hangs on, and without it the setting has nothing to trigger.
@@ -721,9 +757,9 @@ void runChecks()
             std::filesystem::create_directories(options.downloadDirectory);
             TaskRepository repository(options.databasePath);
             TaskService service(repository);
-            const auto added = service.execute(AddTaskCommand{fixture.url("/payload.bin"),
+            const auto added = service.execute(AddTaskCommand{fixture.url("/completion-src.bin"),
                 (options.downloadDirectory / "completion.bin").string()});
-            check(added.ok, "the completion task is queued");
+            check(added.ok, ("the completion task is queued: " + added.error).c_str());
             Settings settings = loadSettings(repository);
             settings.onAllComplete = 2;
             saveSettings(repository, settings);

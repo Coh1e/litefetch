@@ -1587,6 +1587,10 @@ void MainWindow::refreshFromWorker()
 
 void MainWindow::openDownloadFolder()
 {
+    if (folderOpener_) {
+        folderOpener_(options_.downloadDirectory);
+        return;
+    }
     // Explorer is launched with the folder, never with a file selection, so a
     // missing file cannot turn into an error dialog.
     ShellExecuteW(hwnd_, L"open", options_.downloadDirectory.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
