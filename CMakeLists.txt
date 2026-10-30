@@ -1,14 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
 # Keep compiler debug information in project object files; no shared PDB server.
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
-project(NativeDownloader VERSION 0.1.0 LANGUAGES CXX)
+# C is enabled because SQLite is now compiled from its amalgamation here.
+project(NativeDownloader VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(CURL REQUIRED)
-find_package(unofficial-sqlite3 CONFIG REQUIRED)
+option(LITEFETCH_FETCH_DEPS "Build dependencies from source with FetchContent" ON)
+if(LITEFETCH_FETCH_DEPS)
+    include(cmake/dependencies.cmake)
+else()
+    find_package(CURL REQUIRED)
+    find_package(unofficial-sqlite3 CONFIG REQUIRED)
+endif()
 
 # Qt-free task command/snapshot/persistence core used by the Win32 product.
 add_library(litefetch-core STATIC
@@ -44,11 +50,16 @@ add_library(litefetch-core STATIC
     src/win32/traffic_text.cpp src/win32/traffic_text.h
     src/core/task_service.cpp src/core/task_service.h)
 target_include_directories(litefetch-core PUBLIC src/core)
+if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(litefetch-core PRIVATE nlohmann_json::nlohmann_json)
+endif()
 target_link_libraries(litefetch-core PUBLIC CURL::libcurl PRIVATE unofficial::sqlite3::sqlite3 crypt32)
 
 # BitTorrent lives in its own library so binaries that never touch torrents do
 # not link libtorrent at all.
-find_package(LibtorrentRasterbar CONFIG REQUIRED)
+if(NOT LITEFETCH_FETCH_DEPS)
+    find_package(LibtorrentRasterbar CONFIG REQUIRED)
+endif()
 add_library(litefetch-bt STATIC src/core/bt_engine.cpp src/core/bt_engine.h)
 target_include_directories(litefetch-bt PUBLIC src/core)
 target_link_libraries(litefetch-bt PUBLIC litefetch-core LibtorrentRasterbar::torrent-rasterbar)
@@ -134,6 +145,11 @@ if(BUILD_TESTING)
     add_executable(win32-native-bridge-tests tests/win32/native_bridge_test.cpp)
     target_include_directories(win32-native-bridge-tests PRIVATE tests/core src/win32)
     target_link_libraries(win32-native-bridge-tests PRIVATE litefetch-core ws2_32)
+    if(TARGET nlohmann_json::nlohmann_json)
+        # This test includes the JSON header itself, so it needs the target rather
+        # than borrowing the private link of litefetch-core.
+        target_link_libraries(win32-native-bridge-tests PRIVATE nlohmann_json::nlohmann_json)
+    endif()
     add_test(NAME win32-native-bridge COMMAND win32-native-bridge-tests)
     set_tests_properties(win32-native-bridge PROPERTIES TIMEOUT 60)
     add_executable(core-credentials-tests tests/core/credentials_test.cpp)

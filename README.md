@@ -15,12 +15,12 @@
 
 ## 环境准备、构建与运行
 
-现有构建使用 MSVC、CMake/Ninja 与项目内 vcpkg（libcurl、libtorrent、SQLite 等）。
+构建使用 MSVC、CMake/Ninja。依赖（libcurl、SQLite、Boost、libtorrent、nlohmann/json）由 CMake 的
+FetchContent 按固定版本从源码拉取并编译，不再需要 vcpkg 或其他系统级包管理器。
 
 ### 构建、测试与运行
 
-前置：在项目内准备 vcpkg 依赖（本仓库使用 `.deps/`，被忽略，不做全局安装；可运行
-`powershell -File scripts\bootstrap-core-deps.ps1`）。先加载 MSVC 环境（`vcvars64.bat`），然后：
+先加载 MSVC 环境（`vcvars64.bat`），然后：
 
 ```powershell
 cmake --preset windows-core
@@ -29,7 +29,8 @@ cmd /c test-local.cmd     # 23 个测试，约 165–185 秒
 out\build\windows-core\litefetch-win32.exe
 ```
 
-`windows-core` 预设使用项目内最小依赖树，并保持 `TEMP`/`TMP` 在项目内。命令行入口：
+首次配置会下载并编译依赖（libtorrent 与 Boost 占主要时间），全部落在
+`out/build/<preset>/_deps` 内，不写入系统目录。`TEMP`/`TMP` 仍保持在项目内。命令行入口：
 
 ```powershell
 out/build/windows-core/litefetch-core-cli.exe add --db data/tasks.db --source http://127.0.0.1:8080/file.bin --destination D:\Downloads\file.bin

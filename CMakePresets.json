@@ -7,20 +7,10 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "environment": {
-        "VCPKG_DOWNLOADS": "${sourceDir}/.deps/downloads",
-        "VCPKG_DEFAULT_BINARY_CACHE": "${sourceDir}/.deps/binary-cache",
-        "VCPKG_BINARY_SOURCES": "clear;files,${sourceDir}/.deps/binary-cache,readwrite",
-        "VCPKG_DISABLE_METRICS": "1",
         "TEMP": "${sourceDir}/.deps/tmp",
-        "TMP": "${sourceDir}/.deps/tmp",
-        "X_VCPKG_REGISTRIES_CACHE": "${sourceDir}/.deps/registries"
+        "TMP": "${sourceDir}/.deps/tmp"
       },
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_HOST_TRIPLET": "x64-windows",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/.deps/installed",
-        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/.deps/buildtrees;--x-packages-root=${sourceDir}/.deps/packages",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/package",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -28,15 +18,9 @@
     {
       "name": "windows-core",
       "inherits": "windows-base",
-      "environment": {
-        "VCPKG_ROOT": "${sourceDir}/.deps/vcpkg"
-      },
       "cacheVariables": {
         "LITEFETCH_BUILD_QT_LEGACY": "OFF",
-        "VCPKG_MANIFEST_MODE": "OFF",
-        "VCPKG_MANIFEST_INSTALL": "OFF",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/.deps/installed-core",
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/.deps/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        "LITEFETCH_FETCH_DEPS": "ON"
       }
     },
     {
@@ -47,6 +31,23 @@
         "CMAKE_BUILD_TYPE": "Release",
         "LITEFETCH_BUILD_QT_LEGACY": "OFF"
       }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-core",
+      "configurePreset": "windows-core"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-core",
+      "configurePreset": "windows-core",
+      "output": {"outputOnFailure": true}
     }
   ]
 }

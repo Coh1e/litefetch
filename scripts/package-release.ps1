@@ -41,11 +41,9 @@ if (-not $dumpbin) {
 }
 if (-not $dumpbin) { throw "dumpbin not found" }
 
-$searchRoots = @(
-    (Join-Path $root '.deps/installed-core/x64-windows/bin'),
-    (Join-Path $root '.deps/installed-core/x64-windows/debug/bin'),
-    $buildDir
-)
+# Dependencies are built from source by CMake, so the only place to look for a
+# needed DLL is the build output itself.
+$searchRoots = @($buildDir)
 $copied = @{}
 $queue = New-Object System.Collections.Queue
 $queue.Enqueue($exe)
