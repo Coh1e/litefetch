@@ -12,7 +12,9 @@ Set-Location $root
 $exempt = @(
     'docs/history/',
     'docs/research/',
-    'docs/specs/final-report.md'
+    'docs/specs/final-report.md',
+    # The check carries the pattern itself; scanning it would always fail.
+    'scripts/check-no-vcpkg.ps1'
 )
 
 # The names a live build entry would use. A sentence explaining the move away from
