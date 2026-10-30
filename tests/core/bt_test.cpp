@@ -13,6 +13,7 @@
 #include "test_support.h"
 
 #include <libtorrent/add_torrent_params.hpp>
+#include <libtorrent/alert_types.hpp>
 #include <libtorrent/bencode.hpp>
 #include <libtorrent/entry.hpp>
 #include <libtorrent/address.hpp>
@@ -45,14 +46,38 @@ using namespace litefetch::test;
 
 namespace {
 
-lt::settings_pack localSettings()
+// A loopback port this process has just seen free. Letting libtorrent pick an
+// ephemeral port itself was a flake source: under load its bind could fail and the
+// retry left listen_port() at zero for many seconds, which the test read as a
+// broken session. Reserving the port first leaves the bind as the only failing
+// step, and the listen alert now reports why.
+std::uint16_t freeLoopbackPort()
+{
+    const SOCKET probe = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (probe == INVALID_SOCKET) return 0;
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    std::uint16_t port = 0;
+    if (::bind(probe, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0) {
+        int length = sizeof(address);
+        if (::getsockname(probe, reinterpret_cast<sockaddr*>(&address), &length) == 0)
+            port = ntohs(address.sin_port);
+    }
+    ::closesocket(probe);
+    return port;
+}
+
+lt::settings_pack localSettings(std::uint16_t port = 0)
 {
     lt::settings_pack pack;
     pack.set_bool(lt::settings_pack::enable_dht, false);
     pack.set_bool(lt::settings_pack::enable_lsd, false);
     pack.set_bool(lt::settings_pack::enable_upnp, false);
     pack.set_bool(lt::settings_pack::enable_natpmp, false);
-    pack.set_str(lt::settings_pack::listen_interfaces, "127.0.0.1:0");
+    pack.set_str(lt::settings_pack::listen_interfaces,
+        port == 0 ? "127.0.0.1:0" : "127.0.0.1:" + std::to_string(port));
     pack.set_bool(lt::settings_pack::allow_multiple_connections_per_ip, true);
     return pack;
 }
@@ -93,6 +118,9 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     // Keep seeding well past the leecher window so a slow machine cannot end
     // the share before the second peer finishes.
     seedRequest.seedPolicy = BtSeedPolicy{2, 1.0, 2};
+    // Same reason as the first seeder: reserve the port instead of hoping the
+    // ephemeral pick binds on the first try.
+    seedRequest.listenInterface = "127.0.0.1:" + std::to_string(freeLoopbackPort());
     BtDownloadResult seedResult;
     std::thread seederThread([&] {
         seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {
@@ -146,6 +174,14 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     seederThread.join();
 
     check(seedingUp, "the completed task kept seeding instead of stopping");
+    // The port arrives through a progress callback, and the session can still be
+    // binding when the upload counter moves. Wait for the state instead of a single
+    // sample: a session that is not bound yet is not a failed one.
+    {
+        const auto portDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (listenPort.load() == 0 && std::chrono::steady_clock::now() < portDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     check(listenPort != 0, "the seeding session reported its listen port");
     check(leeched, "a second peer downloaded the torrent from us");
     check(seedUploaded.load() > 0 || seedResult.uploaded > 0,
@@ -182,19 +218,31 @@ void bitTorrentRoundTrip(TorrentFlavour flavour)
     }
 
     // Seed the fixture from a second session on loopback.
-    lt::session seeder{lt::session_params(localSettings())};
+    lt::session seeder{lt::session_params(localSettings(freeLoopbackPort()))};
     lt::add_torrent_params seedParams = lt::load_torrent_buffer(torrentBytes);
     seedParams.save_path = seedDirectory.string();
     seedParams.flags |= lt::torrent_flags::seed_mode;
     const auto seedHandle = seeder.add_torrent(std::move(seedParams));
     // The session binds asynchronously, so asking once right after construction
-    // is a race that shows up on a loaded machine.
+    // is a race that shows up on a loaded machine. This waits for a state (a bound
+    // port) and keeps any failure the session reports, so a stuck bind says why
+    // instead of only that the port never appeared.
     std::uint16_t seedPort = 0;
-    for (int attempt = 0; attempt < 100 && seedPort == 0; ++attempt) {
+    std::string listenFailure;
+    const auto listenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (seedPort == 0 && std::chrono::steady_clock::now() < listenDeadline) {
         seedPort = seeder.listen_port();
+        std::vector<lt::alert*> alerts;
+        seeder.pop_alerts(&alerts);
+        for (const auto* alert : alerts) {
+            if (alert->type() == lt::listen_failed_alert::alert_type) listenFailure = alert->message();
+            if (alert->type() == lt::listen_succeeded_alert::alert_type) listenFailure.clear();
+        }
         if (seedPort == 0) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    check(seedPort != 0, "seeder listens on a loopback port");
+    check(seedPort != 0, listenFailure.empty()
+        ? "seeder listens on a loopback port"
+        : ("seeder listens on a loopback port: " + listenFailure).c_str());
     seeder.wait_for_alert(std::chrono::milliseconds(500));
 
     // Metadata only: the file list is what the selection dialog shows.
