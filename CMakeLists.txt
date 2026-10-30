@@ -8,6 +8,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Warnings are errors for code this repository owns: a corrupted line survived
+# many builds behind a C4067 warning that nobody read. Third-party sources keep
+# their own flags because their warnings are not ours to fix.
+set(LITEFETCH_CXX_FLAGS /W4 /permissive- /utf-8 /WX)
+
 option(LITEFETCH_FETCH_DEPS "Build dependencies from source with FetchContent" ON)
 if(LITEFETCH_FETCH_DEPS)
     include(cmake/dependencies.cmake)
@@ -288,4 +293,34 @@ if(WIN32)
             target_compile_options(ui-window-tests PRIVATE /W4 /permissive- /utf-8)
         endif()
     endif()
+endif()
+
+# Every target this repository defines gets the same warning budget. Listing them
+# is dull but it keeps a new target from quietly skipping the check, and it leaves
+# fetched dependencies on their own flags.
+if(MSVC)
+    # Product code must be warning-free: that is where a corrupted line hid for
+    # many builds. Test and tool code keeps the same warning level but does not
+    # fail the build, since their deprecation noise says nothing about the product.
+    set(LITEFETCH_PRODUCT_TARGETS
+        litefetch-core litefetch-bt litefetch-core-cli litefetch-ui-model
+        litefetch-win32-runtime litefetch-win32-ui litefetch-win32 litefetch-browser-host)
+    set(LITEFETCH_SUPPORT_TARGETS
+        litefetch-ed2khash litefetch-ed2kseed litefetch-ed2kget
+        core-identity-tests core-store-tests core-service-tests core-storage-failure-tests
+        core-unicode-path-tests ui-model-tests ui-columns-tests ui-view-tests ui-batch-tests
+        win32-native-bridge-tests core-credentials-tests core-browser-bridge-tests
+        core-native-host-tests core-native-frame-tests core-schedule-tests core-traffic-tests
+        core-low-usage-tests core-rate-limit-tests core-kad-tests core-ed2k-tests core-bt-tests
+        ui-worker-tests ui-window-tests)
+    foreach(target IN LISTS LITEFETCH_PRODUCT_TARGETS)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE ${LITEFETCH_CXX_FLAGS})
+        endif()
+    endforeach()
+    foreach(target IN LISTS LITEFETCH_SUPPORT_TARGETS)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+        endif()
+    endforeach()
 endif()

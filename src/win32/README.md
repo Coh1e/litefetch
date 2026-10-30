@@ -41,17 +41,15 @@ target.
 
 ## Build and run
 
-Prerequisites are the project-local core dependencies (see
-`src/core/README.md`; no global install):
+Prerequisites come from CMake (see `src/core/README.md`; no global install):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-core-deps.ps1
 cmake --preset windows-core
 cmake --build out/build/windows-core
 out/build/windows-core/litefetch-win32.exe
 ```
 
-Run with the vcpkg runtime DLLs on `PATH` (or copy them next to the executable):
+The build is static: nothing has to be put on `PATH` before running the executable:
 
 ```powershell
 $env:PATH = "$PWD/.deps/installed-core/x64-windows/debug/bin;$env:PATH"

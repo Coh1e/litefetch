@@ -241,7 +241,7 @@ void pipeStartingTheApplicationRetries()
         });
     };
     std::string error;
-    const auto answer = pipeRoundTripStarting(pipeName, R"({"id":7,"method":"ping"})", 1000,
+    const auto answer = pipeRoundTripStarting(pipeName, R"({"id":7,"method":"ping"})",
         startApplication, 30, 50, &error);
     if (server.joinable()) server.join();
     check(started, "the application is started when nobody answers");

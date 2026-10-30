@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <string>
-#include "schedule.h"\n\n#include <vector>
+#include <vector>
+
+#include "schedule.h"
 
 namespace litefetch {
 

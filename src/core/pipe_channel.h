@@ -20,7 +20,7 @@ std::string pipeRoundTrip(const std::string& pipeName, const std::string& reques
 // cannot start a program by itself, so the host — which the browser did start —
 // wakes the downloader instead of telling the user to go and open it.
 std::string pipeRoundTripStarting(const std::string& pipeName, const std::string& request,
-    int timeoutMillis, const std::function<void()>& startApplication,
+    const std::function<void()>& startApplication,
     int attempts = 20, int delayMillis = 200, std::string* error = nullptr);
 
 } // namespace litefetch::browser

@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs on `git push`. The whole point is that "the tests were green when I
+# committed" stops being a claim the agent makes about itself: the build and the
+# acceptance suite run here, and a red tree does not leave the machine.
+#
+# Install once with:  git config core.hooksPath .githooks
+# Skip in an emergency:  git push --no-verify
+set -e
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+echo "[pre-push] checking for leftovers of the retired package manager"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-no-vcpkg.ps1 >/dev/null
+
+echo "[pre-push] building"
+if ! cmake --build out/build/windows-core >/tmp/litefetch-pre-push-build.log 2>&1; then
+    echo "[pre-push] build failed; last lines:" >&2
+    tail -n 30 /tmp/litefetch-pre-push-build.log >&2
+    exit 1
+fi
+
+echo "[pre-push] checking every binary can start"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-binaries.ps1 >/dev/null
+
+echo "[pre-push] running the acceptance suite (about three minutes)"
+if ! cmd //c test-local.cmd >/tmp/litefetch-pre-push-test.log 2>&1; then
+    echo "[pre-push] tests failed:" >&2
+    grep -E "\*\*\*|FAIL:" /tmp/litefetch-pre-push-test.log >&2 || tail -n 30 /tmp/litefetch-pre-push-test.log >&2
+    exit 1
+fi
+
+echo "[pre-push] build and tests are green"

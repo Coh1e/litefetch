@@ -62,7 +62,7 @@ int wmain(int argc, wchar_t** argv)
         // The browser starts this host, and this host starts the downloader: the
         // extension has no way to launch a program, and telling the user to open
         // the application first is how "nothing happened" feels.
-        const auto answer = litefetch::browser::pipeRoundTripStarting(pipeName, request, 5000,
+        const auto answer = litefetch::browser::pipeRoundTripStarting(pipeName, request,
             [] { startApplicationBesideThisHost(); });
         if (answer.empty()) throw std::runtime_error(error.empty() ? "no answer" : error);
         return answer;

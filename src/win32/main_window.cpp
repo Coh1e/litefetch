@@ -1180,8 +1180,10 @@ void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
     data.uFlags = NIF_INFO;
     const auto name = task.destination.empty() ? task.source : task.destination;
     const auto fileName = name.substr(name.find_last_of("\\\\/") + 1);
-    const auto title = toWide(fileName);
-    wcsncpy_s(data.szInfoTitle, title.c_str(), _TRUNCATE);
+    // Named for the balloon: a local called `title` hides the window-title helper
+    // that lives at namespace scope.
+    const auto balloonTitle = toWide(fileName);
+    wcsncpy_s(data.szInfoTitle, balloonTitle.c_str(), _TRUNCATE);
     const auto body = task.state == TaskState::Completed ? L"下载完成" : L"下载失败";
     wcsncpy_s(data.szInfo, body, _TRUNCATE);
     data.dwInfoFlags = task.state == TaskState::Completed ? NIIF_INFO : NIIF_ERROR;

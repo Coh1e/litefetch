@@ -59,7 +59,10 @@ public:
     int dpiForTest() const { return dpi_; }
     // How many times the worker has reported that the batch is over.
     int completionActionForTest() const { return completionAction_; }
-    int completedBatchesForTest() { return worker_ ? worker_->snapshot().allCompleteSequence : 0; }
+    std::uint64_t completedBatchesForTest()
+    {
+        return worker_ ? worker_->snapshot().allCompleteSequence : 0;
+    }
     // What the worker itself holds, as opposed to what the window shows.
     int workerCompletionActionForTest() const { return worker_ ? worker_->onAllCompleteForTest() : -1; }
     // The folder action ends in Explorer, which a test cannot observe; replacing

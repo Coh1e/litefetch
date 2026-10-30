@@ -43,17 +43,16 @@ remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
 
 ## Build and verify
 
-Project-local prerequisites (no global install):
+Prerequisites (no global install; CMake fetches the dependencies from source):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-core-deps.ps1
 cmake --preset windows-core
 cmake --build out/build/windows-core
 ctest --test-dir out/build/windows-core --output-on-failure
 ```
 
-`windows-core` uses `.deps/vcpkg` and `.deps/installed-core`, disables the Qt
-legacy target, and keeps temporary files under `.deps/tmp`. CTest also sets
+`windows-core` builds its dependencies from source with CMake FetchContent into
+`out/build/<preset>/_deps`, and keeps temporary files under `.deps/tmp`. CTest also sets
 `LITEFETCH_TEST_TEMP`/`TEMP`/`TMP` for the core tests to `tmp/core-test-temp`
 inside the repository.
 

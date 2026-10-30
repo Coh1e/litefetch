@@ -29,10 +29,25 @@ void appendContact(std::vector<std::uint8_t>& out, const KadContact& contact)
     out.insert(out.end(), contact.id.bytes.begin(), contact.id.bytes.end());
     // Addresses are numeric IPv4 in this subset; a hostname never reaches a
     // datagram.
+    // A small parser rather than sscanf: the CRT flags sscanf as unsafe, and this
+    // project treats warnings as errors so a deprecation cannot be ignored.
+    const auto* text = contact.address.c_str();
+    auto octet = [&text](unsigned& value) {
+        unsigned parsed = 0;
+        int digits = 0;
+        while (*text >= '0' && *text <= '9' && digits < 3) {
+            parsed = parsed * 10 + static_cast<unsigned>(*text - '0');
+            ++text;
+            ++digits;
+        }
+        if (digits == 0 || parsed > 255) return false;
+        value = parsed;
+        return true;
+    };
     unsigned a = 0, b = 0, c = 0, d = 0;
-    if (std::sscanf(contact.address.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
-        a = b = c = d = 0;
-    }
+    const bool parsed = octet(a) && *text++ == '.' && octet(b) && *text++ == '.'
+        && octet(c) && *text++ == '.' && octet(d) && *text == '\0';
+    if (!parsed) a = b = c = d = 0;
     out.push_back(static_cast<std::uint8_t>(a & 0xff));
     out.push_back(static_cast<std::uint8_t>(b & 0xff));
     out.push_back(static_cast<std::uint8_t>(c & 0xff));

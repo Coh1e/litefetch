@@ -12,6 +12,13 @@
 
 README 面向使用者和开发者，介绍项目、环境准备、构建与运行；AGENTS.md 维护代理协作规则及项目配置。详细资料按需拆分并由入口链接，历史资料仅作追溯。术语表只收领域术语，ADR 按需记录重要取舍。
 
+**接手先看**：`docs/specs/verification-index.md`（测试与票面的对应）、`docs/specs/final-report.md`（结论与未验证边界）、`docs/specs/win32-delivery-status.md`（逐票状态）。
+
+## 自动检查
+
+`git config core.hooksPath .githooks` 一次即可：推送前会跑构建、`scripts/check-binaries.ps1`（每个二进制能否启动）、`scripts/check-no-vcpkg.ps1`（是否残留已弃用的包管理器）和 `test-local.cmd`。红灯不推送。
+自有代码 `-W4 /WX`：构建出现警告即失败；测试与工具目标只报警不失败。
+
 ## 项目配置
 
 - **角色与授权**：代理按本项目明确授权执行任务，历史项目的授权不适用于本项目。

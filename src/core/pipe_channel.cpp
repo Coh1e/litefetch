@@ -95,7 +95,7 @@ std::string pipeRoundTrip(const std::string& pipeName, const std::string& reques
 }
 
 std::string pipeRoundTripStarting(const std::string& pipeName, const std::string& request,
-    int timeoutMillis, const std::function<void()>& startApplication,
+    const std::function<void()>& startApplication,
     int attempts, int delayMillis, std::string* error)
 {
     std::string reason;
