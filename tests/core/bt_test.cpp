@@ -138,7 +138,11 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     const bool seedingUp = seeding.load();
 
     bool leeched = false;
+    // Kept for the failure path: "did not finish in time" is not a diagnosis, but
+    // the peer count and the piece counters are.
+    std::string leechSummary = "no attempt";
     if (seedingUp && listenPort != 0) {
+        leechSummary.clear();
         lt::settings_pack probeSettings;
         probeSettings.set_str(lt::settings_pack::listen_interfaces, "127.0.0.1:0");
         probeSettings.set_bool(lt::settings_pack::enable_dht, false);
@@ -157,6 +161,10 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
                 static_cast<unsigned short>(listenPort.load())));
             leecher.wait_for_alert(std::chrono::milliseconds(500));
             const auto status = leechHandle.status();
+            leechSummary = "peers=" + std::to_string(status.num_peers)
+                + " wanted=" + std::to_string(status.total_wanted)
+                + " done=" + std::to_string(status.total_wanted_done)
+                + " rate=" + std::to_string(status.download_rate);
             if (status.total_wanted > 0 && status.total_wanted_done >= status.total_wanted) {
                 leeched = true;
                 break;
@@ -178,12 +186,12 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     // binding when the upload counter moves. Wait for the state instead of a single
     // sample: a session that is not bound yet is not a failed one.
     {
-        const auto portDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        const auto portDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (listenPort.load() == 0 && std::chrono::steady_clock::now() < portDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     check(listenPort != 0, "the seeding session reported its listen port");
-    check(leeched, "a second peer downloaded the torrent from us");
+    check(leeched, ("a second peer downloaded the torrent from us: " + leechSummary).c_str());
     check(seedUploaded.load() > 0 || seedResult.uploaded > 0,
         "the seeding task counted uploaded bytes");
     check(readFile(secondDirectory / "data" / "keep.bin") == payload(64 * 1024),
@@ -229,7 +237,7 @@ void bitTorrentRoundTrip(TorrentFlavour flavour)
     // instead of only that the port never appeared.
     std::uint16_t seedPort = 0;
     std::string listenFailure;
-    const auto listenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    const auto listenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     while (seedPort == 0 && std::chrono::steady_clock::now() < listenDeadline) {
         seedPort = seeder.listen_port();
         std::vector<lt::alert*> alerts;

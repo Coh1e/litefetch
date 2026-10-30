@@ -42,6 +42,11 @@
 | #26 | 高对比目视、纯键盘走查、逐状态画板 | 需要人或真实主题；Figma 页面 02+ 读不到 |
 | #28 | 干净 Windows 全范围验收 | 本机不是干净环境，也无第二台机器 |
 
+## 已知偶发
+
+两个测试在本机偶发失败（`core-bt` 的端口/传输时序、`ui-window` 的早期"文件没落地"）：
+症状、频率与下一步见 [known-flakes](known-flakes.md)。遇到时先看那份清单，不要直接重跑到绿。
+
 ## 非测试证据
 
 - **真实 Chrome 联调**：`docs/research/browser-handoff-real-chrome.md`（扩展 → host → 管道 → 应用 → 建任务）；
