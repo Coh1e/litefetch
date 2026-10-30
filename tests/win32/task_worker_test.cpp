@@ -252,6 +252,50 @@ void magnetMetadataCountsInItsOwnBucket(const std::filesystem::path& root)
         + std::to_string(traffic[0])).c_str());
     worker.shutdown();
 }
+// Settings are written by the options dialog and must come back on the next
+// start: the application used to keep them only in memory, so every restart
+// quietly went back to defaults (speed limit, proxy, concurrency, the completion
+// action). This is the test that would have caught it.
+void settingsSurviveARestart(const std::filesystem::path& root)
+{
+    const auto database = root / "worker-settings.db";
+    Settings saved;
+    saved.speedLimitBytesPerSecond = 4096;
+    saved.httpProxy = "127.0.0.1:3128";
+    saved.renameOnConflict = true;
+    saved.saveByCategory = true;
+    saved.maxConcurrentDownloads = 2;
+    saved.onAllComplete = 2;
+    saved.lowUsageIdleSeconds = 30;
+    {
+        TaskWorker worker(database);
+        std::string error;
+        check(worker.start(error), ("worker start failed: " + error).c_str());
+        worker.applySettings(saved);
+        const auto held = worker.settings();
+        checkEqual(held.speedLimitBytesPerSecond, saved.speedLimitBytesPerSecond,
+            "the worker holds the speed limit it was given");
+        worker.shutdown();
+    }
+    {
+        TaskWorker worker(database);
+        std::string error;
+        check(worker.start(error), ("worker restart failed: " + error).c_str());
+        const auto restored = worker.settings();
+        checkEqual(restored.speedLimitBytesPerSecond, saved.speedLimitBytesPerSecond,
+            "the speed limit survives a restart");
+        checkEqual(restored.httpProxy, saved.httpProxy, "the proxy survives a restart");
+        check(restored.renameOnConflict, "the rename rule survives a restart");
+        check(restored.saveByCategory, "save-by-category survives a restart");
+        checkEqual(restored.maxConcurrentDownloads, saved.maxConcurrentDownloads,
+            "the concurrency limit survives a restart");
+        checkEqual(restored.onAllComplete, saved.onAllComplete,
+            "the completion action survives a restart");
+        checkEqual(restored.lowUsageIdleSeconds, saved.lowUsageIdleSeconds,
+            "the low-usage timeout survives a restart");
+        worker.shutdown();
+    }
+}
 void theLastFinishedTransferIsAnnounced(const std::filesystem::path& root)
 {
     const auto body = payload(256 * 1024);
@@ -509,6 +553,7 @@ int body()
     priorityJumpsTheQueue(root.path());
     lowUsageBacksOffWhenIdle(root.path());
     magnetMetadataCountsInItsOwnBucket(root.path());
+    settingsSurviveARestart(root.path());
     theLastFinishedTransferIsAnnounced(root.path());
     theScheduleStartsQueuedTasks(root.path());
     return 0;
