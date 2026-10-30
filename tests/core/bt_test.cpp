@@ -46,27 +46,60 @@ using namespace litefetch::test;
 
 namespace {
 
-// A loopback port this process has just seen free. Letting libtorrent pick an
-// ephemeral port itself was a flake source: under load its bind could fail and the
-// retry left listen_port() at zero for many seconds, which the test read as a
-// broken session. Reserving the port first leaves the bind as the only failing
-// step, and the listen alert now reports why.
+// Reserves loopback ports that both TCP and UDP can bind. libtorrent listens for
+// TCP and uTP on the same number, and Windows reserves whole UDP ranges (Hyper-V
+// and friends) where that bind fails with "access denied" - a port from one of
+// those ranges looked exactly like a broken session, and it is where the flake
+// came from. All probes stay open until every number is collected, so the
+// operating system cannot hand the same port out twice.
+std::vector<std::uint16_t> reserveLoopbackPorts(std::size_t count)
+{
+    std::vector<SOCKET> probes;
+    std::vector<std::uint16_t> ports;
+    while (ports.size() < count) {
+        const SOCKET tcp = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (tcp == INVALID_SOCKET) break;
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        if (::bind(tcp, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
+            ::closesocket(tcp);
+            break;
+        }
+        int length = sizeof(address);
+        if (::getsockname(tcp, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+            ::closesocket(tcp);
+            break;
+        }
+        const auto port = ntohs(address.sin_port);
+        const SOCKET udp = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        bool udpBound = false;
+        if (udp != INVALID_SOCKET) {
+            sockaddr_in udpAddress{};
+            udpAddress.sin_family = AF_INET;
+            udpAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            udpAddress.sin_port = htons(port);
+            udpBound = ::bind(udp, reinterpret_cast<const sockaddr*>(&udpAddress),
+                           sizeof(udpAddress)) == 0;
+        }
+        if (!udpBound) {
+            if (udp != INVALID_SOCKET) ::closesocket(udp);
+            ::closesocket(tcp);
+            continue;  // reserved range: look for another port
+        }
+        probes.push_back(tcp);
+        probes.push_back(udp);
+        ports.push_back(port);
+    }
+    for (const SOCKET probe : probes) ::closesocket(probe);
+    return ports;
+}
+
 std::uint16_t freeLoopbackPort()
 {
-    const SOCKET probe = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (probe == INVALID_SOCKET) return 0;
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = 0;
-    std::uint16_t port = 0;
-    if (::bind(probe, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0) {
-        int length = sizeof(address);
-        if (::getsockname(probe, reinterpret_cast<sockaddr*>(&address), &length) == 0)
-            port = ntohs(address.sin_port);
-    }
-    ::closesocket(probe);
-    return port;
+    const auto ports = reserveLoopbackPorts(1);
+    return ports.empty() ? 0 : ports.front();
 }
 
 lt::settings_pack localSettings(std::uint16_t port = 0)
@@ -120,7 +153,8 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     seedRequest.seedPolicy = BtSeedPolicy{2, 1.0, 2};
     // Same reason as the first seeder: reserve the port instead of hoping the
     // ephemeral pick binds on the first try.
-    seedRequest.listenInterface = "127.0.0.1:" + std::to_string(freeLoopbackPort());
+    const auto seedPorts = reserveLoopbackPorts(2);
+    seedRequest.listenInterface = "127.0.0.1:" + std::to_string(seedPorts.at(0));
     BtDownloadResult seedResult;
     std::thread seederThread([&] {
         seedResult = btDownload(seedRequest, seedingCancelled, [&](const BtProgressInfo& update) {
@@ -144,7 +178,10 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     if (seedingUp && listenPort != 0) {
         leechSummary.clear();
         lt::settings_pack probeSettings;
-        probeSettings.set_str(lt::settings_pack::listen_interfaces, "127.0.0.1:0");
+        // The leecher gets its own reserved port: an ephemeral bind could take the
+        // number just released by another reservation.
+        probeSettings.set_str(lt::settings_pack::listen_interfaces,
+            "127.0.0.1:" + std::to_string(seedPorts.at(1)));
         probeSettings.set_bool(lt::settings_pack::enable_dht, false);
         probeSettings.set_bool(lt::settings_pack::enable_lsd, false);
         lt::session leecher{lt::session_params(probeSettings)};

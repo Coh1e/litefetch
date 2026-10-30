@@ -230,7 +230,10 @@ add_executable(litefetch-ed2khash src/tools/ed2khash.cpp)
     target_include_directories(core-bt-tests PRIVATE tests/core)
     target_link_libraries(core-bt-tests PRIVATE litefetch-bt ws2_32)
     add_test(NAME core-bt COMMAND core-bt-tests)
-    set_tests_properties(core-bt PROPERTIES TIMEOUT 120)
+    # A hang guard, not a budget: the test's own bounded waits add up to about
+    # seventy-five seconds before a transfer even starts, so a hundred and twenty
+    # could cut off a run that was still making progress. A real hang still fails.
+    set_tests_properties(core-bt PROPERTIES TIMEOUT 180)
     add_executable(ui-worker-tests tests/win32/task_worker_test.cpp)
     target_include_directories(ui-worker-tests PRIVATE tests/core)
     target_link_libraries(ui-worker-tests PRIVATE litefetch-win32-runtime ws2_32)

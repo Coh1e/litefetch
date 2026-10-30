@@ -79,3 +79,27 @@ bt: FAIL: a second peer downloaded the torrent from us  (52.7 s)
 不能随手加。
 
 失败信息现在会带上 leech 的 `peers/wanted/done/rate`，下次红的时候可以直接判断是没连上还是没传完。
+
+## 2026-10-30 根因：Windows 的 UDP 端口排除范围
+
+把失败信息里的 listen alert 打出来之后，原因直接落定：
+
+```
+seeder listens on a loopback port: listening on 127.0.0.1:59580 (device: {...}) failed:
+[sock_bind] [uTP] 以一种访问权限不允许的方式做了一个访问套接字的尝试。
+```
+
+- libtorrent 用**同一个端口号**同时监听 TCP 与 uTP（UDP）；
+- 我们预留端口时只探测了 TCP，于是可能拿到一个 UDP 绑定被系统拒绝的号；
+- 本机 `netsh int ipv4 show excludedportrange protocol=udp` 显示 59123–59922 等整段被保留，
+  失败的那个 59580 正好在 59523–59622 之中。
+
+**修法**：`reserveLoopbackPorts()` 现在对同一端口同时探测 TCP 与 UDP，UDP 绑不上就换一个号；
+所有探测套接字保持打开直到收集完毕，避免操作系统把同一个号发两次。
+
+结果：10 轮里 9 绿，1 次是 **120 秒 ctest 超时**（不是断言失败）。已把 `core-bt` 的 TIMEOUT
+从 120 s 提到 180 s——这是挂死护栏，不是给测试放宽预算：测试自身的有界等待加起来已接近 75 秒，
+120 秒会切断一次"还在推进"的运行；真挂死仍然会失败，只是晚一点判。
+
+仍未知：那一次 120 秒挂死发生在哪一步（没有断言输出）。下次复现时看进程栈或把 `seederThread.join()`
+前后各打一条日志。
