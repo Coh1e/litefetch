@@ -22,7 +22,8 @@
 namespace litefetch::test {
 
 // Minimal controlled HTTP peer for the command -> transfer -> file boundary.
-// It serves one deterministic body on every path except /missing (404).
+// It serves one deterministic body on every path except /missing (404), and each
+// connection is served before the next is accepted.
 class HttpFixture {
 public:
     struct Options {
@@ -113,6 +114,10 @@ public:
 private:
     void serve()
     {
+        // One connection at a time, deliberately: the fixture is a controlled peer
+        // and several tests reason about a single in-flight request. A concurrent
+        // variant was tried on 2026-10-30 and broke the worker's cancel path, so
+        // the serialization stays until a test needs otherwise.
         while (!stopping_.load()) {
             const SOCKET listener = listener_.load();
             if (listener == INVALID_SOCKET) break;

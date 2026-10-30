@@ -518,8 +518,20 @@ void runChecks()
         }, 3000), "properties is enabled for a single selection");
         // Start the real transfer from the list and wait for the published file.
         // Select by name: rows added in the same millisecond have no stable order.
+        // The list is rebuilt on a timer, so a selection made just before a
+        // rebuild can land on another row; the command then starts the wrong task
+        // and this one sits in the queue. Verify the intended task started, and
+        // re-issue once rather than waiting thirty seconds for nothing.
         selectRow(list, rowOf(list, L"payload.bin"));
         SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        const auto queued = [&] {
+            const auto status = window.statusOfTaskNamed("payload.bin");
+            return status == "等待中" || status == "已暂停";
+        };
+        if (!pumpUntil([&] { return !queued(); }, 3000)) {
+            selectRow(list, rowOf(list, L"payload.bin"));
+            SendMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TASK_START, 0), 0);
+        }
         const bool published = pumpUntil([&] {
             std::error_code error;
             return std::filesystem::file_size(destination, error) == body.size();
@@ -529,11 +541,21 @@ void runChecks()
             // end() from another is undefined behaviour, and it crashed here as
             // 0xc0000409 instead of reporting why the download stalled.
             const int stalledRow = rowOf(list, L"payload.bin");
+            std::error_code sizeError;
+            const auto written = std::filesystem::file_size(destination, sizeError);
             std::string detail = "row=" + std::to_string(stalledRow)
                 + " text=" + utf8FromUtf16(stalledRow >= 0 ? itemText(list, stalledRow, 5) : std::wstring())
                 + " status=" + utf8FromUtf16(statusText(status, 0))
                 + " | error=" + utf8FromUtf16(statusText(status, 3))
-                + " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+                + " rows=" + std::to_string(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
+                + " wrote=" + (sizeError ? std::string("none") : std::to_string(written))
+                + " expected=" + std::to_string(body.size())
+                // The worker's own view separates "the transfer is still running"
+                // from "it never started", which is the difference between a slow
+                // peer and a scheduling bug.
+                + " task=" + window.statusOfTaskNamed("payload.bin")
+                + (window.errorOfTaskNamed("payload.bin").empty()
+                    ? std::string() : " taskError=" + window.errorOfTaskNamed("payload.bin"));
             throw std::runtime_error("download did not publish: " + detail);
         }
         check(readBytes(destination) == body, "downloaded bytes match the controlled peer");
