@@ -103,3 +103,11 @@ seeder listens on a loopback port: listening on 127.0.0.1:59580 (device: {...}) 
 
 仍未知：那一次 120 秒挂死发生在哪一步（没有断言输出）。下次复现时看进程栈或把 `seederThread.join()`
 前后各打一条日志。
+## 2026-10-30 收尾：加了阶段日志，12 轮全绿
+
+那一次 120 秒挂死没有留下任何输出，所以先补可观测性再谈定位：测试在每个阶段往
+`%TEMP%\core-bt-trace.log` 追加一行（`seeder started` / `leech loop entered` / `stopping seeder` /
+`seeder joined`）。挂死时进程被 ctest 杀掉，最后一行就是卡点。
+
+之后连续 12 轮：全部通过（17.3–19.3 s），没有再挂。端口根因的修复加上阶段日志，
+本机这条线的偶发从"1/8 断言失败"降为"12/12 通过，挂死未再复现"。

@@ -102,6 +102,19 @@ std::uint16_t freeLoopbackPort()
     return ports.empty() ? 0 : ports.front();
 }
 
+// Appends a phase marker to a file next to the test's temp data. A hang leaves no
+// assertion output, so "where was it stuck" has to be written as it goes; the file
+// survives the process being killed by the test timeout.
+void trace(const std::string& phase)
+{
+    const auto root = testTempRoot();
+    if (root.empty()) return;
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    std::ofstream out(root / "core-bt-trace.log", std::ios::app);
+    out << phase << '\n';
+    out.flush();
+}
 lt::settings_pack localSettings(std::uint16_t port = 0)
 {
     lt::settings_pack pack;
@@ -164,6 +177,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
         });
     });
 
+    trace("seeder started");
     // Wait for the seeding session, then fetch from it. Everything that could
     // throw happens after the thread is joined.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
@@ -192,6 +206,7 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
         // The seeder only holds the first file, so the leecher wants only that
         // file too; asking for the skipped one would wait for pieces nobody has.
         leechHandle.prioritize_files({lt::default_priority, lt::download_priority_t{0}});
+        trace("leech loop entered");
         const auto leechDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (std::chrono::steady_clock::now() < leechDeadline) {
             leechHandle.connect_peer(lt::tcp::endpoint(lt::make_address("127.0.0.1"),
@@ -215,8 +230,10 @@ void uploadToPeer(const std::vector<char>& torrentBytes, const std::filesystem::
     while (seedUploaded.load() == 0 && std::chrono::steady_clock::now() < uploadDeadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
+    trace("stopping seeder");
     seedingCancelled.store(true);
     seederThread.join();
+    trace("seeder joined");
 
     check(seedingUp, "the completed task kept seeding instead of stopping");
     // The port arrives through a progress callback, and the session can still be
