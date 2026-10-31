@@ -297,7 +297,12 @@ CommandResult TaskService::start(const StartTaskCommand& command)
         if (!loaded) return failure("unknown task");
         task = *loaded;
         if (task.state == TaskState::Running) return failure("task is already running");
-        if (task.state == TaskState::Completed) return failure("task is already completed");
+        if (task.state == TaskState::Completed) {
+            // A recheck re-hashes the files already on disk; it is the one start
+            // allowed after completion.
+            if (!(command.forceVerify && torrentSource(task.source)))
+                return failure("task is already completed");
+        }
         if (task.state == TaskState::Cancelled)
             return failure("task was cancelled; use an explicit retry command");
         if (active_.contains(command.taskId)) return failure("task is already running");

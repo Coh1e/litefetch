@@ -800,6 +800,42 @@ void transientFailuresAreRetried(const std::filesystem::path& root)
     require(stuckRun.task.state == TaskState::Failed, "a permanent failure fails the task");
     checkEqual(static_cast<long long>(calls), -94LL, "the retry budget is three attempts");
 }
+// A completed torrent can be rechecked on demand: the files are already on disk
+// and libtorrent re-hashes them instead of downloading again. Before this, the
+// UI's "重新校验" reached Start and was refused as "already completed".
+void completedTorrentCanBeRechecked(const std::filesystem::path& root)
+{
+    const auto savePath = root / "recheck-data";
+    std::filesystem::create_directories(savePath);
+    TaskRepository repository(root / "recheck.db");
+    std::atomic_bool sawForceVerify{false};
+    auto stub = [&](const BtDownloadRequest& request, const std::atomic_bool&,
+                    const std::function<void(const BtProgressInfo&)>&) {
+        sawForceVerify.store(request.forceVerify);
+        BtDownloadResult result;
+        result.ok = true;
+        result.received = 1024;
+        return result;
+    };
+    TaskService service(repository, transferHttp, {}, stub);
+
+    AddTaskCommand add;
+    add.source = "magnet:?xt=urn:btih:aaaabbbbccccddddeeeeffff0000111122223333";
+    add.destination = savePath.string();
+    const auto added = service.execute(add);
+    require(added.ok, "torrent add failed: " + added.error);
+
+    const auto first = service.execute(StartTaskCommand{added.task.id});
+    require(first.ok && first.task.state == TaskState::Completed,
+        "the torrent did not complete before the recheck");
+
+    StartTaskCommand recheck{added.task.id};
+    recheck.forceVerify = true;
+    const auto checked = service.execute(recheck);
+    require(checked.ok, "a completed torrent can be rechecked: " + checked.error);
+    require(sawForceVerify.load(), "the recheck reached the engine as forceVerify");
+    require(checked.task.state == TaskState::Completed, "the recheck leaves the task completed");
+}
 void reverifyOnDemand(const std::filesystem::path& root)
 {
     TaskRepository repository(root / "reverify.db");
@@ -1380,6 +1416,7 @@ int body()
     refusesWhenTheVolumeIsFull(root.path());
     sha256Verification(root.path());
     transientFailuresAreRetried(root.path());
+    completedTorrentCanBeRechecked(root.path());
     reverifyOnDemand(root.path());
     globalRateLimitSlowsTransfers(root.path());
     settingsRoundTrip(root.path());
