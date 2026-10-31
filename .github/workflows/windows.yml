@@ -28,7 +28,10 @@ concurrency:
 jobs:
   build:
     name: Build, test, package
-    runs-on: windows-latest
+    # windows-latest moved to a VS 18 image whose MSVC 14.51.36260 build fails
+    # CMake's one-line try-compile with D8050 ("cannot execute c1.dll"), twice
+    # reproduced. 2022 is the same Windows x64 target with a working toolset.
+    runs-on: windows-2022
     timeout-minutes: 180
     steps:
       - name: Checkout
