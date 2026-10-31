@@ -157,3 +157,29 @@ scripts/       打包、smoke、浏览器联调探针
 
 见 `docs/specs/known-flakes.md`：`core-bt`（端口根因已修，12/12 绿，挂死留阶段日志）、
 `ui-window`（19 次未复现，选行竞态已修）。
+
+## 十、2026-10-31 复审补记
+
+本轮复审后修复并提交：
+
+- 重新校验的 `forceVerify` 现在穿过 worker 到达引擎；已完成 BT 任务允许强制重查；
+- schema 升级改为按列补齐，v2–v8 都能升到 v9（v2/v6/v8 有回归用例）；
+- 扩展的日志键前缀由 `JOURNAL_PREFIX` 单点定义，弹窗与 e2e 不再过滤过期前缀；
+- 工具栏“选项”可用、文案改为“打开文件夹”、Shift+Delete 走删除文件确认、能力说明与关于框去掉过期句子。
+
+新增 `scripts/ci.ps1` 与 `.github/workflows/windows.yml`：本地与 CI 跑同一条流水线，产物、摘要与日志固定在 `out/ci/`。本轮 Release 全套 23/23。
+
+文档真源收口到本文；`win32-delivery-status.md`、`win32-acceptance-report.md`、`win32-ticket-plan.md`
+移入 `docs/history/2026-10-30/`，只作追溯。
+
+新开的票：
+
+| 票 | 主题 | 状态 |
+|---|---|---|
+| #33 | 凭据对话框没有把“记住密码”传给存储 | 待做；需要可测接缝 |
+| #34 | 托盘菜单与完成通知未接通 | 待做；需要真实桌面验收 |
+| #35 | `core-service` 偶发挂起，ctest TIMEOUT 未生效 | 待做；已加 CI 墙钟兜底 |
+| #36 | 门禁：脚本语法/编码与项目内路径检查 | 待做 |
+| #37 | 首次在 GitHub Actions 运行 Windows 流水线 | 待人类推送 |
+| #38 | 清理旧测试与死脚本，加 clean/doctor | 待做 |
+| #39 | 命令表驱动，删除列宽双实现 | 待做 |
