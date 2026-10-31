@@ -540,6 +540,37 @@ void invalidAddReportsError(const std::filesystem::path& root)
     worker.shutdown();
 }
 
+// "Re-verify" is a start with forceVerify set. The flag has to survive the
+// worker boundary: the UI posted it, the command carried it, and the engine was
+// still asked for a normal fast-resume start.
+void reverifyCarriesTheForceFlag(const std::filesystem::path& root)
+{
+    std::atomic_bool sawForceVerify{false};
+    TaskWorker worker(root / "worker-reverify.db", nullptr,
+        [&](const BtDownloadRequest& request, const std::atomic_bool&,
+            const std::function<void(const BtProgressInfo&)>&) {
+            sawForceVerify.store(request.forceVerify);
+            BtDownloadResult result;
+            result.ok = true;
+            return result;
+        });
+    std::string error;
+    check(worker.start(error), ("worker start failed: " + error).c_str());
+    worker.postAdd("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        (root / "reverify.bin").string(), false);
+    std::string taskId;
+    check(waitFor([&] {
+        const auto task = onlyTask(worker);
+        if (!task) return false;
+        taskId = task->id;
+        return true;
+    }, std::chrono::seconds(10)), "the torrent task was not recorded");
+    worker.postStart(taskId, false, {}, {}, true);
+    check(waitFor([&] { return sawForceVerify.load(); }, std::chrono::seconds(10)),
+        "force verify never reached the BitTorrent engine");
+    worker.shutdown();
+}
+
 int body()
 {
     TempDir root;
@@ -556,6 +587,7 @@ int body()
     settingsSurviveARestart(root.path());
     theLastFinishedTransferIsAnnounced(root.path());
     theScheduleStartsQueuedTasks(root.path());
+    reverifyCarriesTheForceFlag(root.path());
     return 0;
 }
 } // namespace

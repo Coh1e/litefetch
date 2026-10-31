@@ -583,7 +583,8 @@ void TaskWorker::execute(const Command& command)
             break;
         }
         case CommandType::Start:
-            launchStart(command.taskId, command.restartFromZero, command.username, command.password);
+            launchStart(command.taskId, command.restartFromZero, command.username, command.password,
+                command.forceVerify);
             break;
         case CommandType::Pause: {
             const auto result = service_->execute(PauseTaskCommand{command.taskId});
