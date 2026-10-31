@@ -64,6 +64,22 @@ void execute(sqlite3* database, const char* sql)
 {
     if (sqlite3_exec(database, sql, nullptr, nullptr, nullptr) != SQLITE_OK) fail(database);
 }
+bool hasColumn(sqlite3* database, std::string_view name)
+{
+    Statement statement(database, "PRAGMA table_info(native_tasks)");
+    while (statement.row()) {
+        if (statement.text(1) == name) return true;
+    }
+    return false;
+}
+
+void addColumnIfMissing(sqlite3* database, const char* name, const char* declaration)
+{
+    if (hasColumn(database, name)) return;
+    const std::string sql =
+        std::string("ALTER TABLE native_tasks ADD COLUMN ") + name + " " + declaration + ";";
+    execute(database, sql.c_str());
+}
 
 // BitTorrent file selection is stored as an order-preserving "index:priority"
 // list; a plain "index" entry (the original format) means normal priority.
@@ -241,72 +257,22 @@ void migrateSchema(sqlite3* database)
             "created_at,updated_at FROM native_tasks;"
             "DROP TABLE native_tasks;"
             "ALTER TABLE native_tasks_v2 RENAME TO native_tasks;");
-    } else if (version == "2") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN restart_required INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_meta TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_private INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "3") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN bt_files TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_meta TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_private INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "4") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN bt_trackers TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_meta TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_private INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "5") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN bt_meta TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN bt_private INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "6") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN bt_uploaded INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_mode INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_ratio INTEGER NOT NULL DEFAULT 1000;"
-            "ALTER TABLE native_tasks ADD COLUMN bt_seed_minutes INTEGER NOT NULL DEFAULT 30;"
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "7") {
-        execute(database,
-            "ALTER TABLE native_tasks ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';"
-            "ALTER TABLE native_tasks ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;"
-            "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
-    } else if (version == "8") {
-        execute(database, "ALTER TABLE native_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;");
+    } else if (version != "9") {
+        // The schema is the set of columns, not the version number. Old builds
+        // added them in different orders and a version jump used to skip later
+        // columns, so add whatever this file is missing, in one place.
+        addColumnIfMissing(database, "restart_required", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(database, "bt_files", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing(database, "bt_trackers", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing(database, "bt_meta", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing(database, "bt_private", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(database, "bt_uploaded", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(database, "bt_seed_mode", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(database, "bt_seed_ratio", "INTEGER NOT NULL DEFAULT 1000");
+        addColumnIfMissing(database, "bt_seed_minutes", "INTEGER NOT NULL DEFAULT 30");
+        addColumnIfMissing(database, "sha256", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing(database, "verified", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(database, "priority", "INTEGER NOT NULL DEFAULT 0");
     } else {
         return;
     }

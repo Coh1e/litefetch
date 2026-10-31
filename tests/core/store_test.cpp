@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 using namespace litefetch;
 using namespace litefetch::test;
@@ -62,38 +64,49 @@ void legacyCoexistence(const std::filesystem::path& database)
     sqlite3_close(raw);
 }
 
-// A database written by an early build reports schema 2. Opening it has to run
-// every later ALTER TABLE, keep the rows, and end at the current schema. The
-// v2-v5 branches once contained a statement with no ALTER TABLE, so this
-// upgrade threw a syntax error and the application could not open the file.
-void upgradesSchemaTwo(const std::filesystem::path& database)
+// Opening an old database must keep its rows and end at the current schema.
+// The fixture reports an old version and contains only the columns that version
+// had; three representative shapes cover the early (v2), middle (v6) and late
+// (v8) migrations.
+struct LegacyColumn {
+    const char* name;
+    const char* declaration;
+};
+
+void upgradeKeepsRows(const std::filesystem::path& database, const char* version,
+    const std::vector<LegacyColumn>& columns)
 {
     sqlite3* raw = nullptr;
     check(sqlite3_open(reinterpret_cast<const char*>(database.u8string().c_str()), &raw) == SQLITE_OK,
-        "cannot create schema v2 fixture");
-    const char* seed =
+        "cannot create the legacy fixture");
+    std::string seed =
         "CREATE TABLE native_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);"
-        "INSERT INTO native_meta VALUES('schema_version','2');"
+        "INSERT INTO native_meta VALUES('schema_version','" + std::string(version) + "');"
         "CREATE TABLE native_tasks(id TEXT PRIMARY KEY NOT NULL,source TEXT NOT NULL,"
         "destination TEXT NOT NULL,state TEXT NOT NULL,received INTEGER NOT NULL,"
         "total INTEGER NOT NULL,error TEXT NOT NULL,created_at INTEGER NOT NULL,"
         "updated_at INTEGER NOT NULL);"
         "INSERT INTO native_tasks VALUES('old','http://127.0.0.1/file.bin','D:\\old.bin',"
         "'queued',0,1024,'',1000,1000);";
-    check(sqlite3_exec(raw, seed, nullptr, nullptr, nullptr) == SQLITE_OK, "cannot seed schema v2");
+    for (const auto& column : columns) {
+        seed += std::string("ALTER TABLE native_tasks ADD COLUMN ") + column.name + " "
+            + column.declaration + ";";
+    }
+    check(sqlite3_exec(raw, seed.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK,
+        "cannot seed the legacy fixture");
     sqlite3_close(raw);
 
     {
         TaskRepository repository(database);
         const auto migrated = repository.find("old");
-        check(migrated.has_value(), "a v2 row survives the upgrade");
-        checkEqual(migrated->total, 1024, "a v2 row keeps its size");
+        check(migrated.has_value(), "an old row survives the upgrade");
+        checkEqual(migrated->total, 1024, "an old row keeps its size");
         repository.insert(sample("after-upgrade"));
     }
 
     raw = nullptr;
     check(sqlite3_open(reinterpret_cast<const char*>(database.u8string().c_str()), &raw) == SQLITE_OK,
-        "cannot inspect upgraded database");
+        "cannot inspect the upgraded database");
     sqlite3_stmt* statement = nullptr;
     check(sqlite3_prepare_v2(raw,
         "SELECT value FROM native_meta WHERE key='schema_version'", -1, &statement, nullptr) == SQLITE_OK,
@@ -102,10 +115,12 @@ void upgradesSchemaTwo(const std::filesystem::path& database)
     checkEqual(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))), "9",
         "schema version after upgrade");
     sqlite3_finalize(statement);
-    check(sqlite3_prepare_v2(raw, "SELECT bt_uploaded FROM native_tasks LIMIT 1", -1, &statement, nullptr)
-            == SQLITE_OK,
-        "the v2 upgrade did not add bt_uploaded");
-    sqlite3_finalize(statement);
+    for (const char* column : {"bt_uploaded", "sha256", "priority"}) {
+        check(sqlite3_prepare_v2(raw, (std::string("SELECT ") + column
+                  + " FROM native_tasks LIMIT 1").c_str(), -1, &statement, nullptr) == SQLITE_OK,
+            "the upgrade left a column missing");
+        sqlite3_finalize(statement);
+    }
     sqlite3_close(raw);
 }
 
@@ -172,7 +187,29 @@ int body()
     }
 
     legacyCoexistence(directory.file("legacy.db"));
-    upgradesSchemaTwo(directory.file("schema2.db"));
+    upgradeKeepsRows(directory.file("schema2.db"), "2", {});
+    upgradeKeepsRows(directory.file("schema6.db"), "6",
+        {{"restart_required", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_files", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_trackers", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_meta", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_private", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_uploaded", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_seed_mode", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_seed_ratio", "INTEGER NOT NULL DEFAULT 1000"},
+            {"bt_seed_minutes", "INTEGER NOT NULL DEFAULT 30"}});
+    upgradeKeepsRows(directory.file("schema8.db"), "8",
+        {{"restart_required", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_files", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_trackers", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_meta", "TEXT NOT NULL DEFAULT ''"},
+            {"bt_private", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_uploaded", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_seed_mode", "INTEGER NOT NULL DEFAULT 0"},
+            {"bt_seed_ratio", "INTEGER NOT NULL DEFAULT 1000"},
+            {"bt_seed_minutes", "INTEGER NOT NULL DEFAULT 30"},
+            {"sha256", "TEXT NOT NULL DEFAULT ''"},
+            {"verified", "INTEGER NOT NULL DEFAULT 0"}});
     return 0;
 }
 } // namespace
