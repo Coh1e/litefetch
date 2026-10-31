@@ -8,6 +8,7 @@
 #include "traffic_text.h"
 #include "settings.h"
 #include "column_dialog.h"
+#include "credential_dialog.h"
 #include "explorer_target.h"
 #include "new_download_dialog.h"
 #include "resource.h"
@@ -241,50 +242,6 @@ bool readTextFile(const std::filesystem::path& path, std::string& text)
     return true;
 }
 
-struct CredentialPrompt {
-    std::string host;
-    std::string username;
-    std::string password;
-    bool remember = false;
-};
-
-// The credentials dialog is modal: it runs its own loop and returns the typed
-// values before the caller retries the transfer.
-INT_PTR CALLBACK credentialDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    auto* context = reinterpret_cast<CredentialPrompt*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
-    switch (message) {
-    case WM_INITDIALOG: {
-        context = reinterpret_cast<CredentialPrompt*>(lParam);
-        SetWindowLongPtrW(dialog, GWLP_USERDATA, lParam);
-        SetDlgItemTextW(dialog, IDC_CRED_HINT,
-            L"服务器要求登录（HTTP 401）。凭据只用于本次运行，不会保存。");
-        centerDialog(dialog, GetParent(dialog));
-        SetFocus(GetDlgItem(dialog, IDC_CRED_USER));
-        return FALSE;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDOK) {
-            wchar_t buffer[256]{};
-            GetDlgItemTextW(dialog, IDC_CRED_USER, buffer, 256);
-            if (context) context->username = utf8FromUtf16(buffer);
-            GetDlgItemTextW(dialog, IDC_CRED_PASS, buffer, 256);
-            if (context) context->password = utf8FromUtf16(buffer);
-            EndDialog(dialog, IDOK);
-            return TRUE;
-        }
-        if (LOWORD(wParam) == IDCANCEL) {
-            EndDialog(dialog, IDCANCEL);
-            return TRUE;
-        }
-        return FALSE;
-    case WM_CLOSE:
-        EndDialog(dialog, IDCANCEL);
-        return TRUE;
-    default:
-        return FALSE;
-    }
-}
 struct TorrentFetchResult {
     BtMetadataResult metadata;
     std::string source;
@@ -1598,22 +1555,24 @@ void MainWindow::setSelectedPriority(int priority)
 
 void MainWindow::promptForCredentials(const std::string& taskId)
 {
-    CredentialPrompt prompt;
     // Only the host of the source is remembered, never the full URL.
+    std::string host;
     for (const auto& row : model_.rows()) {
         if (row.id != taskId) continue;
-        prompt.host = hostOfUrl(row.source);
+        host = hostOfUrl(row.source);
         break;
     }
-    if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_CREDENTIALS), hwnd_,
-            credentialDialogProc, reinterpret_cast<LPARAM>(&prompt)) != IDOK)
-        return;
-    if (prompt.username.empty()) return;
-    if (prompt.remember && !prompt.host.empty())
-        worker_->rememberCredential(prompt.host, prompt.username, prompt.password);
-    worker_->postStart(taskId, false, prompt.username, prompt.password);
-    setNotice(prompt.remember ? "已使用输入的凭据重试，并已记住"
-                              : "已使用输入的凭据重试；凭据仅用于本次运行");
+    const auto prompt = showCredentialDialog(hwnd_, host);
+    if (!prompt || prompt->username.empty()) return;
+    // Unchecked means memory only: nothing is written, so a restart asks again.
+    const bool remembered = storeAcceptedCredential(*prompt,
+        [this](const std::string& host, const std::string& username,
+            const std::string& password) {
+            return worker_->rememberCredential(host, username, password);
+        });
+    worker_->postStart(taskId, false, prompt->username, prompt->password);
+    setNotice(remembered ? "已使用输入的凭据重试，并已记住"
+                         : "已使用输入的凭据重试；凭据仅用于本次运行");
 }
 
 void MainWindow::syncList()

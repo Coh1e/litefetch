@@ -137,7 +137,9 @@ public:
     // server list in step with what the options dialog stored.
     Settings settings() const;
     // Remembered credentials are protected with DPAPI for this Windows account.
-    void rememberCredential(const std::string& host, const std::string& username,
+    // Returns false when DPAPI or the file write failed, so the caller does not
+    // promise a memory that does not exist.
+    bool rememberCredential(const std::string& host, const std::string& username,
         const std::string& password);
     std::optional<StoredCredential> storedCredential(const std::string& host) const;
     void forgetCredentials();

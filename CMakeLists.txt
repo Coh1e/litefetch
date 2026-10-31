@@ -264,6 +264,7 @@ if(WIN32)
     enable_language(RC)
     add_library(litefetch-win32-ui STATIC
         src/win32/main_window.cpp src/win32/main_window.h
+        src/win32/credential_dialog.cpp src/win32/credential_dialog.h
         src/win32/new_download_dialog.cpp src/win32/new_download_dialog.h
         src/win32/column_dialog.cpp src/win32/column_dialog.h
         src/win32/batch_dialog.cpp src/win32/batch_dialog.h)
@@ -295,6 +296,18 @@ if(WIN32)
         if(MSVC)
             target_compile_options(ui-window-tests PRIVATE /W4 /permissive- /utf-8)
         endif()
+        # The credentials dialog is modal in the product; this test creates a
+        # modeless instance of the same resource and procedure, ticks the
+        # checkbox and sends IDOK so the answer reading is covered in-process.
+        add_executable(ui-credential-tests tests/win32/credential_dialog_test.cpp src/win32/win32.rc)
+        target_include_directories(ui-credential-tests PRIVATE tests/core)
+        target_link_libraries(ui-credential-tests PRIVATE litefetch-win32-ui)
+        add_test(NAME ui-credential COMMAND ui-credential-tests)
+        set_tests_properties(ui-credential PROPERTIES TIMEOUT 30
+            ENVIRONMENT "LITEFETCH_TEST_TEMP=${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
+        if(MSVC)
+            target_compile_options(ui-credential-tests PRIVATE /W4 /permissive- /utf-8)
+        endif()
     endif()
 endif()
 
@@ -315,7 +328,7 @@ if(MSVC)
         win32-native-bridge-tests core-credentials-tests core-browser-bridge-tests
         core-native-host-tests core-native-frame-tests core-schedule-tests core-traffic-tests
         core-low-usage-tests core-rate-limit-tests core-kad-tests core-ed2k-tests core-bt-tests
-        ui-worker-tests ui-window-tests)
+        ui-worker-tests ui-window-tests ui-credential-tests)
     foreach(target IN LISTS LITEFETCH_PRODUCT_TARGETS)
         if(TARGET ${target})
             target_compile_options(${target} PRIVATE ${LITEFETCH_CXX_FLAGS})

@@ -15,6 +15,7 @@ Status: open
 - 验收 900 s 墙钟、HTTP 夹具收/发超时（#35）。
 - 脚本解析/BOM 与项目内路径门禁（#36）。
 - 旧状态文档归档，`final-report.md` 为唯一真源。
+- 凭据对话框拆为可测接缝并读取“记住密码”（#33）：勾选写 DPAPI、未勾选不落盘；`ui-credential` 与 `ui-window` 覆盖。
 
 ## 已定取舍（不要重新讨论）
 
@@ -26,15 +27,14 @@ Status: open
 
 ## 票与顺序
 
-1. **#33 凭据记住**（先做）：先把凭据对话框抽成可测接缝（非模态实例可发送 `IDOK`），再读 `IDC_CRED_REMEMBER`。验收：勾选落 DPAPI、未勾选不落盘、跨账户重认证。
-2. **#34 托盘与通知**：处理 `appTrayMessage`、右键菜单、双击恢复、完成通知、退出移除图标；无通知区的会话必须能正常启动。验收需真实桌面。
-3. **#40 剩余 UI 差距**：属性页分页、DPI 图标重建、上传段、字体、标题。验收以 `ui-window` 断言 + 截图。
-4. **#39 命令表**：先锁现状（启用/提示/菜单），再替换九处枚举；删除 `list_layout`。
-5. **#41 结构重构剩余项**：`DialogChrome`、`enqueue`、`refreshView/selectRow`、ed2k/HTTP 工具、测试夹具、CMake helper、`start()` 拆分；每项独立提交。
-6. **#42 机器文档与设计基线**：三份票面 README 归档重写；`docs/design/` 放已导出的画板、几何表与允许偏差。Figma 不可达时先提交已有截图，并标注未导出画板。
-7. **#38 清理剩余**：`clean.ps1`（默认 dry-run）、`doctor.ps1`、`docs/research/README.md` 索引；删除部分已完成。
+1. **#34 托盘与通知**：处理 `appTrayMessage`、右键菜单、双击恢复、完成通知、退出移除图标；无通知区的会话必须能正常启动。验收需真实桌面。
+2. **#40 剩余 UI 差距**：属性页分页、DPI 图标重建、上传段、字体、标题。验收以 `ui-window` 断言 + 截图。
+3. **#39 命令表**：先锁现状（启用/提示/菜单），再替换九处枚举；删除 `list_layout`。
+4. **#41 结构重构剩余项**：`DialogChrome`、`enqueue`、`refreshView/selectRow`、ed2k/HTTP 工具、测试夹具、CMake helper、`start()` 拆分；每项独立提交。
+5. **#42 机器文档与设计基线**：三份票面 README 归档重写；`docs/design/` 放已导出的画板、几何表与允许偏差。Figma 不可达时先提交已有截图，并标注未导出画板。
+6. **#38 清理剩余**：`clean.ps1`（默认 dry-run）、`doctor.ps1`、`docs/research/README.md` 索引；删除部分已完成。
 
-#33 与 #34 独立；#40 与 #39/#41 都动 `main_window.cpp`，按列出的顺序串行，避免同一区域反复冲突。
+#34 独立；#40 与 #39/#41 都动 `main_window.cpp`，按列出的顺序串行，避免同一区域反复冲突。
 #42 可与任何一项并行。
 
 ## 验收与证据

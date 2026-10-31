@@ -13,6 +13,7 @@
 #include "main_window.h"
 
 #include "columns.h"
+#include "credentials.h"
 #include "http_fixture.h"
 #include "resource.h"
 #include "task_service.h"
@@ -827,6 +828,45 @@ void runChecks()
             Sleep(1);
         }
         check(vanished, "the window closed itself after the last transfer");
+    }
+
+    // A credential remembered before a restart must bring a persisted 401 back
+    // without asking again. The failed task and the DPAPI blob are exactly what
+    // the previous run leaves on disk; a fresh window is the restart.
+    {
+        const auto authBody = payload(32 * 1024);
+        HttpFixture::Options authOptions{authBody};
+        authOptions.requiredAuthorization = "Basic dXNlcjpwYXNz"; // user:pass
+        HttpFixture authFixture(authOptions);
+        const auto authDestination = options.downloadDirectory / "remembered.bin";
+        {
+            TaskRepository repository(options.databasePath);
+            TaskService service(repository);
+            const auto added = service.execute(AddTaskCommand{
+                authFixture.url("/remembered.bin"), authDestination.string()});
+            check(added.ok, ("the protected task is queued: " + added.error).c_str());
+            const auto failed = service.execute(StartTaskCommand{added.task.id});
+            check(failed.task.state == TaskState::Failed,
+                "the anonymous attempt fails with 401 before the restart");
+            check(failed.task.error.find("401") != std::string::npos,
+                ("the saved failure names 401: " + failed.task.error).c_str());
+            CredentialStore store(options.databasePath.parent_path() / "credentials.dat");
+            check(store.save("127.0.0.1", "user", "pass"),
+                "the remembered credential is written for the host");
+        }
+
+        MainWindow window(options);
+        check(window.create(instance, SW_SHOWNORMAL), "window opens on the failed task");
+        check(pumpUntil([&] { return window.statusOfTaskNamed("remembered.bin") == "已完成"; }, 20000),
+            ("the remembered credential retries the 401: "
+                + window.statusOfTaskNamed("remembered.bin") + " | "
+                + window.errorOfTaskNamed("remembered.bin")).c_str());
+        checkEqual(authFixture.lastAuthorization(), "Basic dXNlcjpwYXNz",
+            "the retried request carried the remembered credential");
+        check(std::filesystem::exists(authDestination),
+            "the retried transfer published its file");
+        SendMessageW(window.handle(), WM_CLOSE, 0, 0);
+        pumpUntil([] { return false; }, 1000);
     }
 
 }

@@ -344,11 +344,11 @@ void TaskWorker::beginShutdown()
     wakeUi();
 }
 
-void TaskWorker::rememberCredential(const std::string& host, const std::string& username,
+bool TaskWorker::rememberCredential(const std::string& host, const std::string& username,
     const std::string& password)
 {
     CredentialStore store(databasePath_.parent_path() / "credentials.dat");
-    store.save(host, username, password);
+    return store.save(host, username, password);
 }
 
 std::optional<StoredCredential> TaskWorker::storedCredential(const std::string& host) const

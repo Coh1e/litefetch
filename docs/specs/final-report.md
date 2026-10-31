@@ -6,11 +6,11 @@
 
 ```
 cmd /c test-local.cmd
-→ 100% tests passed, 0 tests failed out of 23
-→ Total Test time (real) = 163.75 s   (2026-10-30 收尾复跑)
+→ 100% tests passed, 0 tests failed out of 24
+→ Total Test time (real) = 143.31 s   (2026-10-31，#33 收口复跑)
 ```
 
-- 23 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
+- 24 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
 - 测试与票面的对应关系见 `docs/specs/verification-index.md`，已知偶发见 `docs/specs/known-flakes.md`；
 - 发布包：`out/package/litefetch-0.1.0`，5 个文件 / 5.5 MiB（全静态）；
 - 包内 smoke：窗口 219 ms 出现、退出码 0（`.pi/evidence/final/`）。
@@ -85,7 +85,7 @@ src/core/      下载引擎、任务服务、调度、限速、流量、凭据�
 src/win32/     窗口、列表模型、选项、托盘、后台 worker
 src/tools/     litefetch-core-cli、litefetch-browser-host
 browser/       MV3 扩展（manifest、worker、适配器、弹窗）
-tests/         23 个测试的源码
+tests/         24 个测试的源码
 docs/specs/    交付状态、验收报告、人工验收清单、票面计划、验证索引
 docs/research/ 浏览器联调、受阻存储与强杀、完成动作排查、Figma 对照
 scripts/       打包、smoke、浏览器联调探针
@@ -178,7 +178,7 @@ scripts/       打包、smoke、浏览器联调探针
 
 | 票 | 主题 | 状态 |
 |---|---|---|
-| #33 | 凭据对话框没有把“记住密码”传给存储 | 待做；需要可测接缝 |
+| #33 | 凭据对话框没有把“记住密码”传给存储 | **完成**：对话框抽为独立模块并读取 `IDC_CRED_REMEMBER`；勾选/未勾选、DPAPI 重载、重启后 401 重试均有用例 |
 | #34 | 托盘菜单与完成通知未接通 | 待做；需要真实桌面验收 |
 | #35 | `core-service` 偶发挂起，ctest TIMEOUT 未生效 | 实现完成；十轮 soak 9/10（第 10 轮为 `core-bt` 已知 TIMEOUT） |
 | #36 | 门禁：脚本语法/编码与项目内路径检查 | 完成：两道检查接入 pre-push 与 CI |
@@ -191,3 +191,7 @@ scripts/       打包、smoke、浏览器联调探针
 
 旧库升级策略记录在 [ADR-0002](../adr/0002-column-driven-schema-upgrades.md)：保留全部行，按缺失列补齐到 v9。
 剩余票的技术取舍与顺序见 [收尾规格](win32-remaining-work.md)。
+
+2026-10-31 #33 收口：`credential_dialog.{h,cpp}` 移出 `main_window.cpp`，生产路径仍是模态对话框，测试用同一资源与过程创建非模态实例。
+新增 `ui-credential`（勾选写 DPAPI、未勾选不落盘、取消不交出凭据、提示文案与复选框一致）；
+`ui-window` 增加持久化凭据后新窗口自动重试已保存 401 的场景。验收 `cmd /c test-local.cmd` → 24/24 通过，143.31 s；日志在 `tmp/acceptance.log`。
