@@ -180,9 +180,9 @@ scripts/       打包、smoke、浏览器联调探针
 |---|---|---|
 | #33 | 凭据对话框没有把“记住密码”传给存储 | 待做；需要可测接缝 |
 | #34 | 托盘菜单与完成通知未接通 | 待做；需要真实桌面验收 |
-| #35 | `core-service` 偶发挂起，ctest TIMEOUT 未生效 | 完成：夹具超时 + 900 s 墙钟 |
+| #35 | `core-service` 偶发挂起，ctest TIMEOUT 未生效 | 实现完成；十轮 soak 9/10（第 10 轮为 `core-bt` 已知 TIMEOUT） |
 | #36 | 门禁：脚本语法/编码与项目内路径检查 | 完成：两道检查接入 pre-push 与 CI |
-| #37 | 首次在 GitHub Actions 运行 Windows 流水线 | 首次运行已绿；tag Release 待人类 |
+| #37 | 首次在 GitHub Actions 运行 Windows 流水线 | 完成：两次运行与 tag Release 均绿 |
 | #38 | 清理旧测试与死脚本，加 clean/doctor | 待做（删除部分已完成） |
 | #39 | 命令表驱动，删除列宽双实现 | 待做 |
 | #40 | 剩余 UI 差距：属性页、DPI 图标、上传段与字体 | 待做 |
