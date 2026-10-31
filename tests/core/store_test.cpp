@@ -62,6 +62,53 @@ void legacyCoexistence(const std::filesystem::path& database)
     sqlite3_close(raw);
 }
 
+// A database written by an early build reports schema 2. Opening it has to run
+// every later ALTER TABLE, keep the rows, and end at the current schema. The
+// v2-v5 branches once contained a statement with no ALTER TABLE, so this
+// upgrade threw a syntax error and the application could not open the file.
+void upgradesSchemaTwo(const std::filesystem::path& database)
+{
+    sqlite3* raw = nullptr;
+    check(sqlite3_open(reinterpret_cast<const char*>(database.u8string().c_str()), &raw) == SQLITE_OK,
+        "cannot create schema v2 fixture");
+    const char* seed =
+        "CREATE TABLE native_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);"
+        "INSERT INTO native_meta VALUES('schema_version','2');"
+        "CREATE TABLE native_tasks(id TEXT PRIMARY KEY NOT NULL,source TEXT NOT NULL,"
+        "destination TEXT NOT NULL,state TEXT NOT NULL,received INTEGER NOT NULL,"
+        "total INTEGER NOT NULL,error TEXT NOT NULL,created_at INTEGER NOT NULL,"
+        "updated_at INTEGER NOT NULL);"
+        "INSERT INTO native_tasks VALUES('old','http://127.0.0.1/file.bin','D:\\old.bin',"
+        "'queued',0,1024,'',1000,1000);";
+    check(sqlite3_exec(raw, seed, nullptr, nullptr, nullptr) == SQLITE_OK, "cannot seed schema v2");
+    sqlite3_close(raw);
+
+    {
+        TaskRepository repository(database);
+        const auto migrated = repository.find("old");
+        check(migrated.has_value(), "a v2 row survives the upgrade");
+        checkEqual(migrated->total, 1024, "a v2 row keeps its size");
+        repository.insert(sample("after-upgrade"));
+    }
+
+    raw = nullptr;
+    check(sqlite3_open(reinterpret_cast<const char*>(database.u8string().c_str()), &raw) == SQLITE_OK,
+        "cannot inspect upgraded database");
+    sqlite3_stmt* statement = nullptr;
+    check(sqlite3_prepare_v2(raw,
+        "SELECT value FROM native_meta WHERE key='schema_version'", -1, &statement, nullptr) == SQLITE_OK,
+        "cannot read schema version");
+    check(sqlite3_step(statement) == SQLITE_ROW, "schema version row missing");
+    checkEqual(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))), "9",
+        "schema version after upgrade");
+    sqlite3_finalize(statement);
+    check(sqlite3_prepare_v2(raw, "SELECT bt_uploaded FROM native_tasks LIMIT 1", -1, &statement, nullptr)
+            == SQLITE_OK,
+        "the v2 upgrade did not add bt_uploaded");
+    sqlite3_finalize(statement);
+    sqlite3_close(raw);
+}
+
 int body()
 {
     TempDir directory;
@@ -125,6 +172,7 @@ int body()
     }
 
     legacyCoexistence(directory.file("legacy.db"));
+    upgradesSchemaTwo(directory.file("schema2.db"));
     return 0;
 }
 } // namespace
