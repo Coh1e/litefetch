@@ -1,4 +1,4 @@
-﻿# Builds, tests and packages LiteFetch with one command.
+# Builds, tests and packages LiteFetch with one command.
 #
 # The same script runs locally and in GitHub Actions, so a green pipeline and a
 # green local run mean the same thing. Artifacts and logs always land in the
@@ -32,6 +32,11 @@ if ($env:LITEFETCH_CI_SMOKE -eq 'true') { $Smoke = $true }
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $root
+
+# CMakePresets points TEMP/TMP at .deps/tmp. A fresh checkout has neither, and
+# MSVC reports D8050 ("cannot execute c1.dll") when its temp directory is
+# missing, which is exactly what a clean GitHub runner hit.
+New-Item -ItemType Directory -Force (Join-Path $root '.deps/tmp') | Out-Null
 
 $ciRoot = Join-Path $root 'out/ci'
 $artifactDir = Join-Path $ciRoot 'artifacts'

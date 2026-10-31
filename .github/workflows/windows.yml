@@ -28,87 +28,11 @@ concurrency:
 jobs:
   build:
     name: Build, test, package
-    # windows-latest moved to a VS 18 image whose MSVC 14.51.36260 build fails
-    # CMake's one-line try-compile with D8050 ("cannot execute c1.dll"), twice
-    # reproduced. 2022 is the same Windows x64 target with a working toolset.
-    runs-on: windows-2022
+    runs-on: windows-latest
     timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Diagnostic for the D8050 seen in CMake's try-compile: which flag makes a
-      # one-line program fail on this image?
-      - name: Check the MSVC toolchain
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
-          echo install=%VSINSTALL%
-          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          cd /d "%RUNNER_TEMP%"
-          echo int main(void) { return 0; } > hello.c
-          cl /nologo /c hello.c
-          echo plain=%ERRORLEVEL%
-          cl /nologo /c /Z7 hello.c
-          echo z7=%ERRORLEVEL%
-          cl /nologo /c /FS hello.c
-          echo fs=%ERRORLEVEL%
-          cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
-          echo combo=%ERRORLEVEL%
-          mkdir "%GITHUB_WORKSPACE%\out\probe" 2>nul
-          cd /d "%GITHUB_WORKSPACE%\out\probe"
-          echo int main(void) { return 0; } > hello.c
-          cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
-          echo workspace=%ERRORLEVEL%
-          for %%i in ("%VCToolsInstallDir%") do set "SHORTVC=%%~si"
-          echo shortvc=%SHORTVC%
-          "%SHORTVC%bin\Hostx64\x64\cl.exe" /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
-          echo shortpath=%ERRORLEVEL%
-          where ninja
-          ninja --version
-          mkdir "%GITHUB_WORKSPACE%\out\exact\CMakeFiles\cmTC.dir" 2>nul
-          cd /d "%GITHUB_WORKSPACE%\out\exact"
-          echo int main(void) { return 0; } > testCCompiler.c
-          cl /nologo /DWIN32 /D_WINDOWS /Ob0 /Od /RTC1 -MDd -Z7 /showIncludes /FoCMakeFiles\cmTC.dir\testCCompiler.c.obj /FdCMakeFiles\cmTC.dir\ /FS -c testCCompiler.c
-          echo exactline=%ERRORLEVEL%
-
-      # Does the environment imported by enter-msvc.ps1 compile the same file?
-      - name: Probe the imported environment
-        shell: pwsh
-        run: |
-          . ./scripts/enter-msvc.ps1 -Quiet
-          "cl=$((Get-Command cl).Source)"
-          Push-Location $env:RUNNER_TEMP
-          Set-Content -Path hello2.c -Value 'int main(void) { return 0; }'
-          & cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello2.c
-          "imported=$LASTEXITCODE"
-          Pop-Location
-
-      # The exact cl line works under cmd; run it through ninja to see whether
-      # ninja's CreateProcess quoting is what breaks it.
-      - name: Probe ninja quoting
-        shell: pwsh
-        run: |
-          . ./scripts/enter-msvc.ps1 -Quiet
-          $dir = Join-Path $env:GITHUB_WORKSPACE 'out/ninjaprobe'
-          New-Item -ItemType Directory -Force (Join-Path $dir 'CMakeFiles\cmTC.dir') | Out-Null
-          Set-Content (Join-Path $dir 'testCCompiler.c') 'int main(void) { return 0; }'
-          $cl = (Get-Command cl).Source
-          $rule = 'rule cc'
-          $command = '  command = "' + $cl + '" /nologo /DWIN32 /D_WINDOWS /Ob0 /Od /RTC1 -MDd -Z7 /showIncludes /FoCMakeFiles\cmTC.dir\testCCompiler.c.obj /FdCMakeFiles\cmTC.dir\ /FS -c testCCompiler.c'
-          Set-Content (Join-Path $dir 'build.ninja') @($rule, $command, 'build out.obj: cc')
-          Push-Location $dir
-          ninja -v
-          "ninja_choco=$LASTEXITCODE"
-          Remove-Item out.obj -ErrorAction SilentlyContinue
-          $vsNinja = Join-Path $env:VSINSTALLDIR 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
-          if (Test-Path $vsNinja) {
-            & $vsNinja -v
-            "ninja_vs=$LASTEXITCODE"
-          } else {
-            'ninja_vs=missing'
-          }
-          Pop-Location
 
       # libtorrent and Boost are compiled from source; restoring the prepared
       # dependency tree turns a cold 30-minute build into a few minutes.
