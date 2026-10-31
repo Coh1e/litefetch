@@ -1,5 +1,9 @@
 # 浏览器集成：接管事务核心
 
+> 本文记录 2026-10 的浏览器接管状态。部分路径和“Qt”描述已经过期：Qt 已从产品源码移除，
+> 测试位于 `browser/*.test.mjs`。当前结论以 [最终交代](../docs/specs/final-report.md)
+> 和 [浏览器联调](../docs/research/browser-handoff-real-chrome.md) 为准。
+
 此目录目前包含Chrome/Edge MV3开发扩展的manifest、service worker、站点设置弹窗、事务逻辑和API适配层。C++ host、BrowserBridge与SQLite任务事务已接通并完成实际HTTP整链测试；浏览器host注册及真实浏览器加载/接管尚未验收。
 
 扩展默认关闭，仅在开关启用且请求链所有来源均明确列入允许站点时考虑接管。开发弹窗会说明尚未接通本机下载器。关闭设置会阻止尚未取消浏览器的在途准备事务继续接管；已经取消浏览器的事务仍需恢复查询，不能直接遗弃。
@@ -63,7 +67,7 @@ worker在启动、安装、每次自身求值和一分钟恢复alarm中检查既
 在项目根目录，使用现有 Node 运行：
 
 ```text
-node --test downloader/browser/handoff.test.mjs downloader/browser/adapters.test.mjs downloader/browser/request-observer.test.mjs downloader/browser/worker.test.mjs
+node --test browser/handoff.test.mjs browser/adapters.test.mjs browser/request-observer.test.mjs browser/worker.test.mjs
 ```
 
 测试涵盖确认丢失、事件重复、用户取消、瞬间完成、存储失败、进程状态重建和实际文件 journal 重开。文件 journal 是测试适配，不是生产实现，也没有验证断电持久性。所有测试数据仅在 downloader/out/verification 中创建并清理。

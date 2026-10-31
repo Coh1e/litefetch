@@ -8,5 +8,5 @@
 | ready-for-human | ready-for-human | 需要人类处理 |
 | wontfix | wontfix | 不予处理 |
 
-技能提及角色时，使用表中对应标签。
-ready-for-agent 仍须遵守项目暂停边界与 AGENTS.md 的执行规则。
+技能提到下表中的角色时，使用对应标签。
+ready-for-agent 仍必须遵守项目暂停边界和 AGENTS.md 的执行规则。

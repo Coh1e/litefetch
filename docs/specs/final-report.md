@@ -12,7 +12,7 @@ cmd /c test-local.cmd
 
 - 23 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
 - 测试与票面的对应关系见 `docs/specs/verification-index.md`，已知偶发见 `docs/specs/known-flakes.md`；
-- 发布包：`out/package/litefetch-0.1.0`，13 个文件 / 16.2 MiB；
+- 发布包：`out/package/litefetch-0.1.0`，5 个文件 / 5.5 MiB（全静态）；
 - 包内 smoke：窗口 219 ms 出现、退出码 0（`.pi/evidence/final/`）。
 
 ## 二、逐票状态
@@ -130,7 +130,7 @@ scripts/       打包、smoke、浏览器联调探针
 
 **唯一保持打开的功能性缺陷是 #23（浏览器接管）**，用户判定为重大缺陷，不随本次收尾关闭。
 
-复核数字：`cmd /c test-local.cmd` → 23/23 通过，166.2 s；发布包 13 文件 / 16.2 MiB，
+复核数字：`cmd /c test-local.cmd` → 23/23 通过，166.2 s；发布包 5 文件 / 5.5 MiB，
 包内 smoke：窗口 376 ms 出现、退出码 0（`.pi/evidence/close/`）。
 
 ## 九、收口（2026-10-30）

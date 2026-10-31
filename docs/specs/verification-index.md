@@ -51,4 +51,4 @@
 
 - **真实 Chrome 联调**：`docs/research/browser-handoff-real-chrome.md`（扩展 → host → 管道 → 应用 → 建任务）；
 - **受阻目录与强杀重启**：`docs/research/blocked-storage-and-forced-kill.md`；
-- **发布包 smoke**：`scripts/win32-smoke.ps1`，最近一次 201 ms 出窗、退出码 0（13 文件 / 16.2 MiB）。
+- **发布包 smoke**：`scripts/win32-smoke.ps1`，最近一次 184 ms 出窗、退出码 0（5 文件 / 5.5 MiB，`.pi/evidence/issue-30/positive/`）。

@@ -10,7 +10,7 @@
 ## 0. 前置
 
 1. 用 `cmd /c test-local.cmd` 跑一遍，确认 `100% tests passed, 0 failed out of 23`；
-2. 用 `scripts/package-release.ps1` 生成 `out/package/litefetch-0.1.0/`（13 个文件）；
+2. 用 `scripts/package-release.ps1` 生成 `out/package/litefetch-0.1.0/`（5 个文件 / 5.5 MiB）；
 3. 把该目录整体复制到一台**没有装过开发工具链**的 Windows 机器上（这就是"干净 Windows"）。
 
 > 第 3 步是 #28 里唯一无法在本会话完成的条件。

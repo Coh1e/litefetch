@@ -1,8 +1,9 @@
 # Qt-free task core
 
-This directory is the new UI/engine boundary required by the Win32 product. It
-does not include or link any Qt header/library. The legacy Qt implementation
-remains in the rest of `src/` behind `LITEFETCH_BUILD_QT_LEGACY` for comparison.
+This directory is the UI/engine boundary used by the Win32 product. It does not
+include or link any Qt header or library. The Qt implementation is no longer in
+`src/`. Qt-era test sources remain in `tests/`; the current build does not
+compile them.
 
 ## Boundary
 
@@ -75,8 +76,7 @@ out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
 ## Deliberate limits of this ticket
 
 Pause/resume and crash recovery (#5), HTTPS/auth policy (#6), destination
-conflict policy (#18), and the complete Win32 UI (#3+) are not implemented here.
-`Start` is blocking; the Win32 shell (`src/win32`) dispatches it off the UI
-thread through its own worker. The legacy Qt path is not rebuilt by this ticket
-because its Qt/libtorrent dependency tree is larger than the core dependency
-set.
+conflict policy (#18), and the complete Win32 UI (#3+) are not implemented in
+this core. `Start` is blocking; the Win32 shell (`src/win32`) dispatches it off
+the UI thread through its own worker. The Qt path is no longer part of the
+build.

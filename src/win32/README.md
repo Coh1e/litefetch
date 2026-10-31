@@ -1,5 +1,9 @@
 # Win32 product window
 
+> 本文是 #3 票的交付记录，写于该票范围。此后新增的命令（暂停、删除、选项、批量、
+> 属性、多选、托盘）已经实现。当前行为以根目录 README 和
+> [最终交代](../../docs/specs/final-report.md) 为准。
+
 The native application shell for LiteFetch: OS-drawn caption, native menu,
 compact toolbar, Details ListView and the four-section status bar. It uses
 Win32/Comctl32 only and the Qt-free `src/core` boundary; the legacy Qt code
