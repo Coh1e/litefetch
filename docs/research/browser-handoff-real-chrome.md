@@ -245,7 +245,7 @@ service worker 会休眠、`import()` 被规范禁止、下载事件时有时无
 这条线留下了十个一次性探针，每个对应一次尝试，现在只剩两个常用工具：
 
 - `scripts/browser-session.ps1` / `browser-session-stop.ps1`：起停 Chrome + LiteFetch + 限速站点；
-- `scripts/load-extension.mjs`（CDP 加载扩展）与 `scripts/browser-e2e.mjs`（一次完整点击尝试）。
+- `scripts/load-extension.mjs`（CDP 加载扩展）与 `scripts/browser-e2e.mjs`（一次完整点击尝试；该脚本已于 2026-10-31 删除，记录保留）。
 
 其余（`browser-probe`、`browser-handoff-probe`、`browser-popup-handoff`、`browser-install-probe`、
 `browser-item-probe`、`browser-diagnose`、`wake-worker`）已删除：它们的结论都写在上面，脚本本身不再提供新信息。

@@ -20,7 +20,7 @@ BrowserBridge仍需与Native host配置中的端点相同才能连接。此界�
 
 - download-browser-settings启动真实QApplication对话框，覆盖默认关闭、相对路径拒绝、选择返回值、目录创建、固定身份、保存重载、关闭时恢复端点、取消不落盘、保存失败保留旧文件。
 - download-browser-bridge用真实host/IPC/SQLite/HTTP传输验证：关掉新捕获后新prepare拒绝，但既有准备事务仍能提交并完成精确文件。
-- verify-browser-settings.ps1在精简子进程环境下通过，截图out/verification/browser-settings.png已查看；主窗口部署包启动与截图也通过，工具栏入口可见。
+- verify-browser-settings.ps1在精简子进程环境下通过，截图out/verification/browser-settings.png已查看；主窗口部署包启动与截图也通过，工具栏入口可见。（该脚本已于 2026-10-31 删除，结论保留。）
 - 完整C++回归10/10通过，共41.41秒，日志logs/downloader-tests-with-browser-settings.log。编译日志logs/downloader-build-browser-settings.log。
 
 本轮没有真实浏览器downloads事件验收，也没有修改注册表。原BT文件对话框偶发失败的根因仍未确认，本轮完整回归通过不等于修复了该问题。

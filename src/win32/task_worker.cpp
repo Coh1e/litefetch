@@ -541,10 +541,10 @@ void TaskWorker::controlLoop()
         reload();
         wakeUi();
     } catch (const std::exception& error) {
-        std::ofstream debug("D:/Projects/litefetch/tmp/shutdown-error.log", std::ios::app);
+        std::ofstream debug(databasePath_.parent_path() / "shutdown-error.log", std::ios::app);
         debug << "controlLoop shutdown exception: " << error.what() << "\n";
     } catch (...) {
-        std::ofstream debug("D:/Projects/litefetch/tmp/shutdown-error.log", std::ios::app);
+        std::ofstream debug(databasePath_.parent_path() / "shutdown-error.log", std::ios::app);
         debug << "controlLoop shutdown unknown exception\n";
     }
     shutdownFinished_.store(true);
