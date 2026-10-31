@@ -184,6 +184,7 @@ private:
     void pauseSelected();
     void stopSelected();
     void deleteSelected();
+    void deleteSelectedWithFiles();
     void finishDeleteDialog(bool confirmed);
     void openFileSelected();
     void openFolderSelected();

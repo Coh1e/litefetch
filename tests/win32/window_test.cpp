@@ -449,6 +449,14 @@ void runChecks()
         const HWND status = childOfClass(handle, L"msctls_statusbar32");
         check(list != nullptr && toolbar != nullptr && status != nullptr,
             "list, toolbar and status bar exist");
+        // The options dialog is wired, so the toolbar button must be live; it was
+        // pinned to disabled after the dialog shipped.
+        check(commandEnabled(toolbar, ID_TOOLS_OPTIONS), "options is enabled in the toolbar");
+        wchar_t folderText[64]{};
+        SendMessageW(toolbar, TB_GETBUTTONTEXTW, ID_TASK_OPEN_FOLDER,
+            reinterpret_cast<LPARAM>(folderText));
+        check(std::wstring(folderText) == L"打开文件夹",
+            "the toolbar folder command says it opens the folder");
         check(headerColumnCount(list) == 6, "six default columns");
         check(SendMessageW(status, SB_GETPARTS, 0, 0) == 4, "status bar has four parts");
         check(pumpUntil([&] { return SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) == 4; }, 5000),

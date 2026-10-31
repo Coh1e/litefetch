@@ -80,7 +80,7 @@ const std::array<ToolbarButton, 10> toolbarButtons{{
     {ID_TASK_STOP, L"停止", IDI_STOP, false, 0},
     {ID_TASK_DELETE, L"删除", IDI_DELETE, false, 0},
     {0, L"", 0, true, 0},
-    {ID_TASK_OPEN_FOLDER, L"打开文件", IDI_FOLDER, false, 0},
+    {ID_TASK_OPEN_FOLDER, L"打开文件夹", IDI_FOLDER, false, 0},
     {0, L"", 0, true, 0},
     {ID_TOOLS_OPTIONS, L"选项", IDI_SETTINGS, false, 0},
 }};
@@ -933,7 +933,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
                 const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lParam);
                 if (key->wVKey == VK_DELETE) {
                     if (GetKeyState(VK_SHIFT) < 0) {
-                        setNotice("#18 将提供“删除任务及文件”的独立确认；本次未删除任何内容。");
+                        deleteSelectedWithFiles();
                     } else {
                         deleteSelected();
                     }
@@ -1048,20 +1048,9 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_TASK_REDOWNLOAD:
             setNotice("重新下载需要目标冲突与文件保护确认（后续版本）；本次未创建任务。");
             return 0;
-        case ID_TASK_DELETE_FILES: {
-            // Deleting files is its own confirmation: the record alone is what
-            // the other menu item removes.
-            const auto row = rowForId(focusedId());
-            if (!row) return 0;
-            const auto answer = MessageBoxW(hwnd_,
-                toWide("将删除任务记录以及它下载的文件：\n" + row->savePath
-                    + "\n\n已下载或未完成的片段都会删除，且不可恢复。是否继续？").c_str(),
-                L"删除任务及文件", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-            if (answer != IDYES) return 0;
-            worker_->postDeleteFiles(row->id);
-            setNotice("正在删除任务及文件：" + row->name);
+        case ID_TASK_DELETE_FILES:
+            deleteSelectedWithFiles();
             return 0;
-        }
         case ID_TASK_PROPERTIES:            showProperties();
             return 0;
         case ID_TOOLS_OPTIONS: {
@@ -1844,7 +1833,7 @@ void MainWindow::updateActions()
     enableButton(ID_TASK_STOP, interactive && actions.stop);
     enableButton(ID_TASK_DELETE, interactive && actions.deleteTask);
     enableButton(ID_TASK_OPEN_FOLDER, interactive && actions.openFolder);
-    enableButton(ID_TOOLS_OPTIONS, false);
+    enableButton(ID_TOOLS_OPTIONS, interactive);
     if (toolbar_ && startImageEnabled_ >= 0) {
         SendMessageW(toolbar_, TB_CHANGEBITMAP, ID_TASK_START,
             MAKELPARAM(actions.start ? startImageEnabled_ : startImageDisabled_, 0));
@@ -1909,7 +1898,7 @@ void MainWindow::updateTooltip(NMTTDISPINFOW& info)
             : L"打开文件夹 — 需选择一个保存位置存在的任务";
         break;
     case ID_TOOLS_OPTIONS:
-        tooltipText_ = L"选项 — 尚未实现：设置界面将在后续版本提供";
+        tooltipText_ = L"选项 — 限速、代理、计划与完成动作";
         break;
     default: tooltipText_.clear(); break;
     }
@@ -2484,6 +2473,22 @@ void MainWindow::deleteSelected()
     ShowWindow(deleteDialog_, SW_SHOW);
 }
 
+void MainWindow::deleteSelectedWithFiles()
+{
+    if (!worker_ || isClosing()) return;
+    // Deleting files is its own confirmation: the record alone is what the other
+    // menu item removes.
+    const auto row = rowForId(focusedId());
+    if (!row) return;
+    const auto answer = MessageBoxW(hwnd_,
+        toWide("将删除任务记录以及它下载的文件：\n" + row->savePath
+            + "\n\n已下载或未完成的片段都会删除，且不可恢复。是否继续？").c_str(),
+        L"删除任务及文件", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    if (answer != IDYES) return;
+    worker_->postDeleteFiles(row->id);
+    setNotice("正在删除任务及文件：" + row->name);
+}
+
 void MainWindow::finishDeleteDialog(bool confirmed)
 {
     HWND dialog = deleteDialog_;
@@ -2787,12 +2792,13 @@ void MainWindow::showCapabilities()
         L"• 多选、临时查找（Ctrl+F）、状态筛选、数值/时间排序\n"
         L"• 列顺序/宽度/显示与排序持久化，至少保留“名称”列\n"
         L"• 开始等待中/失败任务、停止等待中/下载中任务\n"
-        L"• 删除任务记录（先取消并等待，文件保留）、打开文件/所在文件夹、复制链接/路径\n"
+        L"• 删除任务记录（先取消并等待，文件保留）或删除任务及文件（独立确认）、打开文件/所在文件夹、复制链接/路径\n"
+        L"• 选项：限速、代理、超时、ed2k、并发、时段与计划任务\n"
         L"• 相同来源默认定位现有任务，可明确另建一份；显示/复制会隐藏 URL 凭据\n"
         L"\n"
-        L"尚未实现，因此按钮保持禁用：\n"
-        L"• ed2k（#12）：引擎接入前不会假报支持\n"
-        L"• 删除任务及文件、重新下载、选项 — 后续版本\n",
+        L"仍有限制：\n"
+        L"• 重新下载：需要目标冲突与文件保护确认，当前不创建任务\n"
+        L"• 批量添加当前只提交 HTTP/HTTPS 地址\n",
         L"本版本能力说明", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -2801,7 +2807,7 @@ void MainWindow::showAbout()
     MessageBoxW(hwnd_,
         L"LiteFetch 0.1\n\n"
         L"原生 Win32 下载管理器（开发版本）\n"
-        L"HTTP 下载（HTTPS 由传输库支持，本票未验收）、真实任务列表、批量/查找/多选与列设置；无 Qt 依赖。",
+        L"HTTP(S)、FTP、BT/磁力链与 ed2k/Kad；真实任务列表、批量/查找/多选与列设置；无 Qt 依赖。",
         L"关于 LiteFetch", MB_OK | MB_ICONINFORMATION);
 }
 
