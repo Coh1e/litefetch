@@ -169,6 +169,8 @@ scripts/       打包、smoke、浏览器联调探针
 
 新增 `scripts/ci.ps1` 与 `.github/workflows/windows.yml`：本地与 CI 跑同一条流水线，产物、摘要与日志固定在 `out/ci/`。本轮 Release 全套 23/23。
 
+2026-10-31 首次 GitHub Actions 运行成功（run #8，`b43999e`），产物 `LiteFetch-Windows-x64` 与日志可下载。此前的 D8050（`cannot execute c1.dll`）根因是 `CMakePresets.json` 把 `TEMP/TMP` 指向 `.deps/tmp`，干净检出没有这个目录；`scripts/ci.ps1` 与 `test-local.cmd` 现在先创建它。
+
 文档真源收口到本文；`win32-delivery-status.md`、`win32-acceptance-report.md`、`win32-ticket-plan.md`
 移入 `docs/history/2026-10-30/`，只作追溯。
 
@@ -180,7 +182,7 @@ scripts/       打包、smoke、浏览器联调探针
 | #34 | 托盘菜单与完成通知未接通 | 待做；需要真实桌面验收 |
 | #35 | `core-service` 偶发挂起，ctest TIMEOUT 未生效 | 待做；已加 CI 墙钟兜底 |
 | #36 | 门禁：脚本语法/编码与项目内路径检查 | 待做 |
-| #37 | 首次在 GitHub Actions 运行 Windows 流水线 | 待人类推送 |
+| #37 | 首次在 GitHub Actions 运行 Windows 流水线 | 首次运行已绿；tag Release 待人类 |
 | #38 | 清理旧测试与死脚本，加 clean/doctor | 待做（删除部分已完成） |
 | #39 | 命令表驱动，删除列宽双实现 | 待做 |
 | #40 | 剩余 UI 差距：属性页、DPI 图标、上传段与字体 | 待做 |
