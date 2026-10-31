@@ -50,9 +50,16 @@ if (Test-Path $browserHost) { Copy-Item $browserHost $packageDir }
 # project dependency tree first, then beside the exe.
 $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
 if (-not $dumpbin) {
-    $vsRoot = 'C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools'
-    $dumpbin = (Get-ChildItem $vsRoot -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty FullName)
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $install = & $vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+        if ($install) {
+            $dumpbin = (Get-ChildItem (Join-Path $install 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe `
+                -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName)
+        }
+    }
 }
 if (-not $dumpbin) { throw "dumpbin not found" }
 

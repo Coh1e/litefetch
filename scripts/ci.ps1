@@ -1,4 +1,4 @@
-# Builds, tests and packages LiteFetch with one command.
+﻿# Builds, tests and packages LiteFetch with one command.
 #
 # The same script runs locally and in GitHub Actions, so a green pipeline and a
 # green local run mean the same thing. Artifacts and logs always land in the
@@ -112,6 +112,8 @@ $packageDir = $null
 $zipPath = $null
 
 try {
+    $steps.Add((Invoke-Step 'check-scripts' { & (Join-Path $PSScriptRoot 'check-scripts.ps1') }))
+    $steps.Add((Invoke-Step 'check-project-local' { & (Join-Path $PSScriptRoot 'check-project-local.ps1') }))
     $steps.Add((Invoke-Step 'check-no-vcpkg' { & (Join-Path $PSScriptRoot 'check-no-vcpkg.ps1') }))
 
     $steps.Add((Invoke-Step 'configure' { & cmake --preset $Preset }))

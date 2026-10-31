@@ -32,8 +32,13 @@ $appProcess.Id | Set-Content (Join-Path $probe 'app-pid.txt')
 Start-Sleep -Seconds 3
 if ($appProcess.HasExited) { throw "LiteFetch exited with $($appProcess.ExitCode)" }
 
-$chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
-if (-not (Test-Path $chrome)) { throw 'Chrome is not installed where expected' }
+$chromeCandidates = @(
+    (Join-Path ${env:ProgramFiles} 'Google\Chrome\Application\chrome.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
+)
+$chrome = $chromeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $chrome) { throw 'Chrome is not installed in a standard location' }
 $chromeInfo = New-Object System.Diagnostics.ProcessStartInfo
 $chromeInfo.FileName = $chrome
 $chromeInfo.Arguments = "--user-data-dir=`"$(Join-Path $root '.deps\chrome-profile')`""

@@ -16,14 +16,16 @@ $probes = @(
 )
 
 $failed = @()
+$temp = Join-Path $root 'tmp'
+New-Item -ItemType Directory -Force $temp | Out-Null
 foreach ($probe in $probes) {
     $path = Join-Path $buildDir $probe.exe
     if (-not (Test-Path $path)) { $failed += "$($probe.exe): not built"; continue }
     # --help or a normal start is enough: what matters is that the loader got past
     # every import before the program ran.
     $process = Start-Process -FilePath $path -ArgumentList '--help' -PassThru -NoNewWindow `
-        -RedirectStandardOutput (Join-Path $env:TEMP 'check-binaries.out') `
-        -RedirectStandardError (Join-Path $env:TEMP 'check-binaries.err')
+        -RedirectStandardOutput (Join-Path $temp 'check-binaries.out') `
+        -RedirectStandardError (Join-Path $temp 'check-binaries.err')
     $null = $process.WaitForExit(15000)
     if (-not $process.HasExited) { $process.Kill(); continue }  # a GUI app that stays open is fine
     if ($process.ExitCode -eq -1073741515) {
