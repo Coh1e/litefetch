@@ -1,9 +1,4 @@
-/.deps/
-/out/
-/.idea/
-/CMakeUserPresets.json
-
-# Generated, private and project-local execution files
+# Build, dependency and execution output stays inside the project.
 /.deps/
 /.idea/
 /.vs/
@@ -20,7 +15,6 @@
 /tmp/
 /logs/
 /.pi/
-/CMakeUserPresets.json
 /tests/deps/
 /tests/tools/
 /tests/app-*/
@@ -39,7 +33,10 @@ __pycache__/
 *.exe
 *.dll
 *.log
+*.db
+*.db-wal
+*.db-shm
 .env
 .env.*
 !.env.example
-/out/package/
+/CMakeUserPresets.json

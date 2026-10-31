@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {Handoff} from './handoff.mjs';
 
 const request = {url: 'https://example.test/file?signature=opaque', method: 'GET', uniqueMatch: true, replaySafe: true};
@@ -160,8 +161,8 @@ test('native disconnection after cancel preserves recoverable record without rep
   assert.equal(f.starts, 0);
 });
 test('file-backed journal survives a fresh controller and lost commit acknowledgement', async () => {
-  // Test files stay inside the project; no global temp/profile is used.
-  const parent = path.resolve('downloader/out/verification');
+  // Test files stay inside the project; the path does not depend on the cwd.
+  const parent = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../tmp/verification');
   await fs.mkdir(parent, {recursive: true});
   const directory = await fs.mkdtemp(path.join(parent, 'handoff-'));
   try {
