@@ -15,7 +15,7 @@ Status: open
 - 验收 900 s 墙钟、HTTP 夹具收/发超时（#35）。
 - 脚本解析/BOM 与项目内路径门禁（#36）。
 - 旧状态文档归档，`final-report.md` 为唯一真源。
-- 凭据对话框拆为可测接缝并读取“记住密码”（#33）：勾选写 DPAPI、未勾选不落盘；`ui-credential` 与 `ui-window` 覆盖。
+- 凭据对话框拆为可测接缝并读取“记住密码”（#33）：勾选写 DPAPI、未勾选不落盘；`ui-credential` 与 `ui-window` 覆盖。跨账户实际重认证未自动验证（单机无法制造第二账户），DPAPI 用户作用域与篡改 blob 由 `core-credentials` 覆盖。
 
 ## 已定取舍（不要重新讨论）
 

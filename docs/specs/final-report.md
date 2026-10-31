@@ -1,13 +1,13 @@
 # Win32 LiteFetch 最终交代
 
-日期：2026-10-30（关闭后复核）。本文回答一件事：**哪些做完了、哪些没有、证据在哪、还需要人做什么。**
+日期：2026-10-31（#33 收口后复核）。本文回答一件事：**哪些做完了、哪些没有、证据在哪、还需要人做什么。**
 
 ## 一、验收方式与最近一次结果
 
 ```
-cmd /c test-local.cmd
-→ 100% tests passed, 0 tests failed out of 24
-→ Total Test time (real) = 143.31 s   (2026-10-31，#33 收口复跑)
+cmd /c test-local.cmd        (exit code 0)
+→ 100% tests passed out of 24
+→ Total Test time (real) = 139.25 s   (2026-10-31，#33 收口复跑)
 ```
 
 - 24 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
@@ -193,5 +193,6 @@ scripts/       打包、smoke、浏览器联调探针
 剩余票的技术取舍与顺序见 [收尾规格](win32-remaining-work.md)。
 
 2026-10-31 #33 收口：`credential_dialog.{h,cpp}` 移出 `main_window.cpp`，生产路径仍是模态对话框，测试用同一资源与过程创建非模态实例。
-新增 `ui-credential`（勾选写 DPAPI、未勾选不落盘、取消不交出凭据、提示文案与复选框一致）；
-`ui-window` 增加持久化凭据后新窗口自动重试已保存 401 的场景。验收 `cmd /c test-local.cmd` → 24/24 通过，143.31 s；日志在 `tmp/acceptance.log`。
+新增 `ui-credential`（勾选写 DPAPI、未勾选不落盘、取消不交出凭据、提示文案与复选框一致、密码框掩码）；
+`ui-window` 增加持久化凭据后新窗口自动重试已保存 401 的场景。验收 `cmd /c test-local.cmd` → 24/24 通过，139.25 s，退出码 0；日志在 `tmp/acceptance.log`。
+边界：跨 Windows 账户的实际重认证未自动验证（单机无法制造第二账户），DPAPI 用户作用域与篡改 blob 由 `core-credentials` 覆盖；未新增凭据日志。

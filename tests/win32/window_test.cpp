@@ -832,7 +832,8 @@ void runChecks()
 
     // A credential remembered before a restart must bring a persisted 401 back
     // without asking again. The failed task and the DPAPI blob are exactly what
-    // the previous run leaves on disk; a fresh window is the restart.
+    // the previous run leaves on disk; a fresh window is the restart. The modal
+    // dialog-to-store wiring itself is covered by ui-credential.
     {
         const auto authBody = payload(32 * 1024);
         HttpFixture::Options authOptions{authBody};

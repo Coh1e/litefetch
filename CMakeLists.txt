@@ -265,6 +265,7 @@ if(WIN32)
     add_library(litefetch-win32-ui STATIC
         src/win32/main_window.cpp src/win32/main_window.h
         src/win32/credential_dialog.cpp src/win32/credential_dialog.h
+        src/win32/dialog_layout.h
         src/win32/new_download_dialog.cpp src/win32/new_download_dialog.h
         src/win32/column_dialog.cpp src/win32/column_dialog.h
         src/win32/batch_dialog.cpp src/win32/batch_dialog.h)

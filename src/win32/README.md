@@ -77,11 +77,16 @@ test-local.cmd
   toggle, the live column geometry against `columnWidths()`, toolbar enablement
   for a queued and a completed task, copy link into the clipboard, a real HTTP
   download started from the list, delete-record-keeps-file, the open-folder
-  decision, column drag and persistence across a reopen, the UI Automation
+  decision, column drag and persistence across a reopen, retrying a persisted
+  401 after a restart with the remembered credential, the UI Automation
   surface, and a clean close (exit code 0). Dialogs are dismissed with a
   callback timer, so nothing races a second process. With
   `LITEFETCH_EVIDENCE_DIR` set (ctest sets it to `.pi/evidence/ui-window`) it
   also writes PNG screenshots of the window through `PrintWindow`.
+- `ui-credential` — the real credentials-dialog procedure on a modeless
+  instance of the same resource: ticking “remember” reaches the answer and
+  writes a DPAPI blob that reloads, leaving it unticked writes no file, cancelling
+  hands over nothing, and the hint text matches what the checkbox does.
 - `ui-model` — column formatting, measured speed/remaining time, status
   parts, action enablement, URL/file-name parsing, the startup command line and
   the Explorer target of `打开文件夹` (no window needed).

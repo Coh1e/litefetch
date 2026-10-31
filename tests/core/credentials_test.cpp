@@ -69,6 +69,16 @@ void tamperedBlobIsRejected(const std::filesystem::path& root)
     check(plain.has_value() && *plain == "hello", "DPAPI restores the value");
     check(!unprotectForCurrentUser("garbage").has_value(), "unprotect refuses garbage");
 }
+void unwritableFileIsReported(const std::filesystem::path& root)
+{
+    // A directory that does not exist cannot be opened for writing. The caller
+    // must hear about it instead of promising a memory that was never saved.
+    const auto file = root / "missing-dir" / "credentials.dat";
+    CredentialStore store(file);
+    check(!store.save("example.org", "alice", "s3cret"), "a failed write is reported");
+    check(!store.has("example.org"), "a failed write leaves nothing to load");
+    check(!std::filesystem::exists(file), "a failed write creates no file");
+}
 } // namespace
 
 int main()
@@ -78,6 +88,7 @@ int main()
         roundTrip(root.path());
         tamperedBlobIsRejected(root.path());
         forgettingRemovesEverything(root.path());
+        unwritableFileIsReported(root.path());
         return 0;
     });
 }

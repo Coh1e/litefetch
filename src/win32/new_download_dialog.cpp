@@ -1,5 +1,6 @@
 #include "new_download_dialog.h"
 
+#include "dialog_layout.h"
 #include "resource.h"
 #include "text_utf8.h"
 #include "url_filename.h"
@@ -46,19 +47,6 @@ void updateHint(HWND dialog)
     } catch (const std::exception&) {
         SetDlgItemTextW(dialog, IDC_URL_HINT, L"已识别: —。");
     }
-}
-
-void centerOnOwner(HWND dialog, HWND owner)
-{
-    if (!owner) return;
-    RECT ownerRect{};
-    RECT dialogRect{};
-    if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(dialog, &dialogRect)) return;
-    const int width = dialogRect.right - dialogRect.left;
-    const int height = dialogRect.bottom - dialogRect.top;
-    const int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
-    const int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2;
-    SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void browseForFolder(HWND dialog)
@@ -198,7 +186,7 @@ INT_PTR CALLBACK dialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             }
         }
         updateHint(dialog);
-        centerOnOwner(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         SetFocus(GetDlgItem(dialog, IDC_URL));
         SendDlgItemMessageW(dialog, IDC_URL, EM_SETSEL, 0, -1);
         return FALSE;

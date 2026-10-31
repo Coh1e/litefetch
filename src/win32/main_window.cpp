@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "column_dialog.h"
 #include "credential_dialog.h"
+#include "dialog_layout.h"
 #include "explorer_target.h"
 #include "new_download_dialog.h"
 #include "resource.h"
@@ -135,20 +136,6 @@ std::wstring readClipboardText(HWND owner)
     return result;
 }
 
-void centerDialog(HWND dialog, HWND owner)
-{
-    if (!owner) return;
-    RECT ownerRect{};
-    RECT dialogRect{};
-    if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(dialog, &dialogRect)) return;
-    const int width = dialogRect.right - dialogRect.left;
-    const int height = dialogRect.bottom - dialogRect.top;
-    SetWindowPos(dialog, nullptr,
-        ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2,
-        ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2,
-        0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
 struct BatchResultRow {
     int line = 0;
     std::string address;
@@ -192,7 +179,7 @@ INT_PTR CALLBACK batchResultDialogProc(HWND dialog, UINT message, WPARAM wParam,
             ListView_SetItemText(list, static_cast<int>(index), 1, const_cast<LPWSTR>(address.c_str()));
             ListView_SetItemText(list, static_cast<int>(index), 2, const_cast<LPWSTR>(result.c_str()));
         }
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         SetFocus(GetDlgItem(dialog, IDOK));
         return FALSE;
     }
@@ -287,7 +274,7 @@ INT_PTR CALLBACK torrentFilesDialogProc(HWND dialog, UINT message, WPARAM wParam
             ListView_SetItemText(list, static_cast<int>(index), 1, const_cast<LPWSTR>(size.c_str()));
             ListView_SetCheckState(list, static_cast<int>(index), TRUE);
         }
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         return TRUE;
     }
     case WM_COMMAND:
@@ -478,7 +465,7 @@ INT_PTR CALLBACK torrentDetailsDialogProc(HWND dialog, UINT message, WPARAM wPar
         }
         EnableWindow(GetDlgItem(dialog, IDC_TD_APPLY), FALSE);
         showTorrentPage(dialog, 0);
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         return TRUE;
     }
     case WM_NOTIFY: {
@@ -591,7 +578,7 @@ INT_PTR CALLBACK propertiesDialogProc(HWND dialog, UINT message, WPARAM wParam, 
         SetDlgItemTextW(dialog, IDC_PROP_STATE, fields->state.c_str());
         SetDlgItemTextW(dialog, IDC_PROP_PROTOCOL, fields->protocol.c_str());
         SetDlgItemTextW(dialog, IDC_PROP_CONNECTION, fields->connection.c_str());
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         return TRUE;
     }
     case WM_COMMAND:
@@ -619,7 +606,7 @@ INT_PTR CALLBACK MainWindow::deleteDialogProc(HWND dialog, UINT message, WPARAM 
         const auto text = L"确定从列表中删除所选的 "
             + std::to_wstring(self->pendingDeleteSelection_.size()) + L" 个任务？";
         SetDlgItemTextW(dialog, IDC_DELETE_MESSAGE, text.c_str());
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         SetFocus(GetDlgItem(dialog, IDCANCEL));
         return FALSE;
     }

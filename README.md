@@ -27,7 +27,7 @@ LiteFetch 是面向 Windows 10/11 x64 的开源原生下载管理器。它统一
 ```powershell
 cmake --preset windows-core
 cmake --build out/build/windows-core
-cmd /c test-local.cmd     # 23 个测试，约 3 分钟（本机 164–185 秒）
+cmd /c test-local.cmd     # 24 个测试，约 3 分钟（本机 139–185 秒）
 out\build\windows-core\litefetch-win32.exe
 ```
 
@@ -55,7 +55,7 @@ out/build/windows-core/litefetch-core-cli.exe list --db data/tasks.db
 powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
 ```
 
-脚本自动加载 MSVC 环境，然后配置、构建、运行 23 个测试并打包。产物固定在：
+脚本自动加载 MSVC 环境，然后配置、构建、运行 24 个测试并打包。产物固定在：
 
 | 路径 | 内容 |
 |---|---|

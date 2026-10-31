@@ -1,5 +1,6 @@
 #include "credential_dialog.h"
 
+#include "dialog_layout.h"
 #include "resource.h"
 #include "text_utf8.h"
 
@@ -23,20 +24,6 @@ std::string controlText(HWND dialog, int id)
     } catch (const std::exception&) {
         return {};
     }
-}
-
-void centerDialog(HWND dialog, HWND owner)
-{
-    if (!owner) return;
-    RECT ownerRect{};
-    RECT dialogRect{};
-    if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(dialog, &dialogRect)) return;
-    const int width = dialogRect.right - dialogRect.left;
-    const int height = dialogRect.bottom - dialogRect.top;
-    SetWindowPos(dialog, nullptr,
-        ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2,
-        ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2,
-        0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void closeDialog(HWND dialog, const CredentialPrompt* prompt, INT_PTR result)
@@ -63,7 +50,7 @@ INT_PTR CALLBACK credentialDialogProc(HWND dialog, UINT message, WPARAM wParam, 
         SetDlgItemTextW(dialog, IDC_CRED_HINT,
             L"服务器要求登录（HTTP 401）。勾选“记住密码”后由 Windows 保护存储保存；"
             L"不勾选只用于本次运行。");
-        centerDialog(dialog, GetParent(dialog));
+        centerDialogOnOwner(dialog, GetParent(dialog));
         SetFocus(GetDlgItem(dialog, IDC_CRED_USER));
         return FALSE;
     }

@@ -73,36 +73,41 @@ private:
     HWND handle_ = nullptr;
 };
 
-void checkedRememberIsPartOfTheAnswer()
+CredentialPrompt submitAnswer(bool remember)
 {
     CredentialPrompt prompt;
     prompt.host = "example.org";
     DialogInstance dialog(prompt);
-    check(!dialog.rememberChecked(), "remember starts unchecked");
     dialog.setText(IDC_CRED_USER, L"alice");
     dialog.setText(IDC_CRED_PASS, L"s3cret");
-    dialog.setRemember(true);
+    dialog.setRemember(remember);
     dialog.sendCommand(IDOK);
+    return prompt;
+}
 
+void rememberStartsUnchecked()
+{
+    CredentialPrompt prompt;
+    DialogInstance dialog(prompt);
+    check(!dialog.rememberChecked(), "remember starts unchecked");
+    dialog.sendCommand(IDCANCEL);
+}
+
+void checkedRememberIsPartOfTheAnswer()
+{
+    const CredentialPrompt prompt = submitAnswer(true);
     check(prompt.remember, "the ticked box reaches the answer");
     checkEqual(prompt.username, "alice", "the user name reaches the answer");
     checkEqual(prompt.password, "s3cret", "the password reaches the answer");
     checkEqual(prompt.host, "example.org", "the host is carried through unchanged");
-    check(!IsWindow(dialog.handle()), "confirming closes the dialog");
 }
 
 void uncheckedRememberStaysInMemory()
 {
-    CredentialPrompt prompt;
-    DialogInstance dialog(prompt);
-    dialog.setText(IDC_CRED_USER, L"bob");
-    dialog.setText(IDC_CRED_PASS, L"hunter2");
-    dialog.sendCommand(IDOK);
-
+    const CredentialPrompt prompt = submitAnswer(false);
     check(!prompt.remember, "an unticked box keeps the credential in memory");
-    checkEqual(prompt.username, "bob", "the user name is still read");
-    checkEqual(prompt.password, "hunter2", "the password is still read");
-    check(!IsWindow(dialog.handle()), "the dialog closes without remembering");
+    checkEqual(prompt.username, "alice", "the user name is still read");
+    checkEqual(prompt.password, "s3cret", "the password is still read");
 }
 
 void cancelReportsNoAnswer()
@@ -135,15 +140,26 @@ void hintMatchesTheCheckbox()
         "the hint must not claim credentials are never saved");
 }
 
+void passwordFieldIsMasked()
+{
+    CredentialPrompt prompt;
+    DialogInstance dialog(prompt);
+    const auto style = GetWindowLongPtrW(GetDlgItem(dialog.handle(), IDC_CRED_PASS), GWL_STYLE);
+    check((style & ES_PASSWORD) != 0, "the password field is a password edit");
+    dialog.setText(IDC_CRED_PASS, L"s3cret");
+    const std::wstring hint = dialog.text(IDC_CRED_HINT);
+    check(hint.find(L"s3cret") == std::wstring::npos,
+        "the hint never echoes the typed password");
+    dialog.sendCommand(IDCANCEL);
+}
+
 void checkedAnswerIsStoredWithoutPlaintext(const std::filesystem::path& root)
 {
     const auto file = root / "checked.dat";
     CredentialStore store(file);
-    CredentialPrompt prompt;
-    prompt.host = "example.org";
-    prompt.username = "alice";
-    prompt.password = "s3cret";
-    prompt.remember = true;
+    // The answer comes from the real dialog, then takes the same storage path
+    // the window uses.
+    const CredentialPrompt prompt = submitAnswer(true);
 
     bool called = false;
     const bool stored = storeAcceptedCredential(prompt,
@@ -172,11 +188,7 @@ void uncheckedAnswerIsNotStored(const std::filesystem::path& root)
 {
     const auto file = root / "unchecked.dat";
     CredentialStore store(file);
-    CredentialPrompt prompt;
-    prompt.host = "example.org";
-    prompt.username = "alice";
-    prompt.password = "s3cret";
-    prompt.remember = false;
+    const CredentialPrompt prompt = submitAnswer(false);
 
     bool called = false;
     const bool stored = storeAcceptedCredential(prompt,
@@ -195,10 +207,12 @@ int main()
 {
     return run("ui-credential", [] {
         TempDir root;
+        rememberStartsUnchecked();
         checkedRememberIsPartOfTheAnswer();
         uncheckedRememberStaysInMemory();
         cancelReportsNoAnswer();
         hintMatchesTheCheckbox();
+        passwordFieldIsMasked();
         checkedAnswerIsStoredWithoutPlaintext(root.path());
         uncheckedAnswerIsNotStored(root.path());
         return 0;

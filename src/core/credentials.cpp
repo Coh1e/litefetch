@@ -87,10 +87,13 @@ std::map<std::string, std::string> readFile(const std::filesystem::path& file)
     return records;
 }
 
-void writeFile(const std::filesystem::path& file, const std::map<std::string, std::string>& records)
+bool writeFile(const std::filesystem::path& file, const std::map<std::string, std::string>& records)
 {
     std::ofstream output(file, std::ios::trunc);
+    if (!output) return false;
     for (const auto& [host, blob] : records) output << host << '\t' << blob << '\n';
+    output.flush();
+    return static_cast<bool>(output);
 }
 } // namespace
 
@@ -135,8 +138,9 @@ bool CredentialStore::save(const std::string& host, const std::string& username,
     if (protectedBytes.empty()) return false;
     auto records = readFile(file_);
     records[host] = base64Encode(protectedBytes);
-    writeFile(file_, records);
-    return true;
+    // A failed write must not be reported as remembered: the next start would
+    // quietly ask again while the UI had promised otherwise.
+    return writeFile(file_, records);
 }
 
 std::optional<StoredCredential> CredentialStore::load(const std::string& host) const
