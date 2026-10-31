@@ -11,6 +11,8 @@
 
 | `ui-window` | `download did not publish`（30 s 内文件没落地） | 2026-10-28 约 1/3；**2026-10-30 共 19 次整套运行 0 次** | 选行落在别的任务上的竞态已修；超时信息补已写/期望字节与 worker 任务状态 | 已按此结论关闭 #32（`.pi/evidence/32/`）；再出现时看 `task=` 与 `wrote=/expected=` 直接重开 |
 
+| `core-service` | 2026-10-31 Release 全套：0% CPU 挂起 36 分钟，三个监听端口保持打开；ctest 的 `TIMEOUT 240` 没有终止它。同一可执行文件单独重跑通过（CPU <1 s） | 本轮 2 次整套运行 1 次 | 夹具的收/发加 10 s 超时；`stop()` 关闭活动连接再 join；验收加 900 s 墙钟并 `taskkill /T`（`scripts/run-acceptance.ps1`） | 再出现时看 `tmp/acceptance.log` 停在哪个测试；若仍是 `recv` 无进展，进一步查夹具的 `handle()` 路径（#35） |
+
 ## 遇到偶发时的做法
 
 1. 先看失败信息里的状态字段，再决定是重跑还是调查；

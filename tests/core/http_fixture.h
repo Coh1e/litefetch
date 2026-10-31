@@ -108,6 +108,10 @@ public:
         stopping_.store(true);
         const SOCKET listener = listener_.exchange(INVALID_SOCKET);
         if (listener != INVALID_SOCKET) closesocket(listener);
+        // A client that connected but stopped talking would otherwise hold the
+        // serve thread in recv until the process dies; close it so join returns.
+        const SOCKET client = client_.exchange(INVALID_SOCKET);
+        if (client != INVALID_SOCKET) closesocket(client);
         if (thread_.joinable()) thread_.join();
     }
 
@@ -126,8 +130,17 @@ private:
                 if (stopping_.load()) break;
                 continue;
             }
+            // Bounded reads and writes: a peer that vanishes mid-request must
+            // not pin this single-connection fixture forever.
+            DWORD timeout = 10000;
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+            setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+                reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+            client_.store(client);
             handle(client);
-            closesocket(client);
+            const SOCKET finished = client_.exchange(INVALID_SOCKET);
+            if (finished != INVALID_SOCKET) closesocket(finished);
         }
     }
 
@@ -278,6 +291,7 @@ private:
     std::string lastPath_;
     int requests_ = 0;
     std::atomic<SOCKET> listener_{INVALID_SOCKET};
+    std::atomic<SOCKET> client_{INVALID_SOCKET};
     std::atomic_bool stopping_{false};
     unsigned short port_ = 0;
     std::jthread thread_;
