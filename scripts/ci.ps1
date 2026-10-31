@@ -194,6 +194,15 @@ try {
             Tee-Object -FilePath $smokeLog | Out-Host
         $code = $LASTEXITCODE
         $clock.Stop()
+        # win32-smoke writes its lines with Write-Host, so Tee may never create
+        # the file. Fall back to the evidence log the script always writes.
+        if (-not (Test-Path -LiteralPath $smokeLog)) {
+            $latest = Get-ChildItem (Join-Path $root '.pi/evidence/ci-smoke') -Recurse `
+                -Filter smoke.log -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($latest) { Copy-Item -LiteralPath $latest.FullName -Destination $smokeLog }
+        }
+        if (-not (Test-Path -LiteralPath $smokeLog)) { Write-Utf8 $smokeLog '' }
         $text = Get-Content -LiteralPath $smokeLog -Raw
         $window = [regex]::Match($text, 'window: appeared after (\d+) ms')
         $smokeResult = [pscustomobject]@{
