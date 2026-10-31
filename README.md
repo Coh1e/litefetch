@@ -1,6 +1,6 @@
 # LiteFetch
 
-LiteFetch 是面向 Windows 10/11 x64 的开源原生下载管理器。它统一支持 HTTP(S)、FTP、BT/磁力链和 ed2k/Kad，并提供浏览器接管、任务恢复、限速和计划任务。
+LiteFetch 是面向 Windows 10/11 x64 的开源原生下载管理器。它统一支持 HTTP(S)、FTP、BT/磁力链和 ed2k/Kad，并提供浏览器接管、任务恢复、限速、计划任务、托盘菜单和完成通知。
 
 当前实现是 **C++23 / Win32 原生应用**。Qt 旧实现已从产品源码移除；`tests/` 中的 Qt 旧测试源不参与构建。原 MiniThunder 逆向成果只用于行为研究：本项目不加载它的闭源下载 DLL，也不接入迅雷加速网络。
 

@@ -439,6 +439,10 @@ void runChecks()
     {
         MainWindow window(options);
         check(window.create(instance, SW_SHOWNORMAL), "main window is created");
+        std::vector<std::string> notifiedDestinations;
+        window.setNotificationSinkForTest([&](const TaskSnapshot& task) {
+            notifiedDestinations.push_back(task.destination);
+        });
         const HWND handle = window.handle();
         check(handle != nullptr, "window handle is available");
 
@@ -568,6 +572,12 @@ void runChecks()
             throw std::runtime_error("download did not publish: " + detail);
         }
         check(readBytes(destination) == body, "downloaded bytes match the controlled peer");
+        {
+            bool payloadNotified = false;
+            for (const auto& path : notifiedDestinations)
+                if (std::filesystem::path(path).filename() == "payload.bin") payloadNotified = true;
+            check(payloadNotified, "a completed task reaches the notification decision");
+        }
 
         const int completedRow = rowOf(list, L"payload.bin");
         check(completedRow >= 0, "the downloaded task is visible by name");
@@ -681,18 +691,33 @@ void runChecks()
         {
             // The notification icon keeps LiteFetch reachable while the window is
             // minimised. The shell may be absent in an automation session, so the
-            // icon install is only reported, while the restore path behind the
-            // same message is checked for real.
-            auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
-            check(window != nullptr, "the window object is reachable from the HWND");
-            if (!window->trayIconVisible())
+            // icon install is only reported; the message routing and restore
+            // commands behind it are checked for real, including that the window
+            // really leaves the iconic state.
+            auto* trayWindow = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
+            check(trayWindow != nullptr, "the window object is reachable from the HWND");
+            bool menuOpened = false;
+            trayWindow->setTrayMenuOpenerForTest([&] { menuOpened = true; });
+            if (!trayWindow->trayIconVisible())
                 std::fprintf(stderr,
                     "ui-window: notification area unavailable in this session, tray install check skipped\n");
+
             ShowWindow(handle, SW_MINIMIZE);
-            pumpUntil([] { return false; }, 100);
+            check(pumpUntil([&] { return IsIconic(handle) != FALSE; }, 3000), "window minimizes");
             PostMessageW(handle, WM_APP + 5, 0, WM_LBUTTONDBLCLK);
-            check(pumpUntil([&] { return IsWindowVisible(handle) != FALSE; }, 3000),
+            check(pumpUntil([&] { return IsIconic(handle) == FALSE; }, 3000),
                 "the tray double click restores the window");
+
+            PostMessageW(handle, WM_APP + 5, 0, WM_RBUTTONUP);
+            check(pumpUntil([&] { return menuOpened; }, 3000),
+                "the tray right click opens the menu");
+
+            ShowWindow(handle, SW_MINIMIZE);
+            check(pumpUntil([&] { return IsIconic(handle) != FALSE; }, 3000),
+                "window minimizes again for the menu command");
+            PostMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TRAY_SHOW, 0), 0);
+            check(pumpUntil([&] { return IsIconic(handle) == FALSE; }, 3000),
+                "the tray show command restores the window");
             ShowWindow(handle, SW_RESTORE);
             pumpUntil([] { return false; }, 100);
         }

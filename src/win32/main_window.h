@@ -51,7 +51,7 @@ public:
     bool create(HINSTANCE instance, int showCommand);
     HWND handle() const { return hwnd_; }
     // Exposed for the window harness: whether the notification icon is up.
-    bool trayIconVisible() const { return trayVisible_; }
+    bool trayIconVisible() const;
     // Exposed for the window harness: the priority the list currently shows.
     // Exposed for the window harness: the traffic totals the window last saw.
     std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
@@ -70,6 +70,18 @@ public:
     void setFolderOpenerForTest(std::function<void(const std::filesystem::path&)> opener)
     {
         folderOpener_ = std::move(opener);
+    }
+    // The tray menu is native and blocks in TrackPopupMenu; the harness replaces
+    // it so right-click routing can be asserted without a real desktop.
+    void setTrayMenuOpenerForTest(std::function<void()> opener)
+    {
+        trayMenuOpener_ = std::move(opener);
+    }
+    // A balloon needs a notification area. The harness observes the decision to
+    // notify, while the real balloon stays a manual desktop check.
+    void setNotificationSinkForTest(std::function<void(const TaskSnapshot&)> sink)
+    {
+        notificationSink_ = std::move(sink);
     }
     // Exposed for the window harness: the status text the list shows.
     std::string errorOfTaskNamed(const std::string& name) const
@@ -97,6 +109,12 @@ public:
     HWND activeDialog() const { return deleteDialog_; }
 
 private:
+    // Shared with the detached install thread: Shell_NotifyIcon can block for
+    // seconds, so the thread must not touch MainWindow after it may be gone.
+    struct TrayState {
+        std::atomic_bool visible{false};
+        std::atomic_bool closed{false};
+    };
     struct PendingLine {
         BatchLine line;
         bool submitted = false;
@@ -124,6 +142,8 @@ private:
     bool createControls();
     void addTrayIcon();
     void notifyTaskFinished(const TaskSnapshot& task);
+    void handleNotifications(const WorkerSnapshot& snapshot);
+    void restoreFromTray();
     void setSelectedPriority(int priority);
     void openDownloadFolder();
     void removeTrayIcon();
@@ -220,7 +240,7 @@ private:
     HMENU menu_ = nullptr;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr;
-    std::atomic_bool trayVisible_{false};
+    std::shared_ptr<TrayState> trayState_ = std::make_shared<TrayState>();
     HICON largeIcon_ = nullptr;
     HICON smallIcon_ = nullptr;
     AppOptions options_;
@@ -245,11 +265,15 @@ private:
     std::set<std::string, std::less<>> pendingDeleteIds_;
     std::set<std::string, std::less<>> promptedCredentials_;
     NotificationPolicy notifications_;
+    bool notificationBaselineReady_ = false;
     std::array<std::int64_t, 4> traffic_{};
     std::uint64_t lastCompletionSequence_ = 0;
     int completionAction_ = 0;
     // Replaced by the test harness so the folder decision can be observed.
     std::function<void(const std::filesystem::path&)> folderOpener_;
+    // Replaced by the window harness; native menus block a same-thread test.
+    std::function<void()> trayMenuOpener_;
+    std::function<void(const TaskSnapshot&)> notificationSink_;
     std::shared_ptr<std::atomic_bool> torrentFetchCancel_;
     bool torrentFetchActive_ = false;
     std::vector<std::string> pendingDeleteFailures_;

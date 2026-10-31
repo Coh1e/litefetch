@@ -635,6 +635,11 @@ MainWindow::MainWindow(AppOptions options)
 
 MainWindow::~MainWindow()
 {
+    // A detached install thread may still be in Shell_NotifyIcon. Mark the tray
+    // closed and let that thread remove a late icon itself; it never touches
+    // this object.
+    trayState_->closed.store(true);
+    if (hwnd_ && IsWindow(hwnd_)) removeTrayIcon();
     if (deleteDialog_) {
         HWND dialog = deleteDialog_;
         deleteDialog_ = nullptr;
@@ -786,6 +791,21 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case workerWakeMessage:
         refreshFromWorker();
         return 0;
+    case appTrayMessage: {
+        const UINT event = static_cast<UINT>(lParam);
+        if (event == WM_LBUTTONDBLCLK) {
+            restoreFromTray();
+            return 0;
+        }
+        if (event == WM_RBUTTONUP) {
+            if (trayMenuOpener_)
+                trayMenuOpener_();
+            else
+                showTrayMenu();
+            return 0;
+        }
+        return 0;
+    }
     case appRefreshColumnsMessage:
         rebuildColumns();
         syncList();
@@ -975,8 +995,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case ID_TASK_DELETE: deleteSelected(); return 0;
         case ID_TASK_OPEN_FILE: openFileSelected(); return 0;
         case ID_TRAY_SHOW:
-            ShowWindow(hwnd_, SW_RESTORE);
-            SetForegroundWindow(hwnd_);
+            restoreFromTray();
             return 0;
         case ID_TASK_OPEN_FOLDER: openFolderSelected(); return 0;
         case ID_TASK_PRIORITY_HIGH:
@@ -1036,6 +1055,8 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         KillTimer(hwnd_, IDT_REFRESH);
         KillTimer(hwnd_, IDT_SHUTDOWN);
+        trayState_->closed.store(true);
+        removeTrayIcon();
         if (worker_) worker_->shutdown();
         PostQuitMessage(0);
         return 0;
@@ -1105,7 +1126,10 @@ bool MainWindow::createControls()
 
 void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
 {
-    if (!trayVisible_.load()) return; // the shell is not reachable in this session
+    // The harness observes the decision even in a session without a notification
+    // area; the balloon itself needs the real shell.
+    if (notificationSink_) notificationSink_(task);
+    if (!trayState_->visible.load()) return;
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
     data.hWnd = hwnd_;
@@ -1123,20 +1147,60 @@ void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
     Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
+void MainWindow::handleNotifications(const WorkerSnapshot& snapshot)
+{
+    if (!notificationBaselineReady_) {
+        // Tasks that were already terminal when the window opened are history,
+        // not events; marking them seen stops a startup balloon storm.
+        for (const auto& task : snapshot.tasks) notifications_.shouldNotify(task.id, task.state);
+        notificationBaselineReady_ = true;
+        return;
+    }
+    for (const auto& task : snapshot.tasks) {
+        // The first 401 opens the credential prompt; a failure balloon before
+        // the user has even answered it would be noise. Once the task has been
+        // prompted/retried, a repeated 401 is a real failure.
+        const bool credentialFailure =
+            task.state == TaskState::Failed && task.error.find("401") != std::string::npos;
+        if (credentialFailure && !promptedCredentials_.contains(task.id)) continue;
+        if (notifications_.shouldNotify(task.id, task.state)) notifyTaskFinished(task);
+    }
+}
+
+void MainWindow::restoreFromTray()
+{
+    if (!hwnd_) return;
+    ShowWindow(hwnd_, SW_RESTORE);
+    SetForegroundWindow(hwnd_);
+    if (list_) SetFocus(list_);
+}
+
+bool MainWindow::trayIconVisible() const
+{
+    return trayState_->visible.load();
+}
+
 void MainWindow::addTrayIcon()
 {
-    if (trayVisible_.load() || !hwnd_) return;
+    const auto state = trayState_;
+    if (state->visible.load() || state->closed.load() || !hwnd_) return;
     // Shell_NotifyIcon can spend seconds looking for a notification area that is
     // not there, and it must never do that on the UI thread: the window would
-    // stop answering commands, so a paused transfer would keep running.
+    // stop answering commands, so a paused transfer would keep running. The
+    // thread owns a copy of the icon and shared state, never `this`.
     const HWND window = hwnd_;
-    const HICON icon = largeIcon_ ? largeIcon_
-        : LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
+    HICON icon = CopyIcon(largeIcon_ ? largeIcon_ : smallIcon_);
+    const bool ownedIcon = icon != nullptr;
+    if (!icon) icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
     std::string tooltip = "LiteFetch";
     const auto count = model_.rows().size();
     if (count > 0) tooltip += " - " + std::to_string(count) + " 个任务";
     const auto wideTip = toWide(tooltip);
-    std::thread([this, window, icon, wideTip] {
+    std::thread([window, icon, ownedIcon, wideTip, state] {
+        if (state->closed.load()) {
+            if (ownedIcon) DestroyIcon(icon);
+            return;
+        }
         NOTIFYICONDATAW data{};
         data.cbSize = sizeof(data);
         data.hWnd = window;
@@ -1145,23 +1209,33 @@ void MainWindow::addTrayIcon()
         data.uCallbackMessage = appTrayMessage;
         data.hIcon = icon;
         wcsncpy_s(data.szTip, wideTip.c_str(), _TRUNCATE);
-        trayVisible_.store(Shell_NotifyIconW(NIM_ADD, &data) == TRUE);
+        const bool added = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
+        if (ownedIcon) DestroyIcon(icon);
+        // The window may have closed while the shell was busy. Remove the icon
+        // it just accepted instead of leaving a ghost in the notification area.
+        if (added && state->closed.load()) {
+            Shell_NotifyIconW(NIM_DELETE, &data);
+            state->visible.store(false);
+            return;
+        }
+        state->visible.store(added);
     }).detach();
 }
 
 void MainWindow::removeTrayIcon()
 {
-    if (!trayVisible_.load()) return;
+    if (!trayState_->visible.load()) return;
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
     data.hWnd = hwnd_;
     data.uID = trayIconId;
     Shell_NotifyIconW(NIM_DELETE, &data);
-    trayVisible_ = false;
+    trayState_->visible.store(false);
 }
 
 void MainWindow::showTrayMenu()
 {
+    if (!hwnd_ || closing_) return;
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示主窗口(&O)");
@@ -1173,6 +1247,9 @@ void MainWindow::showTrayMenu()
     const auto command = static_cast<UINT>(TrackPopupMenu(menu,
         TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd_, nullptr));
     DestroyMenu(menu);
+    // The menu needs the window brought forward, and this empty message is the
+    // documented way to dismiss it when the click lands elsewhere.
+    PostMessageW(hwnd_, WM_NULL, 0, 0);
     if (command != 0) PostMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
@@ -1503,6 +1580,7 @@ void MainWindow::refreshFromWorker()
     syncList();
     updateStatus();
     updateActions();
+    handleNotifications(snapshot);
 
     // A 401 means the site wants credentials. A remembered credential for that
     // host is tried first; otherwise the user is asked once per task.
@@ -2762,6 +2840,10 @@ void MainWindow::beginClose()
     if (closing_) return;
     if (torrentFetchCancel_) torrentFetchCancel_->store(true);
     if (deleteDialog_) finishDeleteDialog(false);
+    // The icon goes before the window: a shell that keeps a dead callback target
+    // leaves a ghost icon behind until it notices the window is gone.
+    trayState_->closed.store(true);
+    removeTrayIcon();
     closing_ = true;
     KillTimer(hwnd_, IDT_REFRESH);
     updateActions();
