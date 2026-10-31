@@ -64,6 +64,25 @@ jobs:
           echo shortvc=%SHORTVC%
           "%SHORTVC%bin\Hostx64\x64\cl.exe" /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
           echo shortpath=%ERRORLEVEL%
+          where ninja
+          ninja --version
+          mkdir "%GITHUB_WORKSPACE%\out\exact\CMakeFiles\cmTC.dir" 2>nul
+          cd /d "%GITHUB_WORKSPACE%\out\exact"
+          echo int main(void) { return 0; } > testCCompiler.c
+          cl /nologo /DWIN32 /D_WINDOWS /Ob0 /Od /RTC1 -MDd -Z7 /showIncludes /FoCMakeFiles\cmTC.dir\testCCompiler.c.obj /FdCMakeFiles\cmTC.dir\ /FS -c testCCompiler.c
+          echo exactline=%ERRORLEVEL%
+
+      # Does the environment imported by enter-msvc.ps1 compile the same file?
+      - name: Probe the imported environment
+        shell: pwsh
+        run: |
+          . ./scripts/enter-msvc.ps1 -Quiet
+          "cl=$((Get-Command cl).Source)"
+          Push-Location $env:RUNNER_TEMP
+          Set-Content -Path hello2.c -Value 'int main(void) { return 0; }'
+          & cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello2.c
+          "imported=$LASTEXITCODE"
+          Pop-Location
 
       # libtorrent and Boost are compiled from source; restoring the prepared
       # dependency tree turns a cold 30-minute build into a few minutes.
