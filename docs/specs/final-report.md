@@ -7,7 +7,7 @@
 ```
 cmd /c test-local.cmd        (exit code 0)
 → 100% tests passed out of 24
-→ Total Test time (real) = 139.99 s   (2026-10-31，#34 复跑)
+→ Total Test time (real) = 138.64 s   (2026-10-31，#34 复跑)
 ```
 
 - 24 个测试全部在进程内运行（跨进程 e2e 已由 ADR-0001 取消）；
@@ -93,8 +93,7 @@ scripts/       打包、smoke、浏览器联调探针
 
 ## 六、需要你做的事
 
-1. **#34（有通知区的桌面，约 2 分钟）**：启动 LiteFetch，确认托盘图标出现；右键看菜单、最小化后双击恢复；
-   完成一个小下载看“下载完成”气球；关闭主窗口后确认进程退出且托盘图标消失。
+1. **#34（有通知区的桌面，约 2 分钟）**：按[人工验收清单](human-acceptance-checklist.md)第 6 节逐项检查托盘图标、右键菜单、双击恢复、完成气球和退出清理。
    **全部符合 → #34 通过；有任何一项不符 → 把现象和截图发我。**
 2. **#23（1 分钟）**：`chrome://extensions` → 开发者模式 → 加载已解压的扩展程序 → 选 `browser/`；
    确认注册键指向 `out/browser-connection/org.native_downloader.bridge.json`（UTF-8 无 BOM）；
@@ -200,4 +199,4 @@ scripts/       打包、smoke、浏览器联调探针
 `ui-window` 增加持久化凭据后新窗口自动重试已保存 401 的场景。验收 `cmd /c test-local.cmd` → 24/24 通过，139.25 s，退出码 0；日志在 `tmp/acceptance.log`。
 边界：跨 Windows 账户的实际重认证未自动验证（单机无法制造第二账户），DPAPI 用户作用域与篡改 blob 由 `core-credentials` 覆盖；未新增凭据日志。
 
-2026-10-31 #34 实现：`appTrayMessage` 现在处理双击恢复与右键菜单；任务首次进入完成/失败时经 `NotificationPolicy` 走 `notifyTaskFinished`（401 重试路径跳过首次失败通知）；关闭窗口/销毁时移除图标并停止托盘安装线程对窗口的访问。新增 `ui-window` 断言：最小化后双击与“显示主窗口”命令都真正退出最小化状态、右键路由到菜单、完成任务产生通知决策；无通知区会话仍正常启动。验收 `cmd /c test-local.cmd` → 24/24 通过，139.99 s，退出码 0；日志在 `tmp/acceptance.log`。真实托盘图标、菜单外观、气球和退出后图标消失仍需有通知区的桌面验收。
+2026-10-31 #34 实现：`appTrayMessage` 现在处理双击恢复与右键菜单；任务首次进入完成/失败时经 `NotificationPolicy` 走 `notifyTaskFinished`（401 只保留凭据提示，不发失败气球；重新开始/重新校验会重置通知状态）；关闭窗口/销毁时移除图标并停止托盘安装线程对窗口的访问。新增 `ui-window` 断言：最小化后双击与“显示主窗口”命令都真正退出最小化状态、右键路由到菜单、完成任务产生通知决策、历史 401 不在启动时补发通知；无通知区会话仍正常启动。验收 `cmd /c test-local.cmd` → 24/24 通过，138.64 s，退出码 0；日志在 `tmp/acceptance.log`。真实托盘图标、菜单外观、气球和退出后图标消失仍需有通知区的桌面验收。

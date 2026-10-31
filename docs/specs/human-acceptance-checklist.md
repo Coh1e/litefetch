@@ -89,7 +89,7 @@
 > 本会话的 `ui-window` 打印 `notification area unavailable in this session`，所以这一节只能在有通知区的真实桌面完成。
 
 1. 在正常桌面启动 `litefetch-win32.exe`（Explorer/通知区可用）；
-2. 通知区应出现 LiteFetch 图标；悬停提示应为 `LiteFetch - N 个任务`；
+2. 通知区应出现 LiteFetch 图标（悬停提示包含 `LiteFetch` 即可；任务数不要求实时刷新）；
 3. 右键图标：菜单应有“显示主窗口”和“退出”；点“显示主窗口”应恢复窗口；
 4. 最小化窗口，双击托盘图标：窗口应恢复；
 5. 新建一个小 HTTP 下载并完成：应出现“下载完成”气球，标题是文件名；

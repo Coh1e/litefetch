@@ -438,11 +438,11 @@ void runChecks()
     int widthAfterDrag = 0;
     {
         MainWindow window(options);
-        check(window.create(instance, SW_SHOWNORMAL), "main window is created");
         std::vector<std::string> notifiedDestinations;
         window.setNotificationSinkForTest([&](const TaskSnapshot& task) {
             notifiedDestinations.push_back(task.destination);
         });
+        check(window.create(instance, SW_SHOWNORMAL), "main window is created");
         const HWND handle = window.handle();
         check(handle != nullptr, "window handle is available");
 
@@ -704,11 +704,11 @@ void runChecks()
 
             ShowWindow(handle, SW_MINIMIZE);
             check(pumpUntil([&] { return IsIconic(handle) != FALSE; }, 3000), "window minimizes");
-            PostMessageW(handle, WM_APP + 5, 0, WM_LBUTTONDBLCLK);
+            PostMessageW(handle, trayMessage, 0, WM_LBUTTONDBLCLK);
             check(pumpUntil([&] { return IsIconic(handle) == FALSE; }, 3000),
                 "the tray double click restores the window");
 
-            PostMessageW(handle, WM_APP + 5, 0, WM_RBUTTONUP);
+            PostMessageW(handle, trayMessage, 0, WM_RBUTTONUP);
             check(pumpUntil([&] { return menuOpened; }, 3000),
                 "the tray right click opens the menu");
 
@@ -882,11 +882,21 @@ void runChecks()
         }
 
         MainWindow window(options);
+        std::vector<std::string> notifiedDestinations;
+        window.setNotificationSinkForTest([&](const TaskSnapshot& task) {
+            notifiedDestinations.push_back(task.destination);
+        });
         check(window.create(instance, SW_SHOWNORMAL), "window opens on the failed task");
+        check(notifiedDestinations.empty(),
+            "a historical 401 failure does not notify when the window opens");
         check(pumpUntil([&] { return window.statusOfTaskNamed("remembered.bin") == "已完成"; }, 20000),
             ("the remembered credential retries the 401: "
                 + window.statusOfTaskNamed("remembered.bin") + " | "
                 + window.errorOfTaskNamed("remembered.bin")).c_str());
+        bool retriedNotified = false;
+        for (const auto& path : notifiedDestinations)
+            if (std::filesystem::path(path).filename() == "remembered.bin") retriedNotified = true;
+        check(retriedNotified, "the retried completion produces one notification decision");
         checkEqual(authFixture.lastAuthorization(), "Basic dXNlcjpwYXNz",
             "the retried request carried the remembered credential");
         check(std::filesystem::exists(authDestination),

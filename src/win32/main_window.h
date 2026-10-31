@@ -37,6 +37,10 @@
 
 namespace litefetch::ui {
 
+// Notification icon callback message. Shared with the in-process harness so a
+// test sends the same message the shell does.
+inline constexpr unsigned int trayMessage = WM_APP + 5;
+
 // Native main window: OS-drawn caption, native menu, compact toolbar, Details
 // ListView, temporary find overlay and the four-part status bar. Commands are
 // dispatched to the single TaskWorker boundary; the window only displays
@@ -113,7 +117,7 @@ private:
     // seconds, so the thread must not touch MainWindow after it may be gone.
     struct TrayState {
         std::atomic_bool visible{false};
-        std::atomic_bool closed{false};
+        std::atomic_bool shuttingDown{false};
     };
     struct PendingLine {
         BatchLine line;
@@ -144,6 +148,7 @@ private:
     void notifyTaskFinished(const TaskSnapshot& task);
     void handleNotifications(const WorkerSnapshot& snapshot);
     void restoreFromTray();
+    void retireTray();
     void setSelectedPriority(int priority);
     void openDownloadFolder();
     void removeTrayIcon();

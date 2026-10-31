@@ -37,8 +37,16 @@ constexpr wchar_t title[] = L"lite fetch";
 constexpr unsigned int appRefreshColumnsMessage = WM_APP + 2;
 constexpr unsigned int appUpdateActionsMessage = WM_APP + 3;
 constexpr unsigned int appTorrentMetadataMessage = WM_APP + 4;
-constexpr unsigned int appTrayMessage = WM_APP + 5;
 constexpr unsigned int trayIconId = 1;
+
+NOTIFYICONDATAW trayData(HWND window)
+{
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = window;
+    data.uID = trayIconId;
+    return data;
+}
 
 std::string hostOfUrl(const std::string& url)
 {
@@ -638,8 +646,7 @@ MainWindow::~MainWindow()
     // A detached install thread may still be in Shell_NotifyIcon. Mark the tray
     // closed and let that thread remove a late icon itself; it never touches
     // this object.
-    trayState_->closed.store(true);
-    if (hwnd_ && IsWindow(hwnd_)) removeTrayIcon();
+    retireTray();
     if (deleteDialog_) {
         HWND dialog = deleteDialog_;
         deleteDialog_ = nullptr;
@@ -791,7 +798,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case workerWakeMessage:
         refreshFromWorker();
         return 0;
-    case appTrayMessage: {
+    case trayMessage: {
         const UINT event = static_cast<UINT>(lParam);
         if (event == WM_LBUTTONDBLCLK) {
             restoreFromTray();
@@ -1055,8 +1062,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         KillTimer(hwnd_, IDT_REFRESH);
         KillTimer(hwnd_, IDT_SHUTDOWN);
-        trayState_->closed.store(true);
-        removeTrayIcon();
+        retireTray();
         if (worker_) worker_->shutdown();
         PostQuitMessage(0);
         return 0;
@@ -1130,10 +1136,7 @@ void MainWindow::notifyTaskFinished(const TaskSnapshot& task)
     // area; the balloon itself needs the real shell.
     if (notificationSink_) notificationSink_(task);
     if (!trayState_->visible.load()) return;
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = hwnd_;
-    data.uID = trayIconId;
+    auto data = trayData(hwnd_);
     data.uFlags = NIF_INFO;
     const auto name = task.destination.empty() ? task.source : task.destination;
     const auto fileName = name.substr(name.find_last_of("\\\\/") + 1);
@@ -1157,12 +1160,11 @@ void MainWindow::handleNotifications(const WorkerSnapshot& snapshot)
         return;
     }
     for (const auto& task : snapshot.tasks) {
-        // The first 401 opens the credential prompt; a failure balloon before
-        // the user has even answered it would be noise. Once the task has been
-        // prompted/retried, a repeated 401 is a real failure.
-        const bool credentialFailure =
-            task.state == TaskState::Failed && task.error.find("401") != std::string::npos;
-        if (credentialFailure && !promptedCredentials_.contains(task.id)) continue;
+        // 401 is the credential-prompt path: a failure balloon before the user
+        // answers, and another while the dialog is open, would both be noise.
+        // The prompt itself is the visible signal for this state.
+        if (task.state == TaskState::Failed && task.error.find("401") != std::string::npos)
+            continue;
         if (notifications_.shouldNotify(task.id, task.state)) notifyTaskFinished(task);
     }
 }
@@ -1183,7 +1185,7 @@ bool MainWindow::trayIconVisible() const
 void MainWindow::addTrayIcon()
 {
     const auto state = trayState_;
-    if (state->visible.load() || state->closed.load() || !hwnd_) return;
+    if (state->visible.load() || state->shuttingDown.load() || !hwnd_) return;
     // Shell_NotifyIcon can spend seconds looking for a notification area that is
     // not there, and it must never do that on the UI thread: the window would
     // stop answering commands, so a paused transfer would keep running. The
@@ -1197,38 +1199,38 @@ void MainWindow::addTrayIcon()
     if (count > 0) tooltip += " - " + std::to_string(count) + " 个任务";
     const auto wideTip = toWide(tooltip);
     std::thread([window, icon, ownedIcon, wideTip, state] {
-        if (state->closed.load()) {
+        if (state->shuttingDown.load()) {
             if (ownedIcon) DestroyIcon(icon);
             return;
         }
-        NOTIFYICONDATAW data{};
-        data.cbSize = sizeof(data);
-        data.hWnd = window;
-        data.uID = trayIconId;
+        NOTIFYICONDATAW data = trayData(window);
         data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        data.uCallbackMessage = appTrayMessage;
+        data.uCallbackMessage = trayMessage;
         data.hIcon = icon;
         wcsncpy_s(data.szTip, wideTip.c_str(), _TRUNCATE);
         const bool added = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
         if (ownedIcon) DestroyIcon(icon);
-        // The window may have closed while the shell was busy. Remove the icon
-        // it just accepted instead of leaving a ghost in the notification area.
-        if (added && state->closed.load()) {
+        state->visible.store(added);
+        // Re-check after publishing: retirement may have set `shuttingDown` and
+        // returned from removeTrayIcon while this thread was inside
+        // Shell_NotifyIcon. Without this check that interleaving leaves a ghost.
+        if (added && state->shuttingDown.load()) {
             Shell_NotifyIconW(NIM_DELETE, &data);
             state->visible.store(false);
-            return;
         }
-        state->visible.store(added);
     }).detach();
+}
+
+void MainWindow::retireTray()
+{
+    trayState_->shuttingDown.store(true);
+    if (hwnd_ && IsWindow(hwnd_)) removeTrayIcon();
 }
 
 void MainWindow::removeTrayIcon()
 {
     if (!trayState_->visible.load()) return;
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = hwnd_;
-    data.uID = trayIconId;
+    NOTIFYICONDATAW data = trayData(hwnd_);
     Shell_NotifyIconW(NIM_DELETE, &data);
     trayState_->visible.store(false);
 }
@@ -2331,6 +2333,7 @@ void MainWindow::verifySelected()
     }
     // A full recheck reads every piece from disk and fetches again what does not
     // match, so damaged files are repaired instead of reported as complete.
+    notifications_.forget(row->id);
     worker_->postStart(row->id, false, {}, {}, true);
     setNotice("已开始重新校验：" + row->name);
 }
@@ -2352,10 +2355,14 @@ void MainWindow::startSelected()
                 L"重新下载会删除这些片段并从头开始。是否继续？",
                 L"重新下载", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
             if (answer != IDYES) continue;
+            notifications_.forget(id);
             worker_->postStart(id, true);
             ++count;
             continue;
         }
+        // A new attempt is a new user-visible completion; the old terminal
+        // state's notification must not suppress it.
+        notifications_.forget(id);
         worker_->postStart(id);
         ++count;
     }
@@ -2509,6 +2516,7 @@ void MainWindow::deleteSelectedWithFiles()
             + "\n\n已下载或未完成的片段都会删除，且不可恢复。是否继续？").c_str(),
         L"删除任务及文件", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
     if (answer != IDYES) return;
+    notifications_.forget(row->id);
     worker_->postDeleteFiles(row->id);
     setNotice("正在删除任务及文件：" + row->name);
 }
@@ -2532,6 +2540,7 @@ void MainWindow::finishDeleteDialog(bool confirmed)
     pendingDeleteFailures_.clear();
     pendingDeleteTotal_ = ids.size();
     for (const auto& id : ids) pendingDeleteIds_.insert(id);
+    for (const auto& id : ids) notifications_.forget(id);
     for (const auto& id : ids) worker_->postDelete(id);
     setNotice("正在停止并删除 " + std::to_string(ids.size())
         + " 个任务记录（文件保留）。");
@@ -2842,8 +2851,7 @@ void MainWindow::beginClose()
     if (deleteDialog_) finishDeleteDialog(false);
     // The icon goes before the window: a shell that keeps a dead callback target
     // leaves a ghost icon behind until it notices the window is gone.
-    trayState_->closed.store(true);
-    removeTrayIcon();
+    retireTray();
     closing_ = true;
     KillTimer(hwnd_, IDT_REFRESH);
     updateActions();
