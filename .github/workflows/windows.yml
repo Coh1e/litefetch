@@ -55,6 +55,15 @@ jobs:
           echo fs=%ERRORLEVEL%
           cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
           echo combo=%ERRORLEVEL%
+          mkdir "%GITHUB_WORKSPACE%\out\probe" 2>nul
+          cd /d "%GITHUB_WORKSPACE%\out\probe"
+          echo int main(void) { return 0; } > hello.c
+          cl /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
+          echo workspace=%ERRORLEVEL%
+          for %%i in ("%VCToolsInstallDir%") do set "SHORTVC=%%~si"
+          echo shortvc=%SHORTVC%
+          "%SHORTVC%bin\Hostx64\x64\cl.exe" /nologo /c /Z7 /FS -MDd /RTC1 /showIncludes hello.c
+          echo shortpath=%ERRORLEVEL%
 
       # libtorrent and Boost are compiled from source; restoring the prepared
       # dependency tree turns a cold 30-minute build into a few minutes.
