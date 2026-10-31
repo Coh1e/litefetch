@@ -56,6 +56,8 @@ public:
     HWND handle() const { return hwnd_; }
     // Exposed for the window harness: whether the notification icon is up.
     bool trayIconVisible() const;
+    // Exposed for the window harness: how many install attempts were made.
+    int trayInstallAttemptsForTest() const;
     // Exposed for the window harness: the priority the list currently shows.
     // Exposed for the window harness: the traffic totals the window last saw.
     std::array<std::int64_t, 4> trafficTotals() const { return traffic_; }
@@ -118,6 +120,7 @@ private:
     struct TrayState {
         std::atomic_bool visible{false};
         std::atomic_bool shuttingDown{false};
+        std::atomic<int> installAttempts{0};
     };
     struct PendingLine {
         BatchLine line;
@@ -245,6 +248,7 @@ private:
     HMENU menu_ = nullptr;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr;
+    UINT taskbarCreatedMessage_ = 0;
     std::shared_ptr<TrayState> trayState_ = std::make_shared<TrayState>();
     HICON largeIcon_ = nullptr;
     HICON smallIcon_ = nullptr;

@@ -718,6 +718,14 @@ void runChecks()
             PostMessageW(handle, WM_COMMAND, MAKEWPARAM(ID_TRAY_SHOW, 0), 0);
             check(pumpUntil([&] { return IsIconic(handle) == FALSE; }, 3000),
                 "the tray show command restores the window");
+
+            const UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+            check(taskbarCreated != 0, "TaskbarCreated is a registered message");
+            const int installsBefore = trayWindow->trayInstallAttemptsForTest();
+            PostMessageW(handle, taskbarCreated, 0, 0);
+            check(pumpUntil([&] {
+                return trayWindow->trayInstallAttemptsForTest() > installsBefore;
+            }, 3000), "a recreated taskbar asks for a fresh tray icon");
             ShowWindow(handle, SW_RESTORE);
             pumpUntil([] { return false; }, 100);
         }

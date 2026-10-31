@@ -48,6 +48,17 @@ NOTIFYICONDATAW trayData(HWND window)
     return data;
 }
 
+void appendTrayLog(const std::filesystem::path& directory, const std::string& line)
+{
+    // Shell_NotifyIcon failures are otherwise silent. A line next to the task
+    // database makes an integrity/UIPI rejection or a failed re-add diagnosable.
+    if (directory.empty()) return;
+    std::error_code ignored;
+    std::filesystem::create_directories(directory, ignored);
+    std::ofstream log(directory / L"tray.log", std::ios::binary | std::ios::app);
+    if (log) log << line << '\n';
+}
+
 std::string hostOfUrl(const std::string& url)
 {
     // "scheme://host:port/path" -> "host". Anything else yields an empty host,
@@ -665,6 +676,9 @@ MainWindow::~MainWindow()
 bool MainWindow::create(HINSTANCE instance, int showCommand)
 {
     instance_ = instance;
+    // Explorer broadcasts this registered message after it recreates the
+    // taskbar; every tray icon from the old shell is gone at that point.
+    taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSEXW windowClassInfo{};
     windowClassInfo.cbSize = sizeof(windowClassInfo);
     windowClassInfo.style = CS_HREDRAW | CS_VREDRAW;
@@ -751,6 +765,19 @@ LRESULT CALLBACK MainWindow::searchSubclassStatic(HWND window, UINT message, WPA
 
 LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (taskbarCreatedMessage_ != 0 && message == taskbarCreatedMessage_) {
+        // Lock/unlock or an Explorer restart can destroy the notification area
+        // and every icon in it. The old handle is gone, so install a new icon.
+        // If the shell only restarted and kept the old entry, drop it first:
+        // NIM_ADD for an existing hWnd/uID pair fails with E_FAIL.
+        trayState_->visible.store(false);
+        NOTIFYICONDATAW stale = trayData(hwnd_);
+        Shell_NotifyIconW(NIM_DELETE, &stale);
+        appendTrayLog(options_.databasePath.parent_path(),
+            "taskbar recreated; re-adding tray icon");
+        addTrayIcon();
+        return 0;
+    }
     switch (message) {
     case WM_CREATE:
         if (!createControls()) return -1;
@@ -1182,23 +1209,31 @@ bool MainWindow::trayIconVisible() const
     return trayState_->visible.load();
 }
 
+int MainWindow::trayInstallAttemptsForTest() const
+{
+    return trayState_->installAttempts.load();
+}
+
 void MainWindow::addTrayIcon()
 {
     const auto state = trayState_;
     if (state->visible.load() || state->shuttingDown.load() || !hwnd_) return;
+    state->installAttempts.fetch_add(1);
     // Shell_NotifyIcon can spend seconds looking for a notification area that is
     // not there, and it must never do that on the UI thread: the window would
     // stop answering commands, so a paused transfer would keep running. The
     // thread owns a copy of the icon and shared state, never `this`.
     const HWND window = hwnd_;
+    const auto logDirectory = options_.databasePath.parent_path();
     HICON icon = CopyIcon(largeIcon_ ? largeIcon_ : smallIcon_);
     const bool ownedIcon = icon != nullptr;
     if (!icon) icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP));
+    if (!icon) appendTrayLog(logDirectory, "tray add: icon handle is null");
     std::string tooltip = "LiteFetch";
     const auto count = model_.rows().size();
     if (count > 0) tooltip += " - " + std::to_string(count) + " 个任务";
     const auto wideTip = toWide(tooltip);
-    std::thread([window, icon, ownedIcon, wideTip, state] {
+    std::thread([window, icon, ownedIcon, wideTip, state, logDirectory] {
         if (state->shuttingDown.load()) {
             if (ownedIcon) DestroyIcon(icon);
             return;
@@ -1209,6 +1244,10 @@ void MainWindow::addTrayIcon()
         data.hIcon = icon;
         wcsncpy_s(data.szTip, wideTip.c_str(), _TRUNCATE);
         const bool added = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
+        const DWORD addError = added ? 0 : GetLastError();
+        appendTrayLog(logDirectory,
+            std::string("tray add ") + (added ? "ok" : "failed")
+                + (added ? "" : " error=" + std::to_string(addError)));
         if (ownedIcon) DestroyIcon(icon);
         state->visible.store(added);
         // Re-check after publishing: retirement may have set `shuttingDown` and
@@ -1217,6 +1256,7 @@ void MainWindow::addTrayIcon()
         if (added && state->shuttingDown.load()) {
             Shell_NotifyIconW(NIM_DELETE, &data);
             state->visible.store(false);
+            appendTrayLog(logDirectory, "tray add: late icon removed after shutdown");
         }
     }).detach();
 }

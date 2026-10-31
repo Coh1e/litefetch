@@ -86,14 +86,18 @@
 
 ## 6. #34 托盘与通知
 
+> 状态：2026-10-31 已通过（真实桌面；锁屏/息屏后图标恢复，菜单、双击、气球、退出清理均正常）。
 > 本会话的 `ui-window` 打印 `notification area unavailable in this session`，所以这一节只能在有通知区的真实桌面完成。
+>
+> 环境注意：从 DSH 工作区直接启动时，exe 可能带 Low Integrity 标签，`Shell_NotifyIcon` 会被 UIPI 拒绝（错误 5），表现为没有图标。先把 exe 复制到普通目录，并在普通 PowerShell 执行 `icacls <exe> /setintegritylevel Medium`，确认输出 `Medium Mandatory Level` 后再启动。普通安装/桌面启动不受此限制。
 
 1. 在正常桌面启动 `litefetch-win32.exe`（Explorer/通知区可用）；
 2. 通知区应出现 LiteFetch 图标（悬停提示包含 `LiteFetch` 即可；任务数不要求实时刷新）；
 3. 右键图标：菜单应有“显示主窗口”和“退出”；点“显示主窗口”应恢复窗口；
 4. 最小化窗口，双击托盘图标：窗口应恢复；
 5. 新建一个小 HTTP 下载并完成：应出现“下载完成”气球，标题是文件名；
-6. 关闭主窗口：进程应退出（任务管理器里没有 `litefetch-win32.exe`），托盘图标应立即消失，不能留下点不开的 ghost 图标。
+6. 关闭主窗口：进程应退出（任务管理器里没有 `litefetch-win32.exe`），托盘图标应立即消失，不能留下点不开的 ghost 图标；
+7. 锁屏（`Win+L`）或息屏后解锁：托盘图标应重新出现，右键菜单与双击恢复仍可用。
 
 失败时记录：右键菜单截图、气球截图、关闭后托盘区截图、Windows 版本。
 
