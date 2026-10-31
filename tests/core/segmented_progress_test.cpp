@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <future>
 #include <mutex>
@@ -27,7 +28,7 @@ int segmentedReportsLiveProgress()
     options.chunk = 16 * 1024;
     // Slow enough that one range (a quarter of the body) needs several
     // seconds, so "no report" cannot be confused with "already finished".
-    options.chunkDelay = std::chrono::milliseconds(30);
+    options.chunkDelay = std::chrono::milliseconds(50);
     options.supportsRange = true;
     HttpFixture server(options);
     litefetch::test::TempDir root;
@@ -44,13 +45,17 @@ int segmentedReportsLiveProgress()
     std::promise<litefetch::TransferResult> finished;
     auto result = finished.get_future();
     std::jthread worker([&] {
-        finished.set_value(litefetch::transferHttp(
-            litefetch::TransferRequest{server.url(), destination.string()}, cancelled, progress));
+        try {
+            finished.set_value(litefetch::transferHttp(
+                litefetch::TransferRequest{server.url(), destination.string()}, cancelled, progress));
+        } catch (...) {
+            finished.set_exception(std::current_exception());
+        }
     });
 
     // Poll for the earliest usable report instead of sleeping a fixed time:
     // a green run finishes the check as soon as the first progress arrives.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
     bool liveProgress = false;
     while (std::chrono::steady_clock::now() < deadline) {
         {
@@ -71,6 +76,10 @@ int segmentedReportsLiveProgress()
     const auto transferResult = result.get();
     litefetch::test::check(transferResult.status == litefetch::TransferStatus::Cancelled,
         "cancelled segmented transfer did not report cancellation");
+    litefetch::test::check(!events.empty(), "segmented transfer reported no progress");
+    litefetch::test::check(events.front().received == 0
+            && events.front().total == static_cast<std::int64_t>(body.size()),
+        "the probe total was not published before the first range started");
     litefetch::test::check(liveProgress,
         "segmented transfer reported no total and no bytes before a whole segment finished");
     return 0;

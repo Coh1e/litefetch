@@ -27,7 +27,7 @@ namespace litefetch {
 // its database commit succeeded.
 class TaskService {
 public:
-    // Optional observer for live progress (called on the transferring thread).
+    // Optional observer for live progress (may run on the transfer's thread).
     // It must be cheap and must not throw; failures are ignored so an observer
     // can never break the transfer or its persistence.
     using ProgressObserver = std::function<void(std::string_view taskId, const TransferProgressInfo&)>;

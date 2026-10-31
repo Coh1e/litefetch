@@ -35,8 +35,8 @@ compile them.
   one lock, so a committed cancel cannot be overwritten by a concurrent start;
   a `cancelled` task requires an explicit future retry command. `Cancel` on a
   running task waits for the owning `Start` to persist the real outcome. An
-  optional progress observer lets a UI cache live progress on the transferring
-  thread without touching the database; observer exceptions are ignored.
+  optional progress observer lets a UI cache live progress from the transfer's
+  own thread without touching the database; observer exceptions are ignored.
 - `cli/main.cpp` — `litefetch-core-cli add|start|cancel|list` for manual
   end-to-end checks and later Win32 integration. Arguments are read as UTF-16
   and converted to UTF-8, so Chinese paths work from a Chinese console; `list`

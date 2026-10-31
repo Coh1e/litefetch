@@ -442,13 +442,21 @@ TransferResult transferSegmented(const std::string& url, const std::string& user
         for (const auto& segment : parts) written += segment.written.load();
         return written;
     };
-    auto report = [&](std::int64_t current) {
-        if (progress) progress(TransferProgressInfo{current, probe.total});
+    auto report = [&](std::int64_t current) noexcept {
+        if (!progress) return;
+        try {
+            progress(TransferProgressInfo{current, probe.total});
+        } catch (...) {
+            // An observer failure must not stop the transfer. The single-stream
+            // path ignores it too, and TaskService promises the same.
+        }
     };
     // The probe already knows the total. Publish it before the first range
     // starts, so the first UI refresh can show the size instead of waiting for
     // the reporter's first 200 ms tick.
     report(0);
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(count));
     std::atomic_bool stopReporting{false};
     std::thread reporter([&] {
         while (!stopReporting.load()) {
@@ -456,15 +464,25 @@ TransferResult transferSegmented(const std::string& url, const std::string& user
             report(bytesWritten());
         }
     });
-
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(count));
-    for (auto& segment : parts) {
-        workers.emplace_back([&, thisSegment = &segment] {
-            runSegment(url, username, password, probe.host, *thisSegment, cancelled, stopAll);
-        });
+    try {
+        for (auto& segment : parts) {
+            workers.emplace_back([&, thisSegment = &segment] {
+                runSegment(url, username, password, probe.host, *thisSegment, cancelled, stopAll);
+            });
+        }
+        for (auto& worker : workers) worker.join();
+    } catch (...) {
+        // Stop and join every thread before the vectors destroy joinable
+        // std::thread objects during unwinding. The reporter holds references
+        // to parts and progress, so it must stop here too.
+        stopAll.store(true);
+        for (auto& worker : workers) {
+            if (worker.joinable()) worker.join();
+        }
+        stopReporting.store(true);
+        if (reporter.joinable()) reporter.join();
+        throw;
     }
-    for (auto& worker : workers) worker.join();
     stopReporting.store(true);
     reporter.join();
     // A fast transfer can finish inside the reporter's first interval; the
