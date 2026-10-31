@@ -124,7 +124,7 @@ const deadline = Date.now() + 45000;
 while (Date.now() < deadline) {
   storage = await evaluate('chrome.storage.local.get(null)');
   const entries = Object.entries(storage ?? {})
-    .filter(([key]) => key.startsWith('handoff.journal.'));
+    .filter(([key]) => key.startsWith('handoff.v1.'));
   if (entries.length) {
     record = entries[0][1];
     if (['committed', 'attention', 'released', 'cancelled'].includes(record.phase)) break;

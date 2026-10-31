@@ -1,5 +1,17 @@
 export const SETTINGS_KEY = 'handoff.settings.v1';
 
+// One storage key per handoff, scoped by browser profile. The adapters write
+// these keys and the popup lists them, so the format lives here: a copy in each
+// file let the popup filter a retired prefix and show no recent takeovers.
+export const JOURNAL_PREFIX = 'handoff.v1.';
+export function journalKey(scope, id) {
+  if (!['regular', 'private'].includes(scope)) throw new Error('Invalid journal scope');
+  return `${JOURNAL_PREFIX}${scope}.${id}`;
+}
+export function isJournalKey(name) {
+  return typeof name === 'string' && name.startsWith(JOURNAL_PREFIX);
+}
+
 // One switch. The old version also demanded a list of allowed sites, which turned
 // the simplest possible request — "take this download" — into a configuration
 // chore. Extra sites can still be excluded through `origins`, but nothing forces

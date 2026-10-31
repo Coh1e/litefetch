@@ -1,4 +1,4 @@
-import {SETTINGS_KEY, normalizeSettings} from './settings.mjs';
+import {SETTINGS_KEY, normalizeSettings, isJournalKey} from './settings.mjs';
 import {IGNORE_KEY} from './worker.mjs';
 const form = document.querySelector('#settings');
 const enabled = document.querySelector('#enabled');
@@ -86,7 +86,7 @@ try {
   // difference between "the browser kept the file" and "we paused it and then
   // failed to finish".
   const records = Object.entries(all)
-    .filter(([key]) => key.startsWith('handoff.journal.'))
+    .filter(([key]) => isJournalKey(key))
     .map(([, record]) => record)
     .filter(record => record && typeof record === 'object')
     .sort((left, right) => (right.at ?? right.downloadId ?? 0) - (left.at ?? left.downloadId ?? 0))

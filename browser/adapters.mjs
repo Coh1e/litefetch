@@ -1,12 +1,14 @@
+import {JOURNAL_PREFIX, journalKey} from './settings.mjs';
+
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const encodedSize = value => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
 export function storageJournal(storage, scope = 'regular') {
   if (!['regular', 'private'].includes(scope)) throw new Error('Invalid journal scope');
-  const prefix = `handoff.v1.${scope}.`;
+  const prefix = `${JOURNAL_PREFIX}${scope}.`;
   function key(id) {
     if (!Number.isSafeInteger(id) || id < 0) throw new Error('Invalid download ID');
-    return prefix + id;
+    return journalKey(scope, id);
   }
   async function scan() {
     const values = await storage.get(null), records = [];
