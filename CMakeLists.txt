@@ -119,6 +119,11 @@ if(BUILD_TESTING)
     target_link_libraries(core-service-tests PRIVATE litefetch-core ws2_32)
     add_test(NAME core-service COMMAND core-service-tests)
     set_tests_properties(core-service PROPERTIES TIMEOUT 240)
+    add_executable(core-segmented-progress-tests tests/core/segmented_progress_test.cpp)
+    target_include_directories(core-segmented-progress-tests PRIVATE tests/core)
+    target_link_libraries(core-segmented-progress-tests PRIVATE litefetch-core ws2_32)
+    add_test(NAME core-segmented-progress COMMAND core-segmented-progress-tests)
+    set_tests_properties(core-segmented-progress PROPERTIES TIMEOUT 30)
     add_executable(core-storage-failure-tests tests/core/storage_failure_test.cpp)
     target_link_libraries(core-storage-failure-tests PRIVATE litefetch-core unofficial::sqlite3::sqlite3)
     add_test(NAME core-storage-failure COMMAND core-storage-failure-tests)
@@ -240,7 +245,8 @@ add_executable(litefetch-ed2khash src/tools/ed2khash.cpp)
     add_test(NAME ui-worker COMMAND ui-worker-tests)
     set_tests_properties(ui-worker PROPERTIES TIMEOUT 90)
     set(core_test_temp "${CMAKE_SOURCE_DIR}/tmp/core-test-temp")
-    set(core_test_targets core-identity core-store core-service core-storage-failure core-unicode-path
+    set(core_test_targets core-identity core-store core-service core-segmented-progress
+        core-storage-failure core-unicode-path
         ui-model ui-columns ui-view ui-batch ui-worker)
     set_tests_properties(${core_test_targets} PROPERTIES
         ENVIRONMENT "LITEFETCH_TEST_TEMP=${core_test_temp};TEMP=${core_test_temp};TMP=${core_test_temp}")
@@ -324,8 +330,9 @@ if(MSVC)
         litefetch-win32-runtime litefetch-win32-ui litefetch-win32 litefetch-browser-host)
     set(LITEFETCH_SUPPORT_TARGETS
         litefetch-ed2khash litefetch-ed2kseed litefetch-ed2kget
-        core-identity-tests core-store-tests core-service-tests core-storage-failure-tests
-        core-unicode-path-tests ui-model-tests ui-columns-tests ui-view-tests ui-batch-tests
+        core-identity-tests core-store-tests core-service-tests core-segmented-progress-tests
+        core-storage-failure-tests core-unicode-path-tests ui-model-tests ui-columns-tests
+        ui-view-tests ui-batch-tests
         win32-native-bridge-tests core-credentials-tests core-browser-bridge-tests
         core-native-host-tests core-native-frame-tests core-schedule-tests core-traffic-tests
         core-low-usage-tests core-rate-limit-tests core-kad-tests core-ed2k-tests core-bt-tests

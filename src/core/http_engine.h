@@ -61,9 +61,10 @@ std::filesystem::path partialMetaPathFor(const std::filesystem::path& destinatio
 // Removes the partial data and its metadata (used after a confirmed restart).
 bool discardPartial(const std::filesystem::path& destination);
 
-// Blocking HTTP(S) engine boundary. Progress runs on the calling thread. A
-// failed or cancelled transfer never publishes a destination file, and keeps
-// its partial data for a later resume.
+// Blocking HTTP(S) engine boundary. Progress may run on an engine thread, not
+// necessarily the calling thread, and is serialised per transfer. A failed or
+// cancelled transfer never publishes a destination file, and keeps its partial
+// data for a later resume.
 using TransferFunction = std::function<TransferResult(const TransferRequest&,
     const std::atomic_bool&, const std::function<void(const TransferProgressInfo&)>&)>;
 

@@ -25,7 +25,8 @@ compile them.
   published after a successful transfer and publication is no-replace:
   `MoveFileExW(..., 0)` refuses an existing target, so two concurrent publishers
   cannot silently overwrite each other. Failure or cancellation removes the
-  staging file. Progress runs on the calling thread.
+  staging file. Progress may run on an engine thread, not necessarily the
+  calling thread, and is serialised per transfer.
 - `task_service.*` — command orchestration. A command reports `ok=true` only
   after its required database commit. `Start` persists `running` before calling
   the engine and persists the engine's actual outcome afterwards. A storage

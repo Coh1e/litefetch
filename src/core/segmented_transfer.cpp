@@ -432,28 +432,40 @@ TransferResult transferSegmented(const std::string& url, const std::string& user
     }
 
     std::atomic_bool stopAll{false};
-    std::atomic<std::int64_t> received{0};
-    std::mutex progressMutex;
-    std::chrono::steady_clock::time_point lastReport{};
-    auto report = [&] {
-        std::lock_guard lock(progressMutex);
-        const auto now = std::chrono::steady_clock::now();
-        const auto current = received.load();
-        if (now - lastReport < std::chrono::milliseconds(200) && current < probe.total) return;
-        lastReport = now;
+    // The ranges arrive in parallel and finish together, so a report tied to a
+    // finished range can be minutes late on a large file: the UI would show
+    // "connecting" with no size for the whole transfer. One reporter samples
+    // the per-range counters instead, and the probe's total is known from the
+    // start, so the row gets a size and live bytes while data arrives.
+    auto bytesWritten = [&parts] {
+        std::int64_t written = 0;
+        for (const auto& segment : parts) written += segment.written.load();
+        return written;
+    };
+    auto report = [&](std::int64_t current) {
         if (progress) progress(TransferProgressInfo{current, probe.total});
     };
+    std::atomic_bool stopReporting{false};
+    std::thread reporter([&] {
+        while (!stopReporting.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            report(bytesWritten());
+        }
+    });
 
     std::vector<std::thread> workers;
     workers.reserve(static_cast<std::size_t>(count));
     for (auto& segment : parts) {
         workers.emplace_back([&, thisSegment = &segment] {
             runSegment(url, username, password, probe.host, *thisSegment, cancelled, stopAll);
-            received.fetch_add(thisSegment->written.load());
-            report();
         });
     }
     for (auto& worker : workers) worker.join();
+    stopReporting.store(true);
+    reporter.join();
+    // A fast transfer can finish inside the reporter's first interval; the
+    // final total must still reach the caller before the merge starts.
+    report(bytesWritten());
 
     if (cancelled.load()) {
         stopAll.store(true);
