@@ -3,21 +3,36 @@
 # Everything stays inside the project: the build lands in out/build/windows-release
 # and the package in out/package/<version>. Dependency DLLs are discovered with
 # dumpbin and copied from the project dependency tree, never from the system.
+[CmdletBinding()]
+param(
+    # CI calls this after its own build; the package step then only collects files.
+    [switch]$SkipBuild,
+    [string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildDir = Join-Path $root 'out/build/windows-release'
 $packageRoot = Join-Path $root 'out/package'
-$version = '0.1.0'
-$packageDir = Join-Path $packageRoot ("litefetch-$version")
+if (-not $Version) {
+    $project = Select-String -Path (Join-Path $root 'CMakeLists.txt') `
+        -Pattern 'project\(\s*NativeDownloader\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' |
+        Select-Object -First 1
+    if (-not $project) { throw 'cannot read the project version from CMakeLists.txt' }
+    $Version = $project.Matches[0].Groups[1].Value
+}
+$packageDir = Join-Path $packageRoot ("litefetch-$Version")
 
-Write-Host "configuring $buildDir"
-& cmake -S $root -B $buildDir --preset windows-release
-if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+if (-not $SkipBuild) {
+    Write-Host "configuring $buildDir"
+    & cmake -S $root -B $buildDir --preset windows-release
+    if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
-Write-Host "building"
-& cmake --build $buildDir --config Release
-if ($LASTEXITCODE -ne 0) { throw "build failed" }
+    Write-Host "building"
+    & cmake --build $buildDir --config Release
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+}
 
 $exe = Join-Path $buildDir 'litefetch-win32.exe'
 if (-not (Test-Path $exe)) { throw "missing $exe" }

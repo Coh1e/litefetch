@@ -1,0 +1,101 @@
+# Builds, tests and packages every push, and attaches the portable build to a
+# GitHub Release when a tag is pushed.
+#
+# The pipeline itself lives in scripts/ci.ps1 so a developer runs the same steps:
+#   powershell -ExecutionPolicy Bypass -File scripts\ci.ps1
+# Artifacts and logs always land in out/ci, locally and on the runner.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: '也运行发布前冒烟（真实启动 exe）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, test, package
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # libtorrent and Boost are compiled from source; restoring the prepared
+      # dependency tree turns a cold 30-minute build into a few minutes.
+      - name: Restore dependencies
+        uses: actions/cache@v4
+        with:
+          path: out/build/windows-release/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Build, test, package
+        shell: pwsh
+        env:
+          LITEFETCH_CI_SMOKE: ${{ (github.ref_type == 'tag' || inputs.smoke) && 'true' || 'false' }}
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/ci.ps1
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteFetch-Windows-x64
+          path: out/ci/artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteFetch-logs
+          path: out/ci/logs
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path out/ci/summary.md) {
+            Get-Content out/ci/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+  release:
+    name: Attach build to release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: LiteFetch-Windows-x64
+          path: dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="LiteFetch ${GITHUB_REF_NAME}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$title" --generate-notes
+          fi
