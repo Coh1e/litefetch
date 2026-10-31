@@ -6,9 +6,9 @@ LiteFetch 是面向 Windows 10/11 x64 的开源原生下载管理器。它统一
 
 交付入口：
 
-- [最终交代](docs/specs/final-report.md)：全范围结论与未验证边界；
-- [逐票交付状态](docs/specs/win32-delivery-status.md)：每张票的状态与证据；
-- [验证索引](docs/specs/verification-index.md)：测试与票面的对应。
+- [最终交代](docs/specs/final-report.md)：全范围结论、逐票状态与未验证边界；
+- [验证索引](docs/specs/verification-index.md)：测试与票面的对应；
+- [人工验收清单](docs/specs/human-acceptance-checklist.md)：需要人完成的步骤。
 
 ## 设计与范围
 
@@ -89,7 +89,7 @@ CMake 工程名仍为 NativeDownloader；可执行文件和发布包使用 litef
 
 票与规格使用 [GitHub Issues](https://github.com/Coh1e/litefetch/issues)。协作和执行分工见 [AGENTS.md](AGENTS.md)。
 
-迁移前的 README、交接和工作流见 [历史快照](docs/history/2026-10-27/README.md)。docs/research/ 保存技术研究和历史证据，按票读取。旧范围、暂停状态、Qt 选择和历史验证数字不是新票的默认指令，也不是本次验收的依据。
+迁移前的 README、交接和工作流见 [历史快照](docs/history/2026-10-27/README.md)。旧状态文档归档在 [2026-10-30](docs/history/2026-10-30/)，只用于追溯。docs/research/ 保存技术研究和历史证据，按票读取。旧范围、暂停状态、Qt 选择和历史验证数字不是新票的默认指令，也不是本次验收的依据。
 
 ## 许可证
 

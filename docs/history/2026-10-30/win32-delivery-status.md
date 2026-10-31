@@ -1,5 +1,7 @@
 # Win32 交付状态与证据
 
+> 历史快照（2026-10-30）。当前结论只看 [最终交代](../../specs/final-report.md)，本文只用于追溯。
+
 对照 `docs/specs/win32-ticket-plan.md` 与父规格 Issue #29，逐票记录当前状态、证据与缺口。
 验收命令统一为 `cmd /c test-local.cmd`（当前 **23 个测试，约 165–185 秒，全部通过**）；测试与票面的对应关系见 `docs/specs/verification-index.md`。
 

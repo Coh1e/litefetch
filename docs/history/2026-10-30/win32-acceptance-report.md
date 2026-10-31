@@ -1,5 +1,7 @@
 # #28 全范围总验收结论
 
+> 历史快照（2026-10-30）。当前结论只看 [最终交代](../../specs/final-report.md)，本文只用于追溯。
+
 更新于第 113 轮
 对照：`docs/specs/win32-ticket-plan.md`、Issue #29、`docs/specs/win32-delivery-status.md`
 
