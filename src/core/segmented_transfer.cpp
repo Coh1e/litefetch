@@ -445,6 +445,10 @@ TransferResult transferSegmented(const std::string& url, const std::string& user
     auto report = [&](std::int64_t current) {
         if (progress) progress(TransferProgressInfo{current, probe.total});
     };
+    // The probe already knows the total. Publish it before the first range
+    // starts, so the first UI refresh can show the size instead of waiting for
+    // the reporter's first 200 ms tick.
+    report(0);
     std::atomic_bool stopReporting{false};
     std::thread reporter([&] {
         while (!stopReporting.load()) {
