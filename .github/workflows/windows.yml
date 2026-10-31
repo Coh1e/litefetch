@@ -84,6 +84,32 @@ jobs:
           "imported=$LASTEXITCODE"
           Pop-Location
 
+      # The exact cl line works under cmd; run it through ninja to see whether
+      # ninja's CreateProcess quoting is what breaks it.
+      - name: Probe ninja quoting
+        shell: pwsh
+        run: |
+          . ./scripts/enter-msvc.ps1 -Quiet
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'out/ninjaprobe'
+          New-Item -ItemType Directory -Force (Join-Path $dir 'CMakeFiles\cmTC.dir') | Out-Null
+          Set-Content (Join-Path $dir 'testCCompiler.c') 'int main(void) { return 0; }'
+          $cl = (Get-Command cl).Source
+          $rule = 'rule cc'
+          $command = '  command = "' + $cl + '" /nologo /DWIN32 /D_WINDOWS /Ob0 /Od /RTC1 -MDd -Z7 /showIncludes /FoCMakeFiles\cmTC.dir\testCCompiler.c.obj /FdCMakeFiles\cmTC.dir\ /FS -c testCCompiler.c'
+          Set-Content (Join-Path $dir 'build.ninja') @($rule, $command, 'build out.obj: cc')
+          Push-Location $dir
+          ninja -v
+          "ninja_choco=$LASTEXITCODE"
+          Remove-Item out.obj -ErrorAction SilentlyContinue
+          $vsNinja = Join-Path $env:VSINSTALLDIR 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+          if (Test-Path $vsNinja) {
+            & $vsNinja -v
+            "ninja_vs=$LASTEXITCODE"
+          } else {
+            'ninja_vs=missing'
+          }
+          Pop-Location
+
       # libtorrent and Boost are compiled from source; restoring the prepared
       # dependency tree turns a cold 30-minute build into a few minutes.
       - name: Restore dependencies
