@@ -47,3 +47,10 @@ GitHub Actions 运行同一套步骤：`.github/workflows/windows.yml` 调用 `s
 
 采用 single-context：根目录 GLOSSARY.md 与 docs/adr/。
 详见 `docs/agents/domain.md`。
+
+### Next-step guidance
+
+For coding and directly related work, read `C:\Users\Neo\.agents\skills\grill-agent\SKILL.md` before you end a response.
+Follow its rules to continue work or select a closing mode.
+If the file is missing or unreadable, report the dependency.
+Do not claim that you read an unavailable file.
